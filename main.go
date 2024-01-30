@@ -51,6 +51,10 @@ type Message struct {
 	TransactionId string `cbor:"transaction_id"`
 }
 
+type AuthMessage struct {
+	Token string `cbor:"token"`
+}
+
 func node0(url string) {
 	var sock mangos.Socket
 	var err error
@@ -62,12 +66,18 @@ func node0(url string) {
 		die("can't listen on rep socket: %s", err.Error())
 	}
 
-	msg, err := sock.RecvMsg()
+	rawAuthMsg, err := sock.Recv()
 	if err != nil {
-		die("cant receive header message", err.Error())
+		die("cant receive message: %s", err.Error())
 	}
 
-	fmt.Printf("msg %#v\n", msg)
+	var authMsg AuthMessage
+	err = cbor.Unmarshal(rawAuthMsg, &authMsg)
+	if err != nil {
+		die("cant unmarshal auth message: %s", err.Error())
+	}
+
+	fmt.Printf("auth message %#v\n", authMsg)
 
 	for {
 
@@ -117,11 +127,14 @@ func node1(url string) {
 		die("can't dial on req socket: %s", err.Error())
 	}
 
-	if err = sock.SendMsg(&mangos.Message{
-		Header: []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
-		Body:   []byte{},
-		Pipe:   nil,
-	}); err != nil {
+	data, err := cbor.Marshal(&AuthMessage{
+		Token: "some cool auth token",
+	})
+	if err != nil {
+		die("can't marshal auth message: %s", err.Error())
+	}
+
+	if err = sock.Send(data); err != nil {
 		die("cant authenticate with server")
 	}
 
