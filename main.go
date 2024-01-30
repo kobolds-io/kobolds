@@ -26,9 +26,11 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
+	"github.com/fxamacker/cbor/v2"
 	"go.nanomsg.org/mangos/v3"
 	"go.nanomsg.org/mangos/v3/protocol/rep"
 	"go.nanomsg.org/mangos/v3/protocol/req"
@@ -42,35 +44,64 @@ func die(format string, v ...interface{}) {
 	os.Exit(1)
 }
 
-func date() string {
-	return time.Now().Format(time.ANSIC)
+type Message struct {
+	Id            string `cbor:"id"`
+	SenderId      string `cbor:"sender_id"`
+	ReceiverId    string `cbor:"receiver_id"`
+	TransactionId string `cbor:"transaction_id"`
 }
 
 func node0(url string) {
 	var sock mangos.Socket
 	var err error
-	var msg []byte
+
 	if sock, err = rep.NewSocket(); err != nil {
 		die("can't get new rep socket: %s", err)
 	}
 	if err = sock.Listen(url); err != nil {
 		die("can't listen on rep socket: %s", err.Error())
 	}
+
+	msg, err := sock.RecvMsg()
+	if err != nil {
+		die("cant receive header message", err.Error())
+	}
+
+	fmt.Printf("msg %#v\n", msg)
+
 	for {
+
 		// Could also use sock.RecvMsg to get header
-		msg, err = sock.Recv()
+		msg, err := sock.Recv()
 		if err != nil {
 			die("cannot receive on rep socket: %s", err.Error())
 		}
-		if string(msg) == "DATE" { // no need to terminate
-			// fmt.Println("NODE0: RECEIVED DATE REQUEST")
-			d := date()
-			// fmt.Printf("NODE0: SENDING DATE %s\n", d)
-			err = sock.Send([]byte(d))
-			if err != nil {
-				die("can't send reply: %s", err.Error())
-			}
+
+		var request Message
+		err = cbor.Unmarshal(msg, &request)
+		if err != nil {
+			slog.Error("error unmarshalling request", "error", err)
+			continue
 		}
+
+		response := Message{
+			Id:            "some id",
+			SenderId:      "some sender id",
+			ReceiverId:    "some receiver id",
+			TransactionId: "some transaction id",
+		}
+
+		b, err := cbor.Marshal(&response)
+		if err != nil {
+			slog.Error("unable to marshal message", "error", err)
+			return
+		}
+
+		err = sock.Send([]byte(b))
+		if err != nil {
+			die("can't send reply: %s", err.Error())
+		}
+
 	}
 }
 
@@ -86,6 +117,14 @@ func node1(url string) {
 		die("can't dial on req socket: %s", err.Error())
 	}
 
+	if err = sock.SendMsg(&mangos.Message{
+		Header: []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+		Body:   []byte{},
+		Pipe:   nil,
+	}); err != nil {
+		die("cant authenticate with server")
+	}
+
 	totalStart := time.Now()
 	rtts := []time.Duration{}
 	requests := 0
@@ -93,9 +132,23 @@ func node1(url string) {
 
 	for i := 0; i < 100_000; i++ {
 		start := time.Now()
+		request := Message{
+			Id:            "some bytes to fill up here",
+			SenderId:      "some bytes to fill up here",
+			ReceiverId:    "some bytes to fill up here",
+			TransactionId: "some bytes to fill up here",
+		}
+
+		data, err := cbor.Marshal(&request)
+		if err != nil {
+			slog.Error("error marshalling message", "error", err)
+			continue
+		}
+
 		requests++
+
 		// fmt.Printf("NODE1: SENDING DATE REQUEST %s\n", "DATE")
-		if err = sock.Send([]byte("DATE")); err != nil {
+		if err = sock.Send(data); err != nil {
 			die("can't send message on push socket: %s", err.Error())
 		}
 		if msg, err = sock.Recv(); err != nil {
@@ -106,7 +159,13 @@ func node1(url string) {
 		rtts = append(rtts, time.Since(start))
 	}
 
-	fmt.Println("msg", msg)
+	var parsedMsg Message
+	err = cbor.Unmarshal(msg, &parsedMsg)
+	if err != nil {
+		slog.Error("unable to parse message")
+	}
+
+	fmt.Printf("parsed message %#v\n", parsedMsg)
 
 	var sum int64
 	var mininum int64
