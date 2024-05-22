@@ -1,67 +1,61 @@
 const std = @import("std");
 
-// const MessageParser = struct {
-//     buffer: std.ArrayList(u8),
-//
-//     pub fn init(allocator: *std.mem.Allocator) !MessageParser {
-//         return MessageParser{
-//             .buffer = try std.ArrayList(u8).init(allocator),
-//         };
-//     }
-//
-//     pub fn parse(self: *MessageParser, data: []const u8, allocator: *std.mem.Allocator) ![][]u8 {
-//         var messages = try std.ArrayList([]u8).init(allocator);
-//         defer messages.deinit();
-//
-//         // Append incoming data to the buffer
-//         try self.buffer.appendSlice(data);
-//
-//         var index: usize = 0;
-//         while (self.buffer.items.len - index >= 4) {
-//             // Read the length prefix
-//             const message_length_bytes = self.buffer.items[index .. index + 4];
-//             const message_length = @intFromBytes(u32, message_length_bytes, .big);
-//
-//             // Check if the buffer contains the complete message
-//             if (self.buffer.items.len - index >= @intCast(usize, message_length) + 4) {
-//                 // Slice the buffer to extract message content
-//                 const message = self.buffer.items[index + 4 .. index + 4 + @intCast(usize, message_length)];
-//                 try messages.append(std.mem.dupe(u8, allocator, message));
-//
-//                 // Move index past the current message
-//                 index += 4 + @intCast(usize, message_length);
-//             } else {
-//                 // Incomplete message in the buffer, wait for more data
-//                 break;
-//             }
-//         }
-//
-//         // Remove the parsed messages from the buffer
-//         if (index > 0) {
-//             self.buffer.items = self.buffer.items[index..];
-//         }
-//
-//         return messages.toOwnedSlice();
-//     }
-// };
+pub const MessageParser = struct {
+    const Self = @This();
+    buffer: std.ArrayList(u8),
 
-// pub fn main() void {
+    pub fn init(allocator: std.mem.Allocator) MessageParser {
+        return MessageParser{
+            .buffer = std.ArrayList(u8).init(allocator),
+        };
+    }
 
-// const allocator = std.heap.page_allocator;
-// var parser = MessageParser.init(allocator) catch unreachable;
+    pub fn sayHello(self: Self) void {
+        std.debug.print("hello there from me {any}\n", .{self});
+    }
 
-// Example usage
-// 05hello
-// const data: []const u8 = &[_]u8{ 0, 0, 0, 5, 104, 101, 108, 108, 111 };
-// const i = @intFromPtr(&data[0..4]);
-// std.debug.print("got this number! {}", .{i});
+    // i'm a dummy, this needs to be a pointer to self because we are modifying the struct!
+    pub fn parse(self: *Self, allocator: std.mem.Allocator, data: []const u8) ![][]u8 {
+        // initialize an ArrayList here to store the parsed messages
+        var messages = std.ArrayList([]u8).init(allocator);
+        // deinit the array list if there is an error
+        // at the end we drain the messages array list by
+        // this shouldn't be needed as i'm calling toOwnedSlice
+        // at the end of this func
+        defer messages.deinit();
 
-// const messages = parser.parse(data, allocator) catch unreachable;
+        // Append incoming data to the buffer
+        try self.buffer.appendSlice(data);
 
-// for (messages) |message| {
-//     std.debug.print("Message: {s}\n", .{message});
-// }
-// }
+        var index: usize = 0;
+        while (self.buffer.items.len - index >= 4) {
+            // Read the length prefix
+            const message_length_bytes = self.buffer.items[index .. index + 4];
+            var stream = std.io.fixedBufferStream(message_length_bytes);
+            const message_length = try beToU32(allocator, stream.reader());
+
+            // Check if the buffer contains the complete message
+            if (self.buffer.items.len - index >= message_length + 4) {
+                // Slice the buffer to extract message content
+                const message = self.buffer.items[index + 4 .. index + 4 + message_length];
+                try messages.append(message);
+
+                // Move index past the current message
+                index += 4 + message_length;
+            } else {
+                // Incomplete message in the buffer, wait for more data
+                break;
+            }
+        }
+
+        // Remove the parsed messages from the buffer
+        if (index > 0) {
+            self.buffer.items = self.buffer.items[index..];
+        }
+
+        return messages.toOwnedSlice();
+    }
+};
 
 pub const ParseError = error{ ReceivedInvalidBytes, CouldNotParseMessagePrefix };
 
