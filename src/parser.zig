@@ -63,11 +63,12 @@ const std = @import("std");
 // }
 // }
 
-pub const ParseError = error{ReceivedInvalidBytes};
+pub const ParseError = error{ ReceivedInvalidBytes, CouldNotParseMessagePrefix };
 
-pub fn readU32sFromReader(allocator: std.mem.Allocator, reader: anytype) !std.ArrayList(u32) {
+// this is likely not very efficient but ermagerd it works
+pub fn beToU32(allocator: std.mem.Allocator, reader: anytype) !u32 {
     var buffered_reader = std.io.bufferedReader(reader);
-    var numbers = std.ArrayList(u32).init(allocator);
+    var parsed_nums = std.ArrayList(u32).init(allocator);
     var parsed_number_buffer: [4]u8 = undefined;
     while (true) {
         const bytes_read = try buffered_reader.read(&parsed_number_buffer);
@@ -80,24 +81,32 @@ pub fn readU32sFromReader(allocator: std.mem.Allocator, reader: anytype) !std.Ar
             return ParseError.ReceivedInvalidBytes;
         }
         const parsed_num = std.mem.readInt(u32, &parsed_number_buffer, .big);
-        try numbers.append(parsed_num);
+        try parsed_nums.append(parsed_num);
     }
 
-    return numbers;
+    // i don't know if we will ever hit this error
+    if (parsed_nums.items.len != 1) {
+        return ParseError.CouldNotParseMessagePrefix;
+    }
+
+    return parsed_nums.items[0];
 }
 
-test "convert big endian bytes to an ArrayList of u32s" {
+test "convert big endian bytes to u32" {
     // setup
     const bytes = [_]u8{ 0, 0, 0, 5 };
     const bytes_mem = std.mem.sliceAsBytes(&bytes);
     var stream = std.io.fixedBufferStream(bytes_mem);
 
-    const want: u32 = 5;
-    const got = try readU32sFromReader(std.testing.allocator, stream.reader());
-    defer got.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    // only deinit if something goes wrong with the test
+    errdefer _ = gpa.deinit();
 
-    try std.testing.expectEqual(got.items.len, 1);
-    try std.testing.expectEqual(want, got.items[0]);
+    const want: u32 = 5;
+    const got = try beToU32(allocator, stream.reader());
+
+    try std.testing.expectEqual(want, got);
 }
 
 test "convert big endian bytes returns error if invalid bytes" {
@@ -112,6 +121,6 @@ test "convert big endian bytes returns error if invalid bytes" {
     // only deinit if something goes wrong with the test
     errdefer _ = gpa.deinit();
 
-    const got = readU32sFromReader(allocator, stream.reader());
+    const got = beToU32(allocator, stream.reader());
     try std.testing.expectEqual(ParseError.ReceivedInvalidBytes, got);
 }
