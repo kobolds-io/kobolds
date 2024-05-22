@@ -57,6 +57,9 @@ pub const MessageParser = struct {
 pub const ParseError = error{ ReceivedInvalidBytes, CouldNotParseMessagePrefix };
 
 // this is likely not very efficient but ermagerd it works
+// this function should take 4 bytes and try to cast them to a u32. There is no
+// need to do array lists or do some complicated stuff if in the end we return
+// a u32
 pub fn beToU32(allocator: std.mem.Allocator, reader: anytype) !u32 {
     var buffered_reader = std.io.bufferedReader(reader);
     var parsed_nums = std.ArrayList(u32).init(allocator);
