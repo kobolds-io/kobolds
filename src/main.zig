@@ -10,11 +10,22 @@ pub fn main() !void {
 
     // 05hello07hellooo
     const bytes = [_]u8{ 0, 0, 0, 5, 104, 101, 108, 108, 111, 0, 0, 0, 7, 104, 101, 108, 108, 111, 111, 111 };
-    const msgs = try parser.parse(allocator, &bytes);
+    // const bytes = [_]u8{ 0, 0, 0, 5, 104, 101, 108, 108, 111, 0, 0, 0, 7, 104, 101, 108, 108, 111, 111, 111 };
+    var timer = try std.time.Timer.start();
 
-    for (msgs) |msg| {
-        std.debug.print("Message! {any}\n", .{msg});
+    for (0..1_057) |_| {
+        // for (0..50_000) |_| {
+        _ = try parser.parse(allocator, &bytes);
     }
+
+    const took = timer.read();
+    std.debug.print("took {}ns\n", .{took});
+    std.debug.print("took {}us\n", .{took / std.time.ns_per_us});
+    std.debug.print("took {}ms\n", .{took / std.time.ns_per_ms});
+
+    // for (msgs) |msg| {
+    // std.debug.print("Message! {any}\n", .{msg});
+    // }
 
     // const bytes_mem = std.mem.sliceAsBytes(raw_bytes[0..4]);
     // var stream = std.io.fixedBufferStream(bytes_mem);

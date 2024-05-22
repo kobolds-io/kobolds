@@ -10,15 +10,11 @@ pub const MessageParser = struct {
         };
     }
 
-    pub fn sayHello(self: Self) void {
-        std.debug.print("hello there from me {any}\n", .{self});
-    }
-
     // i'm a dummy, this needs to be a pointer to self because we are modifying the struct!
     pub fn parse(self: *Self, allocator: std.mem.Allocator, data: []const u8) ![][]u8 {
+        // std.debug.print("buffer capacity {any}\n", .{self.buffer.capacity});
         // initialize an ArrayList here to store the parsed messages
         var messages = std.ArrayList([]u8).init(allocator);
-        // deinit the array list if there is an error
         // at the end we drain the messages array list by
         // this shouldn't be needed as i'm calling toOwnedSlice
         // at the end of this func
@@ -52,6 +48,7 @@ pub const MessageParser = struct {
         if (index > 0) {
             self.buffer.items = self.buffer.items[index..];
         }
+        // std.debug.print("messages len {}\n", .{messages.items.len});
 
         return messages.toOwnedSlice();
     }
