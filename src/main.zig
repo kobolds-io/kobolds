@@ -1,24 +1,26 @@
 const std = @import("std");
 
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    // const data: [4]u8 = [4]u8{0x12, 0x34, 0x56, 0x78};
+    const data: []const u8 = &[_]u8{ 0, 0, 0, 5, 104, 101, 108, 108, 111 };
+    const result = bytesToU32BigEndian(data[0..4]) catch {
+        std.debug.print("Error: Invalid byte array length\n", .{});
+        return;
+    };
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
-
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
-
-    try bw.flush(); // don't forget to flush!
+    std.debug.print("The u32 value is: {x}\n", .{result});
 }
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+// Todo convert 4 bytes to u32 from bigendian
+fn bytesToU32BigEndian(bytes: []const u8) !u32 {
+    if (bytes.len != 4) {
+        return error.InvalidByteArrayLength;
+    }
+
+    const a: u8 = @intCast(bytes[0] << 24);
+    const b: u8 = @intCast(bytes[1] << 16);
+    const c: u8 = @intCast(bytes[2] << 8);
+    const d: u8 = @intCast(bytes[3]);
+
+    return a | b | c | d;
 }
