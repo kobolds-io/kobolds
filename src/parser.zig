@@ -15,11 +15,14 @@ pub const MessageParser = struct {
     // i'm a dummy, this needs to be a pointer to self because we are modifying the struct!
     pub fn parse(self: *Self, data: []const u8) ![][]u8 {
         // Append incoming data to the buffer
+        std.debug.print("current buffer {any}\n", .{self.buffer.items});
+
         try self.buffer.appendSlice(data);
 
         while (self.buffer.items.len >= 4) {
             // Read the length prefix
             var bytes: [4]u8 = undefined;
+            // Read the length prefix
             const slice = self.buffer.items[0..4];
             // convert the slice into a 4 byte array
             for (slice, 0..4) |b, i| {
@@ -30,10 +33,14 @@ pub const MessageParser = struct {
             // Check if the buffer contains the complete message
             if (self.buffer.items.len >= message_length + 4) {
                 // Slice the buffer to extract message content
-                const message = self.buffer.items[4 .. 4 + message_length];
-                std.debug.print("message {any}\n", .{message});
+                _ = self.buffer.items[4 .. 4 + message_length];
+                // std.debug.print("message {any}\n", .{message});
                 // try self.messages.append(message);
                 // Move index past the current message
+                // try self.buffer.resize(self.buffer.items.len - 4 + message_length);
+
+                // I think the ArrayList is resizing under the hood without my knowledge
+                // which fucks up all of the references
                 self.buffer.items = self.buffer.items[4 + message_length ..];
             } else {
                 // Incomplete message in the buffer, wait for more data
@@ -41,19 +48,11 @@ pub const MessageParser = struct {
             }
         }
 
-        // Remove the parsed messages from the buffer
-        // if (index > 0) {
-        //     self.buffer.items = self.buffer.items[index..];
-        // }
-        // std.debug.print("messages len {}\n", .{messages.items.len});
-
         return self.messages.toOwnedSlice();
     }
 };
 
 pub fn beToU32(bytes: [4]u8) u32 {
-    // if (bytes.len != 4) return ParseError.ReceivedInvalidBytes;
-    // std.debug.print("bytes {any}\n", .{bytes});
     return std.mem.readInt(u32, &bytes, .big);
 }
 

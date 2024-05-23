@@ -18,9 +18,6 @@ pub fn main() !void {
     for (0..2731) |i| {
         std.debug.print("iters {}\n", .{i});
         _ = try parser.parse(&bytes);
-        // for (0..1) |_| {
-        // const msgs = try parser.parse(&bytes);
-        // std.debug.print("messages {any}\n", .{msgs});
     }
 
     const took = timer.read();
