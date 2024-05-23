@@ -17,7 +17,7 @@ pub const MessageParser = struct {
         // Append incoming data to the buffer
         try self.buffer.appendSlice(data);
 
-        while (self.buffer.items.len > 4) {
+        while (self.buffer.items.len >= 4) {
             // Read the length prefix
             var bytes: [4]u8 = undefined;
             const slice = self.buffer.items[0..4];
@@ -25,8 +25,7 @@ pub const MessageParser = struct {
             for (slice, 0..4) |b, i| {
                 bytes[i] = b;
             }
-
-            const message_length = beToU32NoAllocator(bytes);
+            const message_length = beToU32(bytes);
 
             // Check if the buffer contains the complete message
             if (self.buffer.items.len >= message_length + 4) {
@@ -35,7 +34,6 @@ pub const MessageParser = struct {
                 std.debug.print("message {any}\n", .{message});
                 // try self.messages.append(message);
                 // Move index past the current message
-                // index += 4 + message_length;
                 self.buffer.items = self.buffer.items[4 + message_length ..];
             } else {
                 // Incomplete message in the buffer, wait for more data
@@ -53,7 +51,7 @@ pub const MessageParser = struct {
     }
 };
 
-pub fn beToU32NoAllocator(bytes: [4]u8) u32 {
+pub fn beToU32(bytes: [4]u8) u32 {
     // if (bytes.len != 4) return ParseError.ReceivedInvalidBytes;
     // std.debug.print("bytes {any}\n", .{bytes});
     return std.mem.readInt(u32, &bytes, .big);
@@ -64,7 +62,7 @@ test "convert big endian bytes to u32" {
     const bytes = [4]u8{ 0, 0, 0, 5 };
     const want: u32 = 5;
 
-    const got = beToU32NoAllocator(bytes);
+    const got = beToU32(bytes);
 
     try std.testing.expectEqual(want, got);
 }
