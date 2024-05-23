@@ -14,25 +14,13 @@ pub const MessageParser = struct {
 
     // i'm a dummy, this needs to be a pointer to self because we are modifying the struct!
     pub fn parse(self: *Self, data: []const u8) ![][]u8 {
-        // initialize an ArrayList here to store the parsed messages
-        // var messages = std.ArrayList([]u8).init(allocator);
-        // at the end we drain the messages array list by
-        // this shouldn't be needed as i'm calling toOwnedSlice
-        // at the end of this func
-        // defer messages.deinit();
-
         // Append incoming data to the buffer
-        self.buffer.appendSlice(data) catch |e| {
-            std.debug.print("some error {any}\n", .{e});
-            return e;
-        };
+        try self.buffer.appendSlice(data);
 
-        var index: usize = 0;
-        while (self.buffer.items.len - index >= 4) {
+        while (self.buffer.items.len > 4) {
             // Read the length prefix
-            // const message_length_bytes = self.buffer.items[index .. index + 4];
             var bytes: [4]u8 = undefined;
-            const slice = self.buffer.items[index .. index + 4];
+            const slice = self.buffer.items[0..4];
             // convert the slice into a 4 byte array
             for (slice, 0..4) |b, i| {
                 bytes[i] = b;
@@ -41,13 +29,14 @@ pub const MessageParser = struct {
             const message_length = beToU32NoAllocator(bytes);
 
             // Check if the buffer contains the complete message
-            if (self.buffer.items.len - index >= message_length + 4) {
+            if (self.buffer.items.len >= message_length + 4) {
                 // Slice the buffer to extract message content
-                const message = self.buffer.items[index + 4 .. index + 4 + message_length];
+                const message = self.buffer.items[4 .. 4 + message_length];
                 std.debug.print("message {any}\n", .{message});
                 // try self.messages.append(message);
                 // Move index past the current message
-                index += 4 + message_length;
+                // index += 4 + message_length;
+                self.buffer.items = self.buffer.items[4 + message_length ..];
             } else {
                 // Incomplete message in the buffer, wait for more data
                 break;
@@ -55,9 +44,9 @@ pub const MessageParser = struct {
         }
 
         // Remove the parsed messages from the buffer
-        if (index > 0) {
-            self.buffer.items = self.buffer.items[index..];
-        }
+        // if (index > 0) {
+        //     self.buffer.items = self.buffer.items[index..];
+        // }
         // std.debug.print("messages len {}\n", .{messages.items.len});
 
         return self.messages.toOwnedSlice();
