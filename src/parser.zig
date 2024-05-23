@@ -22,7 +22,10 @@ pub const MessageParser = struct {
         // defer messages.deinit();
 
         // Append incoming data to the buffer
-        try self.buffer.appendSlice(data);
+        self.buffer.appendSlice(data) catch |e| {
+            std.debug.print("some error {any}\n", .{e});
+            return e;
+        };
 
         var index: usize = 0;
         while (self.buffer.items.len - index >= 4) {
@@ -41,8 +44,8 @@ pub const MessageParser = struct {
             if (self.buffer.items.len - index >= message_length + 4) {
                 // Slice the buffer to extract message content
                 const message = self.buffer.items[index + 4 .. index + 4 + message_length];
-                try self.messages.append(message);
-
+                std.debug.print("message {any}\n", .{message});
+                // try self.messages.append(message);
                 // Move index past the current message
                 index += 4 + message_length;
             } else {

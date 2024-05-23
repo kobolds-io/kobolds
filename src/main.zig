@@ -15,7 +15,7 @@ pub fn main() !void {
     var timer = try std.time.Timer.start();
 
     // for (0..10_000) |_| {
-    for (0..1000) |_| {
+    for (0..3000) |_| {
         _ = try parser.parse(&bytes);
         // for (0..1) |_| {
         // const msgs = try parser.parse(&bytes);
