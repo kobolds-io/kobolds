@@ -41,7 +41,14 @@ pub const MessageParser = struct {
 
                 // I think the ArrayList is resizing under the hood without my knowledge
                 // which fucks up all of the references
+                std.debug.print("len {}\n", .{self.buffer.items.len});
+                std.debug.print("capacity {}\n", .{self.buffer.capacity});
+                // TODO: add a break point to figure out the state before and after this line
+
                 self.buffer.items = self.buffer.items[4 + message_length ..];
+
+                std.debug.print("len {}\n", .{self.buffer.items.len});
+                std.debug.print("capacity {}\n", .{self.buffer.capacity});
             } else {
                 // Incomplete message in the buffer, wait for more data
                 break;
