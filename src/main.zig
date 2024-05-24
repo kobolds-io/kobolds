@@ -15,8 +15,8 @@ pub fn main() !void {
     var timer = try std.time.Timer.start();
 
     // for (0..10_000) |_| {
-    for (0..2731) |i| {
-        std.debug.print("iters {}\n", .{i});
+    for (0..1_000_000) |_| {
+        // std.debug.print("iters {}\n", .{i});
         _ = try parser.parse(&bytes);
     }
 

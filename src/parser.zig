@@ -15,7 +15,9 @@ pub const MessageParser = struct {
     // i'm a dummy, this needs to be a pointer to self because we are modifying the struct!
     pub fn parse(self: *Self, data: []const u8) ![][]u8 {
         // Append incoming data to the buffer
-        std.debug.print("current buffer {any}\n", .{self.buffer.items});
+        // std.debug.print("current buffer {any}\n", .{self.buffer.items});
+
+        try self.buffer.resize(self.buffer.items.len + data.len);
 
         try self.buffer.appendSlice(data);
 
@@ -41,14 +43,14 @@ pub const MessageParser = struct {
 
                 // I think the ArrayList is resizing under the hood without my knowledge
                 // which fucks up all of the references
-                std.debug.print("len {}\n", .{self.buffer.items.len});
-                std.debug.print("capacity {}\n", .{self.buffer.capacity});
+                // std.debug.print("len {}\n", .{self.buffer.items.len});
+                // std.debug.print("capacity {}\n", .{self.buffer.capacity});
                 // TODO: add a break point to figure out the state before and after this line
 
                 self.buffer.items = self.buffer.items[4 + message_length ..];
 
-                std.debug.print("len {}\n", .{self.buffer.items.len});
-                std.debug.print("capacity {}\n", .{self.buffer.capacity});
+                // std.debug.print("len {}\n", .{self.buffer.items.len});
+                // std.debug.print("capacity {}\n", .{self.buffer.capacity});
             } else {
                 // Incomplete message in the buffer, wait for more data
                 break;
