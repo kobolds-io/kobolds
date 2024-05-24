@@ -9,13 +9,16 @@ pub fn main() !void {
     var parser = MessageParser.init(allocator);
 
     // 05hello07hellooo
-    // const bytes = [_]u8{ 0, 0, 0, 5, 104, 101, 108, 108, 111, 0, 0, 0, 7, 104, 101, 108, 108, 111, 111, 111 };
+    const bytes = [_]u8{ 0, 0, 0, 5, 104, 101, 108, 108, 111, 0, 0, 0, 7, 104, 101, 108, 108, 111, 111, 111 };
     // 05hello
-    const bytes = [_]u8{ 0, 0, 0, 5, 104, 101, 108, 108, 111 };
+    // const bytes = [_]u8{ 0, 0, 0, 5, 104, 101, 108, 108, 111 };
     var timer = try std.time.Timer.start();
 
+    const iters = 10_000_000;
+
+    std.debug.print("sending {} bytes through parser {} times\n", .{ bytes.len, iters });
     // for (0..10_000) |_| {
-    for (0..1_000_000) |_| {
+    for (0..iters) |_| {
         // std.debug.print("iters {}\n", .{i});
         _ = try parser.parse(&bytes);
     }
