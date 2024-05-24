@@ -14,11 +14,10 @@ pub const MessageParser = struct {
 
     // i'm a dummy, this needs to be a pointer to self because we are modifying the struct!
     pub fn parse(self: *Self, data: []const u8) ![][]u8 {
-        // Append incoming data to the buffer
-        // std.debug.print("current buffer {any}\n", .{self.buffer.items});
-
+        // why the fuck do i need to do a resize here?
         try self.buffer.resize(self.buffer.items.len + data.len);
 
+        // Append incoming data to the buffer
         try self.buffer.appendSlice(data);
 
         while (self.buffer.items.len >= 4) {
@@ -35,22 +34,10 @@ pub const MessageParser = struct {
             // Check if the buffer contains the complete message
             if (self.buffer.items.len >= message_length + 4) {
                 // Slice the buffer to extract message content
-                _ = self.buffer.items[4 .. 4 + message_length];
-                // std.debug.print("message {any}\n", .{message});
-                // try self.messages.append(message);
-                // Move index past the current message
-                // try self.buffer.resize(self.buffer.items.len - 4 + message_length);
-
-                // I think the ArrayList is resizing under the hood without my knowledge
-                // which fucks up all of the references
-                // std.debug.print("len {}\n", .{self.buffer.items.len});
-                // std.debug.print("capacity {}\n", .{self.buffer.capacity});
-                // TODO: add a break point to figure out the state before and after this line
+                const message = self.buffer.items[4 .. 4 + message_length];
+                try self.messages.append(message);
 
                 self.buffer.items = self.buffer.items[4 + message_length ..];
-
-                // std.debug.print("len {}\n", .{self.buffer.items.len});
-                // std.debug.print("capacity {}\n", .{self.buffer.capacity});
             } else {
                 // Incomplete message in the buffer, wait for more data
                 break;
