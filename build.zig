@@ -29,12 +29,22 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     b.installArtifact(lib);
 
+    // dependencies ---------------------------
+    const zbor_dep = b.dependency("zbor", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zbor_module = zbor_dep.module("zbor");
+
     const exe = b.addExecutable(.{
         .name = "harpy",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    // add dependencies ------------------------
+    exe.root_module.addImport("zbor", zbor_module);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

@@ -15,6 +15,10 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
+        .zbor = .{
+            .url = "https://github.com/r4gus/zbor/archive/refs/tags/0.13.1.tar.gz",
+            .hash = "122051750f4d7ecc9b705f1bbea1d431956306c74dafa4e9b625b11a34fab4c06933",
+        },
         // See `zig fetch --save <url>` for a command-line interface for adding dependencies.
         //.example = .{
         //    // When updating this field to a new URL, be sure to delete the corresponding

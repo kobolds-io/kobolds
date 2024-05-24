@@ -2,4 +2,5 @@
 comptime {
     _ = @import("main.zig");
     _ = @import("parser.zig");
+    _ = @import("./proto/message.zig");
 }
