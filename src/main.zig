@@ -1,5 +1,5 @@
 const std = @import("std");
-const MessageParser = @import("./parser.zig").MessageParser;
+const MessageParser = @import("./proto/parser.zig").MessageParser;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
