@@ -29,6 +29,7 @@ pub const MessageParser = struct {
             for (slice, 0..4) |b, i| {
                 bytes[i] = b;
             }
+
             const message_length = beToU32(bytes);
 
             // Check if the buffer contains the complete message
