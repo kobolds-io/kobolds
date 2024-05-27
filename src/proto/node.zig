@@ -1,5 +1,6 @@
 const std = @import("std");
-const Message = @import("./message.zig");
+const Message = @import("./message.zig").Message;
+const MessageParser = @import("./parser.zig").MessageParser;
 
 const Connection = struct {
     id: []const u8,
@@ -31,11 +32,50 @@ pub const Node = struct {
             return;
         };
         defer _ = node.connections.remove(connection.id);
+        std.debug.print("opened connection: connection {s}\n", .{connection.id});
+        defer std.debug.print("closing connection: connection {s}\n", .{connection.id});
 
-        // TODO: spawn a read loop task
+        // Create an allocator for the parser
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        const allocator = gpa.allocator();
+        // TODO: investigate why i get a memory leak detected if i return early
+        //      is this ok that i leave the gpa alive? do i need to clean it?
+        // defer _ = gpa.deinit();
+
+        var parser = MessageParser.init(allocator);
+        defer parser.deinit();
+
+        var read_buffer: [1024]u8 = undefined;
+
+        while (true) {
+            const bytes_read = connection.conn.stream.read(&read_buffer) catch |err| {
+                std.debug.print("could not read from connection {}\n", .{err});
+                return;
+            };
+
+            if (bytes_read == 0) {
+                // end of file likely reached. Close the connection
+                std.debug.print("could not read bytes from connection. EOF\n", .{});
+                return;
+            }
+
+            std.debug.print("received bytes {any} \n", .{read_buffer[0..bytes_read]});
+
+            const messages = parser.parse(read_buffer[0..bytes_read]) catch |err| {
+                std.debug.print("could not parse message, {}\n", .{err});
+                // clear out the read buffer
+                read_buffer = undefined;
+                continue;
+            };
+
+            std.debug.print("messages {any} \n", .{messages});
+
+            // clear out the read buffer
+            read_buffer = undefined;
+        }
 
         // TODO: spawn a write loop task
 
-        std.debug.print("node.handle_connection: connection {any}\n", .{connection});
+        // std.debug.print("node.handle_connection: connection {any}\n", .{connection});
     }
 };

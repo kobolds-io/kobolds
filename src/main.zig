@@ -8,7 +8,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    const address = try net.Address.parseIp("127.0.0.1", 3000);
+    const address = try net.Address.parseIp("127.0.0.1", 4000);
     var listener = try address.listen(.{
         .reuse_address = true,
         .kernel_backlog = 1024,
@@ -33,25 +33,6 @@ pub fn main() !void {
         // _ = try node.add_connection(conn);
 
         try pool.spawn(Node.handle_connection, .{ &nh, &conn });
-
-        // conn.stream.close();
-        // const t = [_]u8{ '1', '2', '3' };
-        // _ = try conn.stream.write(&t);
-        //
-        // conn.stream.close();
-
-        // if (listener.accept()) |conn| {
-        //     var client_arena = ArenaAllocator.init(allocator);
-        //     const client = try client_arena.allocator().create(Client);
-        //     errdefer client_arena.deinit();
-        //
-        //     client.* = Client.init(client_arena, conn.stream, &room);
-        //
-        //     const thread = try std.Thread.spawn(.{}, Client.run, .{client});
-        //     thread.detach();
-        // } else |err| {
-        //     std.log.err("failed to accept connection {}", .{err});
-        // }
     }
 
     // TODO: parse a config file to populate env variables
