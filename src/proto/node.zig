@@ -47,6 +47,12 @@ pub const Node = struct {
 
         var read_buffer: [1024]u8 = undefined;
 
+        var messages_list_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        const messages_list_allocator = messages_list_gpa.allocator();
+
+        var messages_list = std.ArrayList([]u8).init(messages_list_allocator);
+        defer messages_list.deinit();
+
         while (true) {
             const bytes_read = connection.conn.stream.read(&read_buffer) catch |err| {
                 std.debug.print("could not read from connection {}\n", .{err});
@@ -61,12 +67,16 @@ pub const Node = struct {
 
             std.debug.print("received bytes {any} \n", .{read_buffer[0..bytes_read]});
 
-            const messages = parser.parse(read_buffer[0..bytes_read]) catch |err| {
+            const messages = parser.parse(&messages_list, read_buffer[0..bytes_read]) catch |err| {
                 std.debug.print("could not parse message, {}\n", .{err});
                 // clear out the read buffer
                 read_buffer = undefined;
                 continue;
             };
+
+            if (messages_list.items.len > 0) {
+                std.debug.print("messages: {any}\n", .{messages_list.items});
+            }
 
             std.debug.print("messages {any} \n", .{messages});
 

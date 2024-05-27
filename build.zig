@@ -34,6 +34,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
     const zbor_module = zbor_dep.module("zbor");
 
     const exe = b.addExecutable(.{
@@ -89,6 +90,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    exe_unit_tests.root_module.addImport("zbor", zbor_module);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
