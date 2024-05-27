@@ -28,6 +28,7 @@ pub const MessageParser = struct {
         // std.debug.print("data before append {any}\n", .{data});
 
         // nuke out any old allocations
+        // this is probably the WORST thing i can do
         if (self.buffer.items.len == 0) {
             self.buffer.clearAndFree();
         }
