@@ -46,7 +46,7 @@ pub fn main() !void {
 
     var parser_gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const parser_allocator = parser_gpa.allocator();
-    // errdefer _ = parser_gpa.deinit();
+    errdefer _ = parser_gpa.deinit();
 
     var parser = MessageParser.init(parser_allocator);
     // defer parser.deinit();
@@ -59,8 +59,9 @@ pub fn main() !void {
 
     const iters = 1_000_000;
     std.debug.print("sending {} bytes through parser {} times\n", .{ bytes.len, iters });
-    for (0..iters) |i| {
-        std.debug.print("i {d}\n", .{i});
+    for (0..iters) |_| {
+        // std.debug.print("i {d}\n", .{i});
+        // std.time.sleep(std.time.ns_per_ms * 1);
         _ = try parser.parse(&messages, &bytes);
     }
 
