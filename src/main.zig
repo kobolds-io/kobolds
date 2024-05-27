@@ -3,35 +3,10 @@ const net = std.net;
 const Node = @import("./proto/node.zig").Node;
 const MessageParser = @import("./proto/parser.zig").MessageParser;
 
-const BufferSize = 1024;
-
-// fn handleClient(client_stream: *std.net.Stream, allocator: *std.mem.Allocator) !void {
-//     var buffer: [BufferSize]u8 = undefined;
-//     while (true) {
-//         const read_bytes = try client_stream.reader().read(buffer[0..]);
-//         if (read_bytes == 0) break; // Client closed the connection
-//         try client_stream.writer().writeAll(buffer[0..read_bytes]);
-//     }
-// }
-
 pub fn main() !void {
-    // var inbox_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // const inbox_allocator = inbox_gpa.allocator();
-    // defer _ = inbox_gpa.deinit();
-    //
-    // var outbox_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // const outbox_allocator = outbox_gpa.allocator();
-    // defer _ = outbox_gpa.deinit();
-    //
-    // var connections_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // const connections_allocator = connections_gpa.allocator();
-    // defer _ = connections_gpa.deinit();
-    //
-    // const node = Node.new(inbox_allocator, outbox_allocator, connections_allocator);
-
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // const allocator = gpa.allocator();
-    // defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
     const address = try net.Address.parseIp("127.0.0.1", 3000);
     var listener = try address.listen(.{
@@ -41,8 +16,13 @@ pub fn main() !void {
     defer listener.deinit();
     std.log.info("listening at {any}\n", .{address});
 
-    // const node = Node.new_shared(allocator);
-    // var room = Room{ .lock = .{}, .clients = std.AutoHashMap(*Client, void).init(allocator) };
+    var nh = Node.new(allocator);
+
+    // thread pool time!
+    var pool: std.Thread.Pool = undefined;
+    // I added 32 jobs to spawn 32 worker threads but idk, likely can do more
+    try pool.init(.{ .allocator = allocator, .n_jobs = 32 });
+    defer pool.deinit();
 
     while (true) {
         var conn = listener.accept() catch |err| {
@@ -50,10 +30,15 @@ pub fn main() !void {
             continue;
         };
 
-        const t = [_]u8{ '1', '2', '3' };
-        _ = try conn.stream.write(&t);
+        // _ = try node.add_connection(conn);
 
-        conn.stream.close();
+        try pool.spawn(Node.handle_connection, .{ &nh, &conn });
+
+        // conn.stream.close();
+        // const t = [_]u8{ '1', '2', '3' };
+        // _ = try conn.stream.write(&t);
+        //
+        // conn.stream.close();
 
         // if (listener.accept()) |conn| {
         //     var client_arena = ArenaAllocator.init(allocator);

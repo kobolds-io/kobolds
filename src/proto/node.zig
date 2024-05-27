@@ -1,32 +1,41 @@
 const std = @import("std");
 const Message = @import("./message.zig");
 
-const Connection = struct {};
+const Connection = struct {
+    id: []const u8,
+    conn: *std.net.Server.Connection,
+};
 
 /// A node is the primary building block of the system. Nodes handle the async
 /// read and write loops that allow messages to be transmitted from node to node.
 pub const Node = struct {
     const Self = @This();
+    connections: std.StringHashMap(Connection) = undefined,
 
-    inbox: std.ArrayList(Message),
-    outbox: std.ArrayList(Message),
-    connections: std.StringHashMap(Connection),
-
-    pub fn new(inbox_allocator: std.mem.Allocator, outbox_allocator: std.mem.Allocator, connections_allocator: std.mem.Allocator) Node {
+    pub fn new(allocator: std.mem.Allocator) Node {
         return Node{
-            .inbox = std.ArrayList(Message).init(inbox_allocator),
-            .outbox = std.ArrayList(Message).init(outbox_allocator),
-            .connections = std.StringHashMap(Connection).init(connections_allocator),
+            .connections = std.StringHashMap(Connection).init(allocator),
         };
     }
 
-    pub fn new_shared(allocator: std.mem.Allocator) Node {
-        return Node{
-            .inbox = std.ArrayList(Message).init(allocator),
-            .outbox = std.ArrayList(Message).init(allocator),
-            .connections = std.StringHashMap(Message).init(allocator),
+    pub fn handle_connection(node: *Node, server_conn: *std.net.Server.Connection) void {
+        defer server_conn.stream.close();
+        const connection = Connection{
+            .id = "some id",
+            .conn = server_conn,
         };
-    }
 
-    // pub fn add_connection(id: []const u8, )
+        // TODO: there needs to be a mutex put on this for race conditions/collisions
+        node.connections.put("some id", connection) catch |err| {
+            std.debug.print("could not add connection {}\n", .{err});
+            return;
+        };
+        defer _ = node.connections.remove(connection.id);
+
+        // TODO: spawn a read loop task
+
+        // TODO: spawn a write loop task
+
+        std.debug.print("node.handle_connection: connection {any}\n", .{connection});
+    }
 };
