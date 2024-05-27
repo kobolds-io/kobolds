@@ -7,7 +7,7 @@ pub const MessageParser = struct {
 
     pub fn init(allocator: std.mem.Allocator) MessageParser {
         return MessageParser{
-            .buffer = std.ArrayList(u8).init(allocator),
+            .buffer = std.ArrayList(u8).initCapacity(allocator, 1024),
             // .messages = std.ArrayList([]u8).init(allocator),
         };
     }
@@ -20,6 +20,11 @@ pub const MessageParser = struct {
     // i'm a dummy, this needs to be a pointer to self because we are modifying the struct!
     pub fn parse(self: *Self, messages: *std.ArrayList([]u8), data: []const u8) !void {
         // Append incoming data to the buffer
+        std.debug.print("self.buffer.items.len before append {any}\n", .{self.buffer.items.len});
+        std.debug.print("self.buffer.capacity before append {any}\n", .{self.buffer.capacity});
+
+        std.debug.print("data.len before append {any}\n", .{data.len});
+        std.debug.print("data before append {any}\n", .{data});
         try self.buffer.appendSlice(data);
 
         while (self.buffer.items.len >= 4) {
@@ -41,9 +46,13 @@ pub const MessageParser = struct {
                 const message = self.buffer.items[4 .. 4 + message_length];
                 try messages.append(message);
 
+                std.debug.print("self.buffer.items before append {any}\n", .{self.buffer.items});
                 self.buffer.items = self.buffer.items[4 + message_length ..];
+                std.debug.print("self.buffer.items after append {any}\n", .{self.buffer.items});
             } else {
                 // Incomplete message in the buffer, wait for more data
+
+                std.debug.print("self.buffer.items break {any}\n", .{self.buffer.items});
                 break;
             }
         }
