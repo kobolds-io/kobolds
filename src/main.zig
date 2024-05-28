@@ -49,6 +49,7 @@ pub fn main() !void {
     errdefer _ = parser_gpa.deinit();
 
     var parser = MessageParser.init(parser_allocator);
+    // var parser = MessageParser.init();
     // defer parser.deinit();
 
     // 05hello07hellooo

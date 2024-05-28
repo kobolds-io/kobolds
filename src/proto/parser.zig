@@ -3,35 +3,26 @@ const std = @import("std");
 pub const MessageParser = struct {
     const Self = @This();
     buffer: std.ArrayList(u8),
-    buffer_: [1024]u8 = undefined,
-    // messages: std.ArrayList([]u8),
 
     pub fn init(allocator: std.mem.Allocator) MessageParser {
         return MessageParser{
             .buffer = std.ArrayList(u8).init(allocator),
-            // .messages = std.ArrayList([]u8).init(allocator),
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.buffer.deinit();
-        // self.messages.deinit();
     }
 
     // i'm a dummy, this needs to be a pointer to self because we are modifying the struct!
     pub fn parse(self: *Self, messages: *std.ArrayList([]u8), data: []const u8) !void {
         // Append incoming data to the buffer
-        // std.debug.print("self.buffer.items.len before append {any}\n", .{self.buffer.items.len});
-        // std.debug.print("self.buffer.capacity before append {any}\n", .{self.buffer.capacity});
-        //
-        // std.debug.print("data.len before append {any}\n", .{data.len});
-        // std.debug.print("data before append {any}\n", .{data});
 
         // nuke out any old allocations
-        // this is probably the WORST thing i can do
         if (self.buffer.items.len == 0) {
             self.buffer.clearAndFree();
         }
+
         try self.buffer.appendSlice(data);
 
         while (self.buffer.items.len >= 4) {
@@ -53,19 +44,12 @@ pub const MessageParser = struct {
                 const message = self.buffer.items[4 .. 4 + message_length];
                 try messages.append(message);
 
-                // std.debug.print("self.buffer.items before append {any}\n", .{self.buffer.items});
                 self.buffer.items = self.buffer.items[4 + message_length ..];
-                // std.debug.print("self.buffer.items after append {any}\n", .{self.buffer.items});
             } else {
                 // Incomplete message in the buffer, wait for more data
-
-                // std.debug.print("self.buffer.items break {any}\n", .{self.buffer.items});
                 break;
             }
         }
-
-        // return self.messages.clone();
-        // return messages.toOwnedSlice();
         return;
     }
 };
