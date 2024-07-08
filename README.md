@@ -77,16 +77,15 @@ Harpy is meant as a modern replacement for `ROS1` and an alternative to `ROS2`. 
 
 ### Version 0.1.x
 
-| complete | name                             | priority |
-| -------- | -------------------------------- | -------- |
-| ❌       | base protocol definition         | high     |
-| ❌       | message parser                   | high     |
-| ❌       | cluster                          | high     |
-| ❌       | node                             | high     |
-| ❌       | cli                              | high     |
-| ❌       | `tcp` support                    | high     |
-| ❌       | single cluster publish/subscribe | high     |
-| ❌       | single cluster request/reply     | high     |
+| complete | name                                                                                        | priority |
+| -------- | ------------------------------------------------------------------------------------------- | -------- |
+| ❌       | [create basic protocol definition](https://github.com/butterworks-io/harpy/issues/3)        | high     |
+| ❌       | [create basic message parser](https://github.com/butterworks-io/harpy/issues/4)             | high     |
+| ❌       | [create basic cluster](https://github.com/butterworks-io/harpy/issues/5)                    | high     |
+| ❌       | [create basic node](https://github.com/butterworks-io/harpy/issues/6)                       | high     |
+| ❌       | [create basic cli](https://github.com/butterworks-io/harpy/issues/7)                        | high     |
+| ❌       | [create single cluster publish/subscribe](https://github.com/butterworks-io/harpy/issues/8) | high     |
+| ❌       | [create single cluster request/reply](https://github.com/butterworks-io/harpy/issues/9)     | high     |
 
 ### Version 0.2.x
 
