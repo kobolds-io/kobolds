@@ -51,6 +51,8 @@ The world of robotics and industrial communication is frought with danger. If a 
 
 Harpy is meant as a modern replacement for `ROS1` and an alternative to `ROS2`. It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and `ros` and brings many of the conveiniences of the modern cloud environment. `harpy` means to offer several convenient features like load balancing, key value store, message/worker queues, multi transport & encoding as well as providing clients in multiple languages.
 
+I have been working on this project across multiple languages since 02/2023. It has stemmed out of the problem of not being able to communicate with systems remotely.
+
 ## Goals
 
 - **reliably** communicate between multiple systems with a single protocol.
@@ -79,7 +81,7 @@ Harpy is meant as a modern replacement for `ROS1` and an alternative to `ROS2`. 
 
 | complete | name                                                                                        | priority |
 | -------- | ------------------------------------------------------------------------------------------- | -------- |
-| ❌       | [create basic protocol definition](https://github.com/butterworks-io/harpy/issues/3)        | high     |
+| ❌       | [create harpy communication protocol](https://github.com/butterworks-io/harpy/issues/3)     | high     |
 | ❌       | [create basic message parser](https://github.com/butterworks-io/harpy/issues/4)             | high     |
 | ❌       | [create basic cluster](https://github.com/butterworks-io/harpy/issues/5)                    | high     |
 | ❌       | [create basic node](https://github.com/butterworks-io/harpy/issues/6)                       | high     |
