@@ -1,84 +1,148 @@
 # Harpy
 
-**Harpy is currently under development - use at your own risk**
+**Harpy is currently under heavy development - use at your own risk**
 
 ## Description
 
-The world of robotics and industrial communication is wrought with danger. If a system does something it wasn't supposed to, people and machinery can face dire consequences. Harpy means to provide a framework of communication to reliably transfer data from one machine to another over multiple transports.
+`harpy` is a communication framework to reliably transport data from one system to another. `harpy` also aims to have only the bare necessities for dependencies and compiles to a small single file binary to ensure portability.
 
-Harpy is meant as a modern replacement for `ROS1` and an alternative to `ROS2`. It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and `ros` and brings many of the conveiniences of the modern cloud environment. Harpy means to offer several convenient features like load balancing, key value store, message/worker queues, multi transport & encoding as well as providing clients in multiple languages.
+## Quickstart
 
-## Why Zig?
+### Prerequisites
 
-`zig` is low level like `c`. It also can compile to some very important industrial cpu architectures, namely `x86`, `arm` and `risc-v`. With the rise of mobile robots like AMRs (autonomous mobile robots), drones, and other mobile robots, it is important for the footprint of the software to also be very minimal and use very little power. Using a higher level language like `go` or `nodejs` just starts to not make sense. `zig` is also very simple, so picking it up and contributing to this project would be a breeze vs trying to do it in `rust` or `c++`.
+- `zig` 0.13.0
 
-In short, `zig` is my current favorite alternative to writing this in `c`, `rust` or `go`.
+### Get Started
+
+Build the cli and run it
+
+```bash
+# build and fetch all deps
+zig build --fetch
+
+# run the cli
+./zig-out/bin/harpy
+```
+
+Start a cluster locally
+
+```bash
+# run cluster with the default configuration
+./zig-out/bin/harpy cluster run
+```
+
+subscribe to a topic
+
+```bash
+# subscribe to any messages published to the `/hello` topic
+./zig-out/bin/harpy node sub /hello
+```
+
+publish to a topic
+
+```bash
+# publish a message the the `/hello` topic
+./zig-out/bin/harpy node pub /hello "this is my cool message"
+```
+
+## Background
+
+The world of robotics and industrial communication is frought with danger. If a system does something it wasn't supposed to, people and machinery can face dire consequences.
+
+Harpy is meant as a modern replacement for `ROS1` and an alternative to `ROS2`. It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and `ros` and brings many of the conveiniences of the modern cloud environment. `harpy` means to offer several convenient features like load balancing, key value store, message/worker queues, multi transport & encoding as well as providing clients in multiple languages.
 
 ## Goals
 
-- 1. I can reliably communicate between multiple systems with a single protocol.
-- 2. I can distribute work to multiple machines across multiple network boundaries
+- **reliably** communicate between multiple systems with a single protocol.
+- distribute work to multiple machines across multiple network boundaries
+- provide a clear model for how to build scalable and data intensive systems
 
 **Core patterns**
 
-| Pattern           | Description                                                                    |
-| ----------------- | ------------------------------------------------------------------------------ |
-| Request/Reply     | a client sends a transaction to be acknowledged and returned by another client |
-| Publish/Subscribe | `n` message producers sending messages to `x` consumers without a buffer       |
+| Pattern           | Description                                                               |
+| ----------------- | ------------------------------------------------------------------------- |
+| Request/Reply     | send a transactional request to an advertised service and receive a reply |
+| Publish/Subscribe | publish a message to `n` subscribers                                      |
+| Bridge            | send/receive messages between clusters                                    |
 
 **Non Core patterns**
 
-| Pattern       | Description                                                                         |
-| ------------- | ----------------------------------------------------------------------------------- |
-| Message Queue | `n` producers enqueue messages and `x` consumers dequeue messages at their own pace |
-| Data Store    | ability to CRUD a key/value from multiple clients                                   |
-| Stream        | send a stream of bytes over a persistent connection                                 |
+| Pattern | Description                                      |
+| ------- | ------------------------------------------------ |
+| Queue   | create a queue that can be accessed by `n` nodes |
+| Store   | manage key value pairs                           |
+| Pair    | send/receive messages to and from specific nodes |
 
-# Description
+## Roadmap
 
-This issue is to describe large features to be implemented throughout the life of the project. If you'd like to propose a new item to be added to the roadmap, create an issue and tag a core maintainer.
+### Version 0.1.x
 
-## Version 0.1.x
+| complete | name                             | priority |
+| -------- | -------------------------------- | -------- |
+| ❌       | base protocol definition         | high     |
+| ❌       | message parser                   | high     |
+| ❌       | cluster                          | high     |
+| ❌       | node                             | high     |
+| ❌       | cli                              | high     |
+| ❌       | `tcp` support                    | high     |
+| ❌       | single cluster publish/subscribe | high     |
+| ❌       | single cluster request/reply     | high     |
 
-| complete | name                          | priority |
-| -------- | ----------------------------- | -------- |
-| ❌       | basic zig cli                 | high     |
-| ❌       | basic zig client              | high     |
-| ❌       | basic zig node                | high     |
-| ❌       | Kobold Message Protocol       | high     |
-| ❌       | single node Publish/Subscribe | high     |
-| ❌       | single node Request/Reply     | high     |
-| ❌       | service topic load balancing  | high     |
-| ❌       | Public Web Page               | medium   |
+### Version 0.2.x
 
-## Version 0.2.x
+| complete | name                                  | priority |
+| -------- | ------------------------------------- | -------- |
+| ❌       | node to cluster keep alive            | medium   |
+| ❌       | cluster info                          | high     |
+| ❌       | node info                             | high     |
+| ❌       | single cluster service load balancing | low      |
+| ❌       | authentication/authorization          | high     |
 
-| complete | name                         | priority |
-| -------- | ---------------------------- | -------- |
-| ❌       | client info                  | high     |
-| ❌       | node info                    | high     |
-| ❌       | node to node communication   | high     |
-| ❌       | multi node Publish/Subscribe | high     |
-| ❌       | multi node Request/Reply     | high     |
-| ❌       | implementation examples      | medium   |
-| ❌       | performance optimization     | medium   |
-| ❌       | authentication/authorization | high     |
-| ❌       | `tls` encryption             | high     |
-| ❌       | end to end encryption        | high     |
-
-## Version 0.3.x
+### Version 0.3.x
 
 | complete | name                                 | priority |
 | -------- | ------------------------------------ | -------- |
-| ❌       | single node message queues           | medium   |
-| ❌       | multi node message queues            | medium   |
-| ❌       | official communication specification | high     |
-| ❌       | message record                       | low      |
-| ❌       | multi transport support              | low      |
-| ❌       | multi language clients               | medium   |
-| ❌       | message routing optimization         | high     |
-| ❌       | static type enforcement              | medium   |
+| ❌       | cluster to cluster communication     | high     |
+| ❌       | cluster to cluster keep alive        | medium   |
+| ❌       | multi cluster publish/subscribe      | high     |
+| ❌       | multi cluster request/reply          | high     |
+| ❌       | multi cluster service load balancing | low      |
 
-## Version 1.0.0
+### Version 0.4.x
 
-TBD
+| complete | name                                | priority |
+| -------- | ----------------------------------- | -------- |
+| ❌       | queues                              | medium   |
+| ❌       | support for `json` encodings        | medium   |
+| ❌       | public web page                     | low      |
+| ❌       | node to cluster `tls` encryption    | high     |
+| ❌       | cluster to cluster `tls` encryption | high     |
+
+### Version 0.5.x
+
+| complete | name                           | priority |
+| -------- | ------------------------------ | -------- |
+| ❌       | QoS implementation             | low      |
+| ❌       | `icp` transport support        | low      |
+| ❌       | typescript node implementation | medium   |
+| ❌       | static type enforcement        | medium   |
+
+### Version 0.6.x
+
+| complete | name             | priority |
+| -------- | ---------------- | -------- |
+| ❌       | demo application | high     |
+
+### Version 1.0.0
+
+| complete | name                      | priority |
+| -------- | ------------------------- | -------- |
+| ❌       | full protol definition    | high     |
+| ❌       | deprecation documentation | high     |
+| ❌       | website                   | high     |
+
+## Zig
+
+`zig` is low level like `c`. It also can compile to some very important industrial cpu architectures, namely `x86`, `arm` and `risc-v`. With the rise of mobile robots like AMRs (autonomous mobile robots), drones, and other IoT devices, it is important for the footprint of the software to also be very minimal and use very little power. Using a higher level language like `go` or `nodejs` just starts to not make sense. `zig` is also very simple, so picking it up and contributing to this project would be a breeze compared to `rust` or `c++`.
+
+`zig` is also fairly early in development and many of the core libraries that many other languages implement like async functions do not exist yet. `zig` has excellent interop with `c` which can fill many of the gaps posed by these limitations.
