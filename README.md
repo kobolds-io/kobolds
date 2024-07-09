@@ -47,11 +47,7 @@ publish to a topic
 
 ## Background
 
-The world of robotics and industrial communication is frought with danger. If a system does something it wasn't supposed to, people and machinery can face dire consequences.
-
-Harpy is meant as a modern replacement for `ROS1` and an alternative to `ROS2`. It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and `ros` and brings many of the conveiniences of the modern cloud environment. `harpy` means to offer several convenient features like load balancing, key value store, message/worker queues, multi transport & encoding as well as providing clients in multiple languages.
-
-I have been working on this project across multiple languages since 02/2023. It has stemmed out of the problem of not being able to communicate with systems remotely.
+`harpy` is meant as a modern replacement for `ROS1` and an alternative to `ROS2`. It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and especially `ros` and brings many of the conveiniences of the modern cloud environment. `harpy` means to offer several convenient features like load balancing, key value store, message/worker queues, multi transport & encoding as well as providing clients in multiple languages.
 
 ## Goals
 
