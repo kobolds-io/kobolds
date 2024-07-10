@@ -93,8 +93,8 @@ pub const Message = struct {
 
     id: ?[]const u8,
     content: ?[]const u8,
-    // tx_id: ?[]const u8,
-    // topic: ?[]const u8,
+    tx_id: ?[]const u8,
+    topic: ?[]const u8,
     // headers: Headers,
     // message_type: u8,
     // allocator: std.mem.Allocator,
@@ -111,42 +111,31 @@ pub const Message = struct {
     // }
 
     // return a stack Message
-    pub fn new(id: []const u8, content: []const u8) Message {
+    pub fn new(id: []const u8, topic: []const u8, content: []const u8) Message {
         return Message{
             .id = id,
+            .topic = topic,
             .content = content,
+            .tx_id = null,
         };
     }
 
     // return a heap Message
-    pub fn create(allocator: std.mem.Allocator, id: []const u8, content: []const u8) !*Message {
+    pub fn create(allocator: std.mem.Allocator, id: []const u8, topic: []const u8, content: []const u8) !*Message {
         const msg_ptr = try allocator.create(Message);
-        msg_ptr.* = Message.new(id, content);
+        msg_ptr.* = Message.new(id, topic, content);
 
         return msg_ptr;
     }
-
-    // pub fn init(allocator: std.mem.Allocator) !Message {
-    //     const id_ = try allocator.dupe(u8, "some id");
-    //     errdefer allocator.free(id_);
-    //     // const content_ = try allocator.dupe(u8, content);
-    //     // errdefer allocator.free(content_);
-    //
-    //     return Message{
-    //         .id = id_,
-    //         .content = null,
-    //         // .content = content_,
-    //         .allocator = allocator,
-    //     };
-    // }
 
     pub fn cborStringify(self: Self, o: cbor.Options, out: anytype) !void {
         try cbor.stringify(self, .{
             .from_callback = true,
             .field_settings = &.{
                 .{ .name = "id", .field_options = .{ .alias = "0", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
-                .{ .name = "content", .field_options = .{ .alias = "1", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
-                .{ .name = "allocator", .field_options = .{ .skip = .Skip } },
+                .{ .name = "topic", .field_options = .{ .alias = "1", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
+                .{ .name = "content", .field_options = .{ .alias = "2", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
+                .{ .name = "tx_id", .field_options = .{ .alias = "3", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
             },
             .allocator = o.allocator,
         }, out);
@@ -157,8 +146,9 @@ pub const Message = struct {
             .from_callback = true, // prevent infinite loops
             .field_settings = &.{
                 .{ .name = "id", .field_options = .{ .alias = "0", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
-                .{ .name = "content", .field_options = .{ .alias = "1", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
-                .{ .name = "allocator", .field_options = .{ .skip = .Skip } },
+                .{ .name = "topic", .field_options = .{ .alias = "1", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
+                .{ .name = "content", .field_options = .{ .alias = "2", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
+                .{ .name = "tx_id", .field_options = .{ .alias = "3", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
             },
             .allocator = o.allocator,
         });
@@ -185,9 +175,15 @@ test "deserializes cbor to a Message" {
 
     const allocator = std.testing.allocator;
 
-    const msg_on_stack = Message.new("stack_id", "this is some cool content on the stack");
-    const msg_on_heap = try Message.create(allocator, "stack_id", "this is some cool content on the heap");
+    var msg_on_stack = Message.new("stack_id", "/hello", "world");
+    const msg_on_heap = try Message.create(allocator, "stack_id", "/ping", "ping payload");
     defer allocator.destroy(msg_on_heap);
+
+    std.debug.print("msg_on_stack {any}\n", .{msg_on_stack});
+    std.debug.print("msg_on_heap {any}\n", .{msg_on_heap.*});
+
+    msg_on_stack.content = "a";
+    msg_on_heap.content = "b";
 
     std.debug.print("msg_on_stack {any}\n", .{msg_on_stack});
     std.debug.print("msg_on_heap {any}\n", .{msg_on_heap.*});
