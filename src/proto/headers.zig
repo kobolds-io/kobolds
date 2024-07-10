@@ -12,11 +12,11 @@ pub const Headers = struct {
         };
     }
 
-    pub fn stringify(self: *Self, writer: anytype, options: cbor.Options) !void {
-        try cbor.stringify(self, options, writer);
-    }
-
-    pub fn cborParse(data_item: cbor.DataItem, options: cbor.Options) !Self {
-        return try cbor.parse(Self, data_item, options);
-    }
+    // pub fn stringify(self: *Self, writer: anytype, options: cbor.Options) !void {
+    //     try cbor.stringify(self, options, writer);
+    // }
+    //
+    // pub fn cborParse(data_item: cbor.DataItem, options: cbor.Options) !Self {
+    //     return try cbor.parse(Self, data_item, options);
+    // }
 };
