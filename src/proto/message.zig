@@ -102,4 +102,7 @@ test "deserializes cbor to a Message" {
     try std.testing.expect(std.mem.eql(u8, msg_on_stack.id.?, parsed_msg.id.?));
     try std.testing.expect(std.mem.eql(u8, msg_on_stack.topic.?, parsed_msg.topic.?));
     try std.testing.expect(std.mem.eql(u8, msg_on_stack.content.?, parsed_msg.content.?));
+
+    // Message.tx_id defaults to null
+    try std.testing.expectEqual(msg_on_stack.tx_id, parsed_msg.tx_id);
 }
