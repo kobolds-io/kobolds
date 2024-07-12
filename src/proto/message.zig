@@ -30,20 +30,22 @@ pub const Message = struct {
 
     // id: u8,
     id: ?[]const u8,
+    message_type: u8,
     content: ?[]const u8,
     tx_id: ?[]const u8,
     topic: ?[]const u8,
     // headers: Headers,
-    // message_type: u8,
     // allocator: std.mem.Allocator,
 
     // return a stack Message
     pub fn new(id: []const u8, topic: []const u8, content: []const u8) Message {
         return Message{
             .id = id,
+            .message_type = @intFromEnum(MessageType.Undefined),
             .topic = topic,
             .content = content,
             .tx_id = null,
+            // .headers = Headers.new(),
         };
     }
 
@@ -60,9 +62,10 @@ pub const Message = struct {
             .from_callback = true,
             .field_settings = &.{
                 .{ .name = "id", .field_options = .{ .alias = "0", .serialization_type = .TextString } },
-                .{ .name = "topic", .field_options = .{ .alias = "1", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
-                .{ .name = "content", .field_options = .{ .alias = "2", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
-                .{ .name = "tx_id", .field_options = .{ .alias = "3", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
+                .{ .name = "message_type", .field_options = .{ .alias = "1", .serialization_type = .Integer } },
+                .{ .name = "topic", .field_options = .{ .alias = "2", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
+                .{ .name = "content", .field_options = .{ .alias = "3", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
+                .{ .name = "tx_id", .field_options = .{ .alias = "4", .serialization_type = .TextString }, .value_options = .{ .slice_serialization_type = .TextString } },
             },
             .allocator = o.allocator,
         }, out);
@@ -73,9 +76,10 @@ pub const Message = struct {
             .from_callback = true, // prevent infinite loops
             .field_settings = &.{
                 .{ .name = "id", .field_options = .{ .alias = "0", .serialization_type = .TextString } },
-                .{ .name = "topic", .field_options = .{ .alias = "1", .serialization_type = .TextString } },
-                .{ .name = "content", .field_options = .{ .alias = "2", .serialization_type = .TextString } },
-                .{ .name = "tx_id", .field_options = .{ .alias = "3", .serialization_type = .TextString } },
+                .{ .name = "message_type", .field_options = .{ .alias = "1", .serialization_type = .Integer } },
+                .{ .name = "topic", .field_options = .{ .alias = "2", .serialization_type = .TextString } },
+                .{ .name = "content", .field_options = .{ .alias = "3", .serialization_type = .TextString } },
+                .{ .name = "tx_id", .field_options = .{ .alias = "4", .serialization_type = .TextString } },
             },
             .allocator = o.allocator,
         });
@@ -100,6 +104,7 @@ test "deserializes cbor to a Message" {
     const parsed_msg = try Message.cborParse(di, .{ .allocator = al });
 
     try std.testing.expect(std.mem.eql(u8, msg_on_stack.id.?, parsed_msg.id.?));
+    try std.testing.expectEqual(msg_on_stack.message_type, parsed_msg.message_type);
     try std.testing.expect(std.mem.eql(u8, msg_on_stack.topic.?, parsed_msg.topic.?));
     try std.testing.expect(std.mem.eql(u8, msg_on_stack.content.?, parsed_msg.content.?));
 
