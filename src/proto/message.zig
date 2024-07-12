@@ -1,6 +1,5 @@
 const std = @import("std");
 const cbor = @import("zbor");
-const utils = @import("./utils.zig");
 
 const Headers = @import("./headers.zig").Headers;
 
@@ -28,14 +27,12 @@ pub const MessageType = enum(u8) {
 pub const Message = struct {
     const Self = @This();
 
-    // id: u8,
     id: ?[]const u8,
     message_type: u8,
     content: ?[]const u8,
     tx_id: ?[]const u8,
     topic: ?[]const u8,
-    // headers: Headers,
-    // allocator: std.mem.Allocator,
+    headers: Headers,
 
     // return a stack Message
     pub fn new(id: []const u8, topic: []const u8, content: []const u8) Message {
@@ -45,16 +42,16 @@ pub const Message = struct {
             .topic = topic,
             .content = content,
             .tx_id = null,
-            // .headers = Headers.new(),
+            .headers = Headers.new(null),
         };
     }
 
     // return a heap Message
     pub fn create(allocator: std.mem.Allocator, id: []const u8, topic: []const u8, content: []const u8) !*Message {
-        const msg_ptr = try allocator.create(Message);
-        msg_ptr.* = Message.new(id, topic, content);
+        const ptr = try allocator.create(Message);
+        ptr.* = Message.new(id, topic, content);
 
-        return msg_ptr;
+        return ptr;
     }
 
     pub fn cborStringify(self: Self, o: cbor.Options, out: anytype) !void {
@@ -130,6 +127,7 @@ test "deserializes cbor to a Message" {
     var bytes = std.ArrayList(u8).init(allocator);
     defer bytes.deinit();
 
+    msg_on_stack.headers.token = "my cool client token that totally is awesome";
     try msg_on_stack.cborStringify(.{}, bytes.writer());
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -143,7 +141,11 @@ test "deserializes cbor to a Message" {
     try std.testing.expectEqual(msg_on_stack.message_type, parsed_msg.message_type);
     try std.testing.expect(std.mem.eql(u8, msg_on_stack.topic.?, parsed_msg.topic.?));
     try std.testing.expect(std.mem.eql(u8, msg_on_stack.content.?, parsed_msg.content.?));
+    try std.testing.expect(std.mem.eql(u8, msg_on_stack.content.?, parsed_msg.content.?));
+    try std.testing.expect(std.mem.eql(u8, msg_on_stack.headers.token.?, parsed_msg.headers.token.?));
 
     // Message.tx_id defaults to null
     try std.testing.expectEqual(msg_on_stack.tx_id, parsed_msg.tx_id);
+
+    std.debug.print("msg {any}\n", .{parsed_msg});
 }
