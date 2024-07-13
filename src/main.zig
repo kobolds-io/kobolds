@@ -4,6 +4,7 @@ const Node = @import("./proto/node.zig").Node;
 const MessageParser = @import("./proto/parser.zig").MessageParser;
 const Message = @import("./proto/message.zig").Message;
 const MessageType = @import("./proto/message.zig").MessageType;
+const utils = @import("./proto/utils.zig");
 
 pub fn main() !void {
     // create a message
@@ -20,7 +21,10 @@ pub fn main() !void {
     try original_msg.cborStringify(.{}, bytes.writer());
 
     // generate a length prefixed payload
+    try bytes.insertSlice(0, &utils.u32ToBytes(@intCast(bytes.items.len)));
 
+    std.debug.print("bytes.items.len {any}\n", .{bytes.items.len});
+    std.debug.print("bytes.items {any}\n", .{bytes.items});
     // parse the length prefixed payload
     // deserialize the message
     // verify that the message is the same

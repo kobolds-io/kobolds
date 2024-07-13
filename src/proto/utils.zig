@@ -14,7 +14,7 @@ pub fn beToU32(bytes: *[4]u8) u32 {
     return std.mem.readInt(u32, bytes, .big);
 }
 
-fn u32ToBytes(value: u32) [4]u8 {
+pub fn u32ToBytes(value: u32) [4]u8 {
     return [_]u8{
         @intCast((value >> 24) & 0xFF),
         @intCast((value >> 16) & 0xFF),

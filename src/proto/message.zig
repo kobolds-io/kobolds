@@ -148,6 +148,4 @@ test "deserializes cbor to a Message" {
 
     // Message.tx_id defaults to null
     try std.testing.expectEqual(original_msg.tx_id, parsed_msg.tx_id);
-
-    std.debug.print("msg {any}\n", .{parsed_msg});
 }
