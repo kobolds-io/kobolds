@@ -30,7 +30,7 @@ pub const MessageParser = struct {
 
         while (self.buffer.items.len >= 4) {
             // slice the length prefix
-            const message_length = utils.beToU32(self.buffer.items[0..4]);
+            const message_length = utils.bytesToU32(self.buffer.items[0..4]);
 
             // Check if the buffer contains the complete message
             if (self.buffer.items.len >= message_length + 4) {

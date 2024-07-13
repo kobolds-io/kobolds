@@ -122,7 +122,7 @@ pub const Message = struct {
     }
 };
 
-test "deserializes cbor to a Message" {
+test "Message.cborParse" {
     var original_msg = Message.new("stack_id", "hello", "there");
 
     // serialize the message
