@@ -11,17 +11,26 @@ pub fn main() !void {
     const original_msg = Message.new("1", "/hello", "world");
 
     // serialize it
-    var buffer_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const buf_allocator = buffer_gpa.allocator();
-    defer _ = buffer_gpa.deinit();
+    var serialize_buf_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const serialize_buf_allocator = serialize_buf_gpa.allocator();
+    defer _ = serialize_buf_gpa.deinit();
 
-    var buf = std.ArrayList(u8).init(buf_allocator);
-    defer buf.deinit();
+    var serialize_buf = std.ArrayList(u8).init(serialize_buf_allocator);
+    defer serialize_buf.deinit();
 
-    try utils.serialize(&buf, original_msg);
+    try utils.serialize(&serialize_buf, original_msg);
 
-    std.debug.print("bytes.items.len {any}\n", .{buf.items.len});
-    std.debug.print("bytes.items {any}\n", .{buf.items});
+    var deserialize_buf_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const deserialize_buf_allocator = deserialize_buf_gpa.allocator();
+    // defer _ = deserialize_buf_gpa.deinit();
+
+    const deserialized_msg = try utils.deserialize(
+        deserialize_buf_allocator,
+        serialize_buf.items[4..],
+    );
+
+    std.debug.print("original msg {any}\n", .{original_msg});
+    std.debug.print("deserialized msg {any}\n", .{deserialized_msg});
     // parse the length prefixed payload
     // deserialize the message
     // verify that the message is the same

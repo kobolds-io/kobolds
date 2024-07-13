@@ -1,6 +1,7 @@
 const std = @import("std");
-const print = std.debug.print;
+const cbor = @import("zbor");
 const Message = @import("./message.zig").Message;
+const print = std.debug.print;
 
 /// converts a Message to bytes
 pub fn serialize(buf: *std.ArrayList(u8), msg: Message) !void {
@@ -44,9 +45,9 @@ test serialize {
 }
 
 /// converts bytes to a Message
-pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !*Message {
-    _ = allocator;
-    _ = bytes;
+pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !Message {
+    const di: cbor.DataItem = try cbor.DataItem.new(bytes);
+    return try Message.cborParse(di, .{ .allocator = allocator });
 }
 
 pub fn bytesToU32(bytes: *[4]u8) u32 {
