@@ -5,6 +5,7 @@ const Message = @import("./message.zig").Message;
 /// converts a Message to bytes
 pub fn serialize(buf: *std.ArrayList(u8), msg: Message) !void {
     // assert that the buffer is empty
+    // TODO: make this a ProtoError
     if (buf.items.len > 0) return error.BufferNotEmpty;
 
     // Convert the message to CBOR

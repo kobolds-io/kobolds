@@ -11,20 +11,17 @@ pub fn main() !void {
     const original_msg = Message.new("1", "/hello", "world");
 
     // serialize it
-    var bytes_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const bytes_allocator = bytes_gpa.allocator();
-    defer _ = bytes_gpa.deinit();
+    var buffer_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const buf_allocator = buffer_gpa.allocator();
+    defer _ = buffer_gpa.deinit();
 
-    var bytes = std.ArrayList(u8).init(bytes_allocator);
-    defer bytes.deinit();
+    var buf = std.ArrayList(u8).init(buf_allocator);
+    defer buf.deinit();
 
-    try original_msg.cborStringify(.{}, bytes.writer());
+    try utils.serialize(&buf, original_msg);
 
-    // generate a length prefixed payload
-    try bytes.insertSlice(0, &utils.u32ToBytes(@intCast(bytes.items.len)));
-
-    std.debug.print("bytes.items.len {any}\n", .{bytes.items.len});
-    std.debug.print("bytes.items {any}\n", .{bytes.items});
+    std.debug.print("bytes.items.len {any}\n", .{buf.items.len});
+    std.debug.print("bytes.items {any}\n", .{buf.items});
     // parse the length prefixed payload
     // deserialize the message
     // verify that the message is the same
