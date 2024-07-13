@@ -10,6 +10,9 @@ pub fn main() !void {
     // create a message
     const original_msg = Message.new("1", "/hello", "world");
 
+    var serialize_timer = try std.time.Timer.start();
+    defer serialize_timer.reset();
+
     // serialize it
     var serialize_buf_gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const serialize_buf_allocator = serialize_buf_gpa.allocator();
@@ -20,6 +23,13 @@ pub fn main() !void {
 
     try utils.serialize(&serialize_buf, original_msg);
 
+    const serialize_duration = serialize_timer.read();
+
+    std.debug.print("serialize took {}us\n", .{(serialize_duration / std.time.ns_per_us)});
+
+    var deserialize_timer = try std.time.Timer.start();
+    defer deserialize_timer.reset();
+
     var deserialize_buf_gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const deserialize_buf_allocator = deserialize_buf_gpa.allocator();
     // defer _ = deserialize_buf_gpa.deinit();
@@ -29,9 +39,11 @@ pub fn main() !void {
         serialize_buf.items[4..],
     );
 
+    const deserialize_duration = deserialize_timer.read();
+    defer deserialize_timer.reset();
+
+    std.debug.print("deserialize took {}us\n", .{deserialize_duration / std.time.ns_per_us});
+
     std.debug.print("original msg {any}\n", .{original_msg});
     std.debug.print("deserialized msg {any}\n", .{deserialized_msg});
-    // parse the length prefixed payload
-    // deserialize the message
-    // verify that the message is the same
 }
