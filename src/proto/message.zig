@@ -60,7 +60,7 @@ pub const Message = struct {
             .field_settings = &.{
                 .{
                     .name = "id",
-                    .field_options = .{ .alias = "0", .serialization_type = .TextString },
+                    .field_options = .{ .alias = "0", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
                 .{
@@ -70,20 +70,17 @@ pub const Message = struct {
                 },
                 .{
                     .name = "topic",
-                    .field_options = .{ .alias = "2", .serialization_type = .TextString },
+                    .field_options = .{ .alias = "2", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
                 .{
                     .name = "content",
-                    .field_options = .{
-                        .alias = "3",
-                        .serialization_type = .TextString,
-                    },
+                    .field_options = .{ .alias = "3", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
                 .{
                     .name = "tx_id",
-                    .field_options = .{ .alias = "4", .serialization_type = .TextString },
+                    .field_options = .{ .alias = "4", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
             },
@@ -97,27 +94,26 @@ pub const Message = struct {
             .field_settings = &.{
                 .{
                     .name = "id",
-                    .field_options = .{ .alias = "0", .serialization_type = .TextString },
+                    .field_options = .{ .alias = "0", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
                 .{
                     .name = "message_type",
                     .field_options = .{ .alias = "1", .serialization_type = .Integer },
-                    .value_options = .{ .slice_serialization_type = .Integer },
                 },
                 .{
                     .name = "topic",
-                    .field_options = .{ .alias = "2", .serialization_type = .TextString },
+                    .field_options = .{ .alias = "2", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
                 .{
                     .name = "content",
-                    .field_options = .{ .alias = "3", .serialization_type = .TextString },
+                    .field_options = .{ .alias = "3", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
                 .{
                     .name = "tx_id",
-                    .field_options = .{ .alias = "4", .serialization_type = .TextString },
+                    .field_options = .{ .alias = "4", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
             },

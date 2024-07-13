@@ -25,7 +25,7 @@ pub const Headers = struct {
             .field_settings = &.{
                 .{
                     .name = "token",
-                    .field_options = .{ .alias = "0", .serialization_type = .TextString },
+                    .field_options = .{ .alias = "0", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
             },
@@ -39,7 +39,7 @@ pub const Headers = struct {
             .field_settings = &.{
                 .{
                     .name = "token",
-                    .field_options = .{ .alias = "0", .serialization_type = .TextString },
+                    .field_options = .{ .alias = "0", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
             },
