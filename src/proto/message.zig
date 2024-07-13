@@ -1,44 +1,151 @@
 const std = @import("std");
 const cbor = @import("zbor");
 
+const Headers = @import("./headers.zig").Headers;
+
+pub const MessageType = enum(u8) {
+    Undefined,
+    Connect,
+    KeepAlive,
+    Register,
+    Unregister,
+    Request,
+    Reply,
+    Publish,
+    Subscribe,
+    Unsubscribe,
+    Enqueue,
+    Deque,
+    Peek,
+    Put,
+    Get,
+    Delete,
+    Forward,
+    Broadcast,
+};
+
 pub const Message = struct {
     const Self = @This();
 
     id: []const u8,
+    message_type: u8,
     topic: []const u8,
-    content: []const u8,
+    content: ?[]const u8,
+    tx_id: ?[]const u8,
+    headers: Headers,
 
-    pub fn new(topic: []const u8, content: []const u8) Message {
+    // return a stack Message
+    pub fn new(id: []const u8, topic: []const u8, content: []const u8) Message {
         return Message{
-            .id = "id",
+            .id = id,
             .topic = topic,
+            .message_type = @intFromEnum(MessageType.Undefined),
             .content = content,
+            .tx_id = null,
+            .headers = Headers.new(null),
         };
     }
 
-    pub fn cborParse(item: cbor.DataItem, options: cbor.Options) !Self {
-        return try cbor.parse(Self, item, options);
+    // return a heap Message
+    pub fn create(allocator: std.mem.Allocator, id: []const u8, topic: []const u8, content: []const u8) !*Message {
+        const ptr = try allocator.create(Message);
+        ptr.* = Message.new(id, topic, content);
+
+        return ptr;
     }
 
-    pub fn cborStringify(self: *const Self, options: cbor.Options, writer: anytype) !void {
-        try cbor.stringify(self, options, writer);
+    pub fn cborStringify(self: Self, o: cbor.Options, out: anytype) !void {
+        try cbor.stringify(self, .{
+            .from_callback = true,
+            .field_settings = &.{
+                .{
+                    .name = "id",
+                    .field_options = .{ .alias = "0", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .TextString },
+                },
+                .{
+                    .name = "message_type",
+                    .field_options = .{ .alias = "1", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .Integer },
+                },
+                .{
+                    .name = "topic",
+                    .field_options = .{ .alias = "2", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .TextString },
+                },
+                .{
+                    .name = "content",
+                    .field_options = .{ .alias = "3", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .TextString },
+                },
+                .{
+                    .name = "tx_id",
+                    .field_options = .{ .alias = "4", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .TextString },
+                },
+            },
+            .allocator = o.allocator,
+        }, out);
+    }
+
+    pub fn cborParse(item: cbor.DataItem, o: cbor.Options) !Self {
+        return try cbor.parse(Self, item, .{
+            .from_callback = true, // prevent infinite loops
+            .field_settings = &.{
+                .{
+                    .name = "id",
+                    .field_options = .{ .alias = "0", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .TextString },
+                },
+                .{
+                    .name = "message_type",
+                    .field_options = .{ .alias = "1", .serialization_type = .Integer },
+                },
+                .{
+                    .name = "topic",
+                    .field_options = .{ .alias = "2", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .TextString },
+                },
+                .{
+                    .name = "content",
+                    .field_options = .{ .alias = "3", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .TextString },
+                },
+                .{
+                    .name = "tx_id",
+                    .field_options = .{ .alias = "4", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .TextString },
+                },
+            },
+            .allocator = o.allocator,
+        });
     }
 };
 
-test "serializes to cbor" {
-    var di = std.ArrayList(u8).init(std.testing.allocator);
-    defer di.deinit();
+test "Message.cborParse" {
+    var original_msg = Message.new("stack_id", "hello", "there");
 
-    const content = &.{ 1, 2, 3, 4, 5 };
-    const msg = Message.new("/hello", content);
+    // serialize the message
+    const allocator = std.testing.allocator;
+    var bytes = std.ArrayList(u8).init(allocator);
+    defer bytes.deinit();
 
-    // std.debug.print("message {any}\n", .{msg});
+    original_msg.headers.token = "my cool client token that totally is awesome";
+    try original_msg.cborStringify(.{}, bytes.writer());
 
-    // try std.testing.expectEqual()
-    const want = [_]u8{ 163, 98, 105, 100, 66, 105, 100, 101, 116, 111, 112, 105, 99, 70, 47, 104, 101, 108, 108, 111, 103, 99, 111, 110, 116, 101, 110, 116, 69, 1, 2, 3, 4, 5 };
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const al = gpa.allocator();
+    // defer _ = gpa.deinit();
 
-    try msg.cborStringify(.{}, di.writer());
-    // std.debug.print("cbor stringify output {d}\n", .{di.items});
-    // try std.testing.expectEqual("asdfasdf", di.items);
-    try std.testing.expect(std.mem.eql(u8, &want, di.items));
+    const di: cbor.DataItem = try cbor.DataItem.new(bytes.items);
+    const parsed_msg = try Message.cborParse(di, .{ .allocator = al });
+
+    try std.testing.expect(std.mem.eql(u8, original_msg.id, parsed_msg.id));
+    try std.testing.expectEqual(original_msg.message_type, parsed_msg.message_type);
+    try std.testing.expect(std.mem.eql(u8, original_msg.topic, parsed_msg.topic));
+    try std.testing.expect(std.mem.eql(u8, original_msg.content.?, parsed_msg.content.?));
+    try std.testing.expect(std.mem.eql(u8, original_msg.headers.token.?, parsed_msg.headers.token.?));
+
+    // Message.tx_id defaults to null
+    try std.testing.expectEqual(original_msg.tx_id, parsed_msg.tx_id);
 }

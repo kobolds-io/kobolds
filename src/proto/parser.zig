@@ -1,4 +1,5 @@
 const std = @import("std");
+const utils = @import("./utils.zig");
 
 const ParseError = error{
     InvalidInputData,
@@ -29,7 +30,7 @@ pub const MessageParser = struct {
 
         while (self.buffer.items.len >= 4) {
             // slice the length prefix
-            const message_length = beToU32(self.buffer.items[0..4]);
+            const message_length = utils.bytesToU32(self.buffer.items[0..4]);
 
             // Check if the buffer contains the complete message
             if (self.buffer.items.len >= message_length + 4) {
@@ -48,20 +49,6 @@ pub const MessageParser = struct {
         }
     }
 };
-
-pub fn beToU32(bytes: *[4]u8) u32 {
-    return std.mem.readInt(u32, bytes, .big);
-}
-
-test "convert big endian bytes to u32" {
-    var buf = [_]u8{ 0, 0, 0, 5, 1, 1, 1, 1, 1 };
-    const bytes = buf[0..4];
-    const want: u32 = 5;
-
-    const got = beToU32(bytes);
-
-    try std.testing.expectEqual(want, got);
-}
 
 test "error if input data is invalid" {
     var messages = std.ArrayList([]u8).init(std.testing.allocator);
