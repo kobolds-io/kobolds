@@ -11,9 +11,9 @@ pub const MessageParser = struct {
 
     buffer: std.ArrayList(u8) = undefined,
 
-    pub fn init(buffer_allocator: std.mem.Allocator) MessageParser {
+    pub fn init(allocator: std.mem.Allocator) MessageParser {
         return MessageParser{
-            .buffer = std.ArrayList(u8).init(buffer_allocator),
+            .buffer = std.ArrayList(u8).init(allocator),
         };
     }
 

@@ -4,7 +4,7 @@ comptime {
     _ = @import("./proto/parser.zig");
     _ = @import("./proto/headers.zig");
     _ = @import("./proto/message.zig");
-    _ = @import("./proto/proto.zig");
+    _ = @import("./proto/benchmarks.zig");
     _ = @import("./proto/utils.zig");
     _ = @import("./proto/node.zig");
 }
