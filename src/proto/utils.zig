@@ -1,7 +1,6 @@
 const std = @import("std");
 const cbor = @import("zbor");
 const Message = @import("./message.zig").Message;
-const print = std.debug.print;
 
 /// converts a Message to bytes
 pub fn serialize(buf: *std.ArrayList(u8), msg: Message) !void {

@@ -13,7 +13,7 @@ pub fn main() !void {
     var serialize_timer = try std.time.Timer.start();
     defer serialize_timer.reset();
 
-    // serialize it
+    /////////////////// SERIALIZE THE MESSAGE
     var serialize_buf_gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const serialize_buf_allocator = serialize_buf_gpa.allocator();
     defer _ = serialize_buf_gpa.deinit();
@@ -27,6 +27,31 @@ pub fn main() !void {
 
     std.debug.print("serialize took {}us\n", .{(serialize_duration / std.time.ns_per_us)});
 
+    var parse_timer = try std.time.Timer.start();
+    defer parse_timer.reset();
+
+    /////////////////// PARSE THE MESSAGE
+    var messages_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const messages_allocator = messages_gpa.allocator();
+    defer _ = messages_gpa.deinit();
+
+    var messages_buf = std.ArrayList([]u8).init(messages_allocator);
+    defer messages_buf.deinit();
+
+    var parser_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const parser_allocator = parser_gpa.allocator();
+    defer _ = parser_gpa.deinit();
+
+    var parser = MessageParser.init(parser_allocator);
+    defer parser.deinit();
+
+    try parser.parse(&messages_buf, serialize_buf.items);
+
+    const parse_duration = parse_timer.read();
+
+    std.debug.print("parse took {}us\n", .{(parse_duration / std.time.ns_per_us)});
+
+    /////////////////// DESERIALIZE THE MESSAGE
     var deserialize_timer = try std.time.Timer.start();
     defer deserialize_timer.reset();
 
@@ -36,7 +61,7 @@ pub fn main() !void {
 
     const deserialized_msg = try utils.deserialize(
         deserialize_buf_allocator,
-        serialize_buf.items[4..],
+        messages_buf.items[0],
     );
 
     const deserialize_duration = deserialize_timer.read();

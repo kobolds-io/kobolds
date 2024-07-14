@@ -90,16 +90,28 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_unit_tests.step);
 
     // add dependencies ------------------------
-    // compile dependencies
-    const zbor_dep = b.dependency("zbor", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
+    // zbor
+    const zbor_dep = b.dependency(
+        "zbor",
+        .{ .target = target, .optimize = optimize },
+    );
     const zbor_module = zbor_dep.module("zbor");
 
     exe.root_module.addImport("zbor", zbor_module);
     lib.root_module.addImport("zbor", zbor_module);
     exe_unit_tests.root_module.addImport("zbor", zbor_module);
     lib_unit_tests.root_module.addImport("zbor", zbor_module);
+
+    // currently doesn't work
+    // // zbench
+    // const zbench_dep = b.dependency(
+    //     "zbench",
+    //     .{ .target = target, .optimize = optimize },
+    // );
+    // const zbench_module = zbench_dep.module("zbench");
+    //
+    // exe.root_module.addImport("zbench", zbench_module);
+    // lib.root_module.addImport("zbench", zbench_module);
+    // exe_unit_tests.root_module.addImport("zbench", zbench_module);
+    // lib_unit_tests.root_module.addImport("zbench", zbench_module);
 }
