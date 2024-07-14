@@ -27,11 +27,11 @@
             .url = "https://github.com/r4gus/zbor/archive/master.tar.gz",
             .hash = "12209a78f8c31b6d65d2249082dc824da4a191f6f7be6a1c1740fc093b765c5ebeea",
         },
-        .zbench = .{
-            // this is v0.8.0
-            .url = "https://github.com/hendriknielaender/zBench/archive/refs/tags/v0.8.0.tar.gz",
-            .hash = "1220a7330b49a17f0fd0dcf40f76f015db5180b3f1a6f52d7043801846795233c490",
-        },
+        // currently not compatible with zig 0.13.0
+        // .zbench = .{
+        //     .url = "https://github.com/hendriknielaender/zBench/archive/main.tar.gz",
+        //     .hash = "1220038bd3428215781dcefef3a4fb0f68fa59b29e5cd3941bec8c0fb81d9235b978",
+        // },
     },
 
     // Specifies the set of files and directories that are included in this package.
