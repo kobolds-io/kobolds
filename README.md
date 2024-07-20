@@ -4,7 +4,7 @@
 
 ## Description
 
-`harpy` is a communication framework to reliably transport data from one system to another. `harpy` also aims to have only the bare necessities for dependencies and compiles to a small single file binary to ensure portability.
+`harpy` is a modern, high performing messaging system for communication between different machines across different networks. This means it's easy to scale, easy to apply and robust and reliable enough to support modern workloads.
 
 ## Quickstart
 
@@ -47,7 +47,7 @@ publish to a topic
 
 ## Background
 
-`harpy` is meant as a modern replacement for `ROS1` and an alternative to `ROS2`. It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and especially `ros` and brings many of the conveiniences of the modern cloud environment. `harpy` means to offer several convenient features like load balancing, key value store, message/worker queues, multi transport & encoding as well as providing clients in multiple languages.
+It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and especially `ros` and brings many of the conveiniences of the modern cloud environment. `harpy` means to offer several convenient features like load balancing, key value store, message/worker queues, multi transport & encoding as well as providing clients in multiple languages.
 
 ## Goals
 
