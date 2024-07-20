@@ -6,6 +6,7 @@ pub const Headers = struct {
 
     token: ?[]const u8,
 
+    // TODO: transaction_id should be included in the headers, not the message body
     pub fn new(token: ?[]const u8) Self {
         return Headers{
             .token = token,

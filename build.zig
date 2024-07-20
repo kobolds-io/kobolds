@@ -70,7 +70,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        .test_runner = b.path("src/test_runner.zig"),
+        // .test_runner = b.path("src/test_runner.zig"),
     });
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
@@ -79,7 +79,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
-        .test_runner = b.path("src/test_runner.zig"),
+        // .test_runner = b.path("src/test_runner.zig"),
     });
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
@@ -103,6 +103,31 @@ pub fn build(b: *std.Build) void {
     lib.root_module.addImport("zbor", zbor_module);
     exe_unit_tests.root_module.addImport("zbor", zbor_module);
     lib_unit_tests.root_module.addImport("zbor", zbor_module);
+
+    // uuid
+    const uuid_dep = b.dependency(
+        "uuid",
+        .{ .target = target, .optimize = optimize },
+    );
+    const uuid_module = uuid_dep.module("uuid");
+
+    exe.root_module.addImport("uuid", uuid_module);
+    lib.root_module.addImport("uuid", uuid_module);
+    exe_unit_tests.root_module.addImport("uuid", uuid_module);
+    lib_unit_tests.root_module.addImport("uuid", uuid_module);
+
+    // currently doesn't work
+    // // zig-string
+    // const zstring_dep = b.dependency(
+    //     "zstring",
+    //     .{ .target = target, .optimize = optimize },
+    // );
+    // const zstring_module = zstring_dep.module("zstring");
+    //
+    // exe.root_module.addImport("zstring", zstring_module);
+    // lib.root_module.addImport("zstring", zstring_module);
+    // exe_unit_tests.root_module.addImport("zstring", zstring_module);
+    // lib_unit_tests.root_module.addImport("zstring", zstring_module);
 
     // currently doesn't work
     // // zbench

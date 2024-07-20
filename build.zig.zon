@@ -27,6 +27,17 @@
             .url = "https://github.com/r4gus/zbor/archive/master.tar.gz",
             .hash = "12209a78f8c31b6d65d2249082dc824da4a191f6f7be6a1c1740fc093b765c5ebeea",
         },
+        .uuid = .{
+            .url = "https://github.com/r4gus/uuid-zig/archive/refs/tags/0.2.1.tar.gz",
+            .hash = "1220b4deeb4ec1ec3493ea934905356384561b725dba69d1fbf6a25cb398716dd05b",
+        },
+
+        // currently not compatible with zig 0.13.0
+        // .zstring = .{
+        //     .url = "https://github.com/JakubSzark/zig-string/archive/refs/heads/master.tar.gz",
+        //     .hash = "1220671a059f6131ea3fdd42b3a0e16f06fc962fe5e1b62f7effdf1a4c33631141f8",
+        // },
+
         // currently not compatible with zig 0.13.0
         // .zbench = .{
         //     .url = "https://github.com/hendriknielaender/zBench/archive/main.tar.gz",

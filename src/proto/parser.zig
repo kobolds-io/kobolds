@@ -39,14 +39,6 @@ pub const Parser = struct {
                 // append the message to the parsed_messages list
                 try parsed_messages.append(message);
 
-                // reset the buffer
-                // clear out the mem this doesn't really work
-                // self.buffer.replaceRangeAssumeCapacity(
-                //     0,
-                //     4 + message_length,
-                //     &.{},
-                // );
-
                 // this is directly manipulating the underlying memory
                 // feels kind of gross but in the end it works.
                 std.mem.copyForwards(u8, self.buffer.items, self.buffer.items[4 + message_length ..]);
@@ -189,9 +181,12 @@ test "parses 100_000 10 byte messages in less than 5 milliseconds using a single
 }
 
 test "parses incomplete messages with multiple parse calls" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    var parsed_messages = std.ArrayList([]u8).init(allocator);
+    var parsed_messages_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const parsed_messages_allocator = parsed_messages_gpa.allocator();
+    defer _ = parsed_messages_gpa.deinit();
+
+    var parsed_messages = std.ArrayList([]u8).init(parsed_messages_allocator);
+    defer parsed_messages.deinit();
 
     try std.testing.expectEqual(0, parsed_messages.items.len);
 

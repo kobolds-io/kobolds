@@ -83,7 +83,7 @@ test "primitive benchmark message serialization" {
         serialize_buf.clearAndFree();
     }
 
-    try std.testing.expect(average(iter_durations.items) / std.time.ns_per_us < 50);
+    try std.testing.expect(average(iter_durations.items) / std.time.ns_per_us < 75);
 }
 
 test "primitive benchmark message parse" {

@@ -24,6 +24,57 @@ pub const MessageType = enum(u8) {
     Broadcast,
 };
 
+// Id          string      `cbor:"id"`
+// MessageType MessageType `cbor:"message_type"`
+// Topic       string      `cbor:"topic"`
+// TxId        string      `cbor:"tx_id,omitempty"`
+// Headers     Headers     `cbor:"headers,omitempty"`
+// Content     []byte      `cbor:"content,omitempty"`
+// Error       Error       `cbor:"error,omitempty"`
+
+pub const MessageError = struct {
+    const Self = @This();
+
+    message: []const u8,
+    code: u8,
+
+    pub fn cborStringify(self: Self, o: cbor.Options, out: anytype) !void {
+        try cbor.stringify(self, .{
+            .from_callback = true,
+            .field_settings = &.{
+                .{
+                    .name = "message",
+                    .field_options = .{ .alias = "0", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .TextString },
+                },
+                .{
+                    .name = "code",
+                    .field_options = .{ .alias = "1", .serialization_type = .Integer },
+                },
+            },
+            .allocator = o.allocator,
+        }, out);
+    }
+
+    pub fn cborParse(item: cbor.DataItem, o: cbor.Options) !Self {
+        return try cbor.parse(Self, item, .{
+            .from_callback = true, // prevent infinite loops
+            .field_settings = &.{
+                .{
+                    .name = "message",
+                    .field_options = .{ .alias = "0", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .TextString },
+                },
+                .{
+                    .name = "code",
+                    .field_options = .{ .alias = "1", .serialization_type = .Integer },
+                },
+            },
+            .allocator = o.allocator,
+        });
+    }
+};
+
 pub const Message = struct {
     const Self = @This();
 
@@ -33,6 +84,7 @@ pub const Message = struct {
     content: ?[]const u8,
     tx_id: ?[]const u8,
     headers: Headers,
+    message_error: ?MessageError,
 
     // return a stack Message
     pub fn new(id: []const u8, topic: []const u8, content: []const u8) Message {
@@ -43,6 +95,7 @@ pub const Message = struct {
             .content = content,
             .tx_id = null,
             .headers = Headers.new(null),
+            .message_error = null,
         };
     }
 
@@ -74,13 +127,23 @@ pub const Message = struct {
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
                 .{
-                    .name = "content",
+                    .name = "tx_id",
                     .field_options = .{ .alias = "3", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
                 .{
-                    .name = "tx_id",
+                    .name = "headers",
                     .field_options = .{ .alias = "4", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .TextString },
+                },
+                .{
+                    .name = "content",
+                    .field_options = .{ .alias = "5", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .TextString },
+                },
+                .{
+                    .name = "message_error",
+                    .field_options = .{ .alias = "6", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
             },
@@ -100,6 +163,7 @@ pub const Message = struct {
                 .{
                     .name = "message_type",
                     .field_options = .{ .alias = "1", .serialization_type = .Integer },
+                    .value_options = .{ .slice_serialization_type = .Integer },
                 },
                 .{
                     .name = "topic",
@@ -107,14 +171,22 @@ pub const Message = struct {
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
                 .{
-                    .name = "content",
+                    .name = "tx_id",
                     .field_options = .{ .alias = "3", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
                 },
                 .{
-                    .name = "tx_id",
+                    .name = "headers",
                     .field_options = .{ .alias = "4", .serialization_type = .Integer },
+                },
+                .{
+                    .name = "content",
+                    .field_options = .{ .alias = "5", .serialization_type = .Integer },
                     .value_options = .{ .slice_serialization_type = .TextString },
+                },
+                .{
+                    .name = "message_error",
+                    .field_options = .{ .alias = "6", .serialization_type = .Integer },
                 },
             },
             .allocator = o.allocator,
@@ -131,6 +203,7 @@ test "Message.cborParse" {
     defer bytes.deinit();
 
     original_msg.headers.token = "my cool client token that totally is awesome";
+    original_msg.message_error = MessageError{ .message = "some message", .code = 1 };
     try original_msg.cborStringify(.{}, bytes.writer());
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -145,6 +218,8 @@ test "Message.cborParse" {
     try std.testing.expect(std.mem.eql(u8, original_msg.topic, parsed_msg.topic));
     try std.testing.expect(std.mem.eql(u8, original_msg.content.?, parsed_msg.content.?));
     try std.testing.expect(std.mem.eql(u8, original_msg.headers.token.?, parsed_msg.headers.token.?));
+    try std.testing.expect(std.mem.eql(u8, original_msg.message_error.?.message, parsed_msg.message_error.?.message));
+    try std.testing.expectEqual(original_msg.message_error.?.code, parsed_msg.message_error.?.code);
 
     // Message.tx_id defaults to null
     try std.testing.expectEqual(original_msg.tx_id, parsed_msg.tx_id);
