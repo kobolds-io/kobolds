@@ -54,7 +54,7 @@ fn min(elems: []u64) u64 {
 test "primitive benchmark message serialization" {
     const ITERS: u32 = 500;
     // Create an empty default message on the stack
-    const msg = Message.new("", "", "");
+    const msg = Message.new("", "");
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();

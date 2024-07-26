@@ -24,11 +24,11 @@ zig build --fetch
 ./zig-out/bin/harpy
 ```
 
-Start a cluster locally
+Start a node locally
 
 ```bash
-# run cluster with the default configuration
-./zig-out/bin/harpy cluster run
+# run node with the default configuration
+./zig-out/bin/harpy node run
 ```
 
 subscribe to a topic
@@ -61,7 +61,7 @@ It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and esp
 | ----------------- | ------------------------------------------------------------------------- |
 | Request/Reply     | send a transactional request to an advertised service and receive a reply |
 | Publish/Subscribe | publish a message to `n` subscribers                                      |
-| Bridge            | send/receive messages between clusters                                    |
+| Bridge            | send/receive messages between nodes                                       |
 
 **Non Core patterns**
 
@@ -75,45 +75,45 @@ It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and esp
 
 ### Version 0.1.x
 
-| complete | name                                                                                        | priority |
-| -------- | ------------------------------------------------------------------------------------------- | -------- |
-| ❌       | [create harpy communication protocol](https://github.com/butterworks-io/harpy/issues/3)     | high     |
-| ❌       | [create basic message parser](https://github.com/butterworks-io/harpy/issues/4)             | high     |
-| ❌       | [create basic cluster](https://github.com/butterworks-io/harpy/issues/5)                    | high     |
-| ❌       | [create basic node](https://github.com/butterworks-io/harpy/issues/6)                       | high     |
-| ❌       | [create basic cli](https://github.com/butterworks-io/harpy/issues/7)                        | high     |
-| ❌       | [create single cluster publish/subscribe](https://github.com/butterworks-io/harpy/issues/8) | high     |
-| ❌       | [create single cluster request/reply](https://github.com/butterworks-io/harpy/issues/9)     | high     |
+| complete | name                                                                                     | priority |
+| -------- | ---------------------------------------------------------------------------------------- | -------- |
+| ❌       | [create harpy communication protocol](https://github.com/butterworks-io/harpy/issues/3)  | high     |
+| ❌       | [create basic message parser](https://github.com/butterworks-io/harpy/issues/4)          | high     |
+| ❌       | [create basic node](https://github.com/butterworks-io/harpy/issues/5)                    | high     |
+| ❌       | [create basic node](https://github.com/butterworks-io/harpy/issues/6)                    | high     |
+| ❌       | [create basic cli](https://github.com/butterworks-io/harpy/issues/7)                     | high     |
+| ❌       | [create single node publish/subscribe](https://github.com/butterworks-io/harpy/issues/8) | high     |
+| ❌       | [create single node request/reply](https://github.com/butterworks-io/harpy/issues/9)     | high     |
 
 ### Version 0.2.x
 
-| complete | name                                  | priority |
-| -------- | ------------------------------------- | -------- |
-| ❌       | node to cluster keep alive            | medium   |
-| ❌       | cluster info                          | high     |
-| ❌       | node info                             | high     |
-| ❌       | single cluster service load balancing | low      |
-| ❌       | authentication/authorization          | high     |
+| complete | name                               | priority |
+| -------- | ---------------------------------- | -------- |
+| ❌       | node to node keep alive            | medium   |
+| ❌       | node info                          | high     |
+| ❌       | node info                          | high     |
+| ❌       | single node service load balancing | low      |
+| ❌       | authentication/authorization       | high     |
 
 ### Version 0.3.x
 
-| complete | name                                 | priority |
-| -------- | ------------------------------------ | -------- |
-| ❌       | cluster to cluster communication     | high     |
-| ❌       | cluster to cluster keep alive        | medium   |
-| ❌       | multi cluster publish/subscribe      | high     |
-| ❌       | multi cluster request/reply          | high     |
-| ❌       | multi cluster service load balancing | low      |
+| complete | name                              | priority |
+| -------- | --------------------------------- | -------- |
+| ❌       | node to node communication        | high     |
+| ❌       | node to node keep alive           | medium   |
+| ❌       | multi node publish/subscribe      | high     |
+| ❌       | multi node request/reply          | high     |
+| ❌       | multi node service load balancing | low      |
 
 ### Version 0.4.x
 
-| complete | name                                | priority |
-| -------- | ----------------------------------- | -------- |
-| ❌       | queues                              | medium   |
-| ❌       | support for `json` encodings        | medium   |
-| ❌       | public web page                     | low      |
-| ❌       | node to cluster `tls` encryption    | high     |
-| ❌       | cluster to cluster `tls` encryption | high     |
+| complete | name                          | priority |
+| -------- | ----------------------------- | -------- |
+| ❌       | queues                        | medium   |
+| ❌       | support for `json` encodings  | medium   |
+| ❌       | public web page               | low      |
+| ❌       | node to node `tls` encryption | high     |
+| ❌       | node to node `tls` encryption | high     |
 
 ### Version 0.5.x
 

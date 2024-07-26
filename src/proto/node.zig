@@ -1,91 +1,198 @@
 const std = @import("std");
-const Message = @import("./message.zig").Message;
-const MessageParser = @import("./parser.zig").MessageParser;
+const net = std.net;
+const uuid = @import("uuid");
 
-const Connection = struct {
-    id: []const u8,
-    conn: *std.net.Server.Connection,
+const Connection = @import("./connection.zig").Connection;
+const Message = @import("./message.zig").Message;
+const Mailbox = @import("./mailbox.zig").Mailbox;
+
+pub const NodeOpts = struct {
+    host: []const u8 = "127.0.0.1",
+    port: u16 = 4000,
+    // token: []const u8, // token needed for nodes to connect to this node
 };
 
-/// A node is the primary building block of the system. Nodes handle the async
-/// read and write loops that allow messages to be transmitted from node to node.
+pub const ConnectOpts = struct {
+    host: []const u8 = "127.0.0.1",
+    port: u16 = 4000,
+    // token: []const u8, // token needed for nodes to connect to this node
+};
+
 pub const Node = struct {
     const Self = @This();
-    connections: std.StringHashMap(Connection) = undefined,
+    id: u128,
+    host: []const u8,
+    port: u16,
+    connections: std.AutoHashMap(u128, *Connection) = undefined,
+    connections_mutex: std.Thread.Mutex,
+    inboxes: std.AutoHashMap(u128, *Mailbox),
+    outboxes: std.AutoHashMap(u128, *Mailbox),
 
-    pub fn new(allocator: std.mem.Allocator) Node {
+    pub fn init(allocator: std.mem.Allocator, opts: NodeOpts) !Node {
+        // we should fail if the host port is not  0 >= port <= 65535
+        if (opts.host.len == 0) return error.InvalidHost;
+        if (opts.port <= 0 or opts.port >= 65535) return error.InvalidPort;
+
         return Node{
-            .connections = std.StringHashMap(Connection).init(allocator),
+            .id = uuid.v7.new(),
+            .host = opts.host,
+            .port = opts.port,
+            .connections_mutex = std.Thread.Mutex{},
+            .connections = std.AutoHashMap(u128, *Connection).init(allocator),
+            .inboxes = std.AutoHashMap(u128, *Mailbox).init(allocator),
+            .outboxes = std.AutoHashMap(u128, *Mailbox).init(allocator),
         };
     }
 
-    pub fn handle_connection(node: *Node, server_conn: *std.net.Server.Connection) void {
-        defer server_conn.stream.close();
-        const connection = Connection{
-            .id = "some id",
-            .conn = server_conn,
-        };
-
-        // TODO: there needs to be a mutex put on this for race conditions/collisions
-        node.connections.put("some id", connection) catch |err| {
-            std.debug.print("could not add connection {}\n", .{err});
-            return;
-        };
-        defer _ = node.connections.remove(connection.id);
-        std.debug.print("opened connection: connection {s}\n", .{connection.id});
-        defer std.debug.print("closing connection: connection {s}\n", .{connection.id});
-
-        // Create an allocator for the parser
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-        const allocator = gpa.allocator();
-        // TODO: investigate why i get a memory leak detected if i return early
-        //      is this ok that i leave the gpa alive? do i need to clean it?
-        // defer _ = gpa.deinit();
-
-        var parser = MessageParser.init(allocator);
-        defer parser.deinit();
-
-        var read_buffer: [1024]u8 = undefined;
-
-        var messages_list_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-        const messages_list_allocator = messages_list_gpa.allocator();
-
-        var messages_list = std.ArrayList([]u8).init(messages_list_allocator);
-        defer messages_list.deinit();
-
-        while (true) {
-            const bytes_read = connection.conn.stream.read(&read_buffer) catch |err| {
-                std.debug.print("could not read from connection {}\n", .{err});
-                return;
-            };
-
-            if (bytes_read == 0) {
-                // end of file likely reached. Close the connection
-                std.debug.print("could not read bytes from connection. EOF\n", .{});
-                return;
-            }
-
-            std.debug.print("received bytes {any} \n", .{read_buffer[0..bytes_read]});
-
-            const messages = parser.parse(&messages_list, read_buffer[0..bytes_read]) catch |err| {
-                std.debug.print("could not parse message, {}\n", .{err});
-                // clear out the read buffer
-                read_buffer = undefined;
-                continue;
-            };
-
-            if (messages_list.items.len > 0) {
-                std.debug.print("messages: {any}\n", .{messages_list.items});
-            }
-
-            std.debug.print("messages {any} \n", .{messages});
-
-            // clear out the read buffer
-            read_buffer = undefined;
+    pub fn deinit(self: *Self) void {
+        // this will remove the references to each of these
+        // but we need to still spin down everything that each
+        // connection is doing
+        var conn_value_iter = self.connections.valueIterator();
+        var conn: ?**Connection = conn_value_iter.next();
+        while (conn != null) {
+            conn.?.*.close();
+            conn = conn_value_iter.next();
         }
 
-        // TODO: spawn a write loop task
+        self.connections.deinit();
 
-        // std.debug.print("node.handle_connection: connection {any}\n", .{connection});
+        var inboxes_value_iter = self.inboxes.valueIterator();
+        var inbox: ?**Mailbox = inboxes_value_iter.next();
+        while (inbox != null) {
+            inbox.?.*.deinit();
+            inbox = inboxes_value_iter.next();
+        }
+
+        self.inboxes.deinit();
+
+        var outboxes_value_iter = self.outboxes.valueIterator();
+        var outbox: ?**Mailbox = outboxes_value_iter.next();
+        while (outbox != null) {
+            outbox.?.*.deinit();
+            outbox = outboxes_value_iter.next();
+        }
+
+        self.outboxes.deinit();
+    }
+
+    pub fn listen(self: *Self) !void {
+        const address = try std.net.Address.parseIp(self.host, self.port);
+
+        var listener = try address.listen(.{ .reuse_port = false });
+        defer listener.deinit();
+
+        std.debug.print("listening for new node connections on {any}\n", .{address});
+
+        while (listener.accept()) |server_connection| {
+            const thread = try std.Thread.spawn(
+                .{},
+                Node.handleConnection,
+                .{ self, server_connection.stream },
+            );
+            thread.detach();
+        } else |err| {
+            std.log.err("failed to accept connection {}", .{err});
+        }
+    }
+
+    pub fn handleConnection(self: *Self, stream: net.Stream) void {
+        defer {
+            std.debug.print("connections {d}\n", .{self.connections.count()});
+        }
+
+        var mailbox_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        const mailbox_allocator = mailbox_gpa.allocator();
+        defer _ = mailbox_gpa.deinit();
+
+        const inbox = mailbox_allocator.create(Mailbox) catch |err| {
+            std.debug.print("could not create inbox {any}\n", .{err});
+            return;
+        };
+        defer mailbox_allocator.destroy(inbox);
+
+        const outbox = mailbox_allocator.create(Mailbox) catch |err| {
+            std.debug.print("could not create outbox {any}\n", .{err});
+            return;
+        };
+        defer mailbox_allocator.destroy(outbox);
+
+        inbox.* = Mailbox.init(mailbox_allocator);
+        defer inbox.deinit();
+
+        outbox.* = Mailbox.init(mailbox_allocator);
+        defer outbox.deinit();
+
+        var connection = Connection.new(.{ .stream = stream, .inbox = inbox, .outbox = outbox });
+
+        self.inboxes.put(connection.id, inbox) catch |err| {
+            std.debug.print("could not add inbox {any}\n", .{err});
+            return;
+        };
+        defer _ = self.inboxes.remove(connection.id);
+        self.outboxes.put(connection.id, outbox) catch |err| {
+            std.debug.print("could not add outbox {any}\n", .{err});
+            return;
+        };
+        defer _ = self.outboxes.remove(connection.id);
+
+        // TODO: need a mechanic to remove the connection
+        self.addConnection(&connection) catch |err| {
+            std.debug.print("could not add connection {d} {any}\n", .{ connection.id, err });
+            return;
+        };
+        std.debug.print("connections {d}\n", .{self.connections.count()});
+        defer _ = self.removeConnection(connection.id);
+
+        // TODO: create a handle connection function to spawn allocators and all of that
+
+        // spin up the read and write loop
+        connection.runSync();
+
+        // -----------------------\\
+        // this is an experiment
+        // -----------------------\\
+        // connection.run();
+
+        // TODO: This should be a channel or an event that blocks until it receives a message
+        // while (connection.running) {
+        //     std.time.sleep(std.time.ns_per_ms * 100);
+        // }
+        // -----------------------\\
+    }
+
+    /// connect to another node
+    pub fn connect(self: *Self, allocator: std.mem.Allocator, opts: ConnectOpts) !*Connection {
+        const addr = try std.net.Address.parseIp(opts.host, opts.port);
+        const stream = try std.net.tcpConnectToAddress(addr);
+        std.debug.print("connected to {s}:{d}\n", .{ opts.host, opts.port });
+
+        var connection = Connection.new(.{ .allocator = allocator, .stream = stream });
+
+        // TODO: need a mechanic to remove the connection
+        try self.addConnection(connection);
+        errdefer _ = self.removeConnection(connection.id);
+
+        // spawn the thread to run the connection
+        const th = try std.Thread.spawn(.{}, Connection.run, .{&connection});
+        th.detach();
+
+        return &connection;
+    }
+
+    pub fn addConnection(self: *Self, conn: *Connection) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+        try self.connections.put(conn.id, conn);
+    }
+
+    pub fn removeConnection(self: *Self, id: u128) bool {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+        return self.connections.remove(id);
     }
 };
+
+test "the lifecycle" {}
+
+test "it listens for new connections" {}

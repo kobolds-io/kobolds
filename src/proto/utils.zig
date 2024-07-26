@@ -24,7 +24,7 @@ test serialize {
     var buf = std.ArrayList(u8).init(allocator);
     defer buf.deinit();
 
-    const msg = Message.new("1", "/hello", "world");
+    const msg = Message.new("/hello", "world");
 
     try std.testing.expectEqual(0, buf.items.len);
 
