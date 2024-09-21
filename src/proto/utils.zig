@@ -13,7 +13,7 @@ pub fn serialize(buf: *std.ArrayList(u8), msg: Message) !void {
     try msg.cborStringify(.{}, buf.writer());
 
     // the the message length prefix
-    const msg_length_prefix = u32ToBytes(@intCast(buf.items.len));
+    const msg_length_prefix = u32ToBytesV1(@intCast(buf.items.len));
 
     // Insert the length prefix at the beginning of the buffer
     try buf.insertSlice(0, &msg_length_prefix);
@@ -50,7 +50,26 @@ pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) !Message {
     return try Message.cborParse(di, .{ .allocator = allocator });
 }
 
+pub fn u128ToBytes(value: u128) [16]u8 {
+    // var buf: [16]u8 = undefined;
+    // var fbs = std.io.fixedBufferStream(&buf);
+    // const writer = fbs.writer();
+    //
+    // try writer.writeInt(u128, value, .little); // or .big for big-endian
+    // return buf;
+
+    // doesn't need an error union
+    var result: [16]u8 = undefined;
+    for (0..16) |index| {
+        const i: u7 = @intCast(index);
+
+        result[index] = @as(u8, @intCast(value >> (8 * (15 - i)) & 0xFF));
+    }
+    return result;
+}
+
 pub fn bytesToU32(bytes: *[4]u8) u32 {
+    // TODO: change to little endian
     return std.mem.readInt(u32, bytes, .big);
 }
 
@@ -64,7 +83,7 @@ test bytesToU32 {
     try std.testing.expectEqual(want, got);
 }
 
-pub fn u32ToBytes(value: u32) [4]u8 {
+pub fn u32ToBytesV2(value: u32) [4]u8 {
     return [_]u8{
         @intCast((value >> 24) & 0xFF),
         @intCast((value >> 16) & 0xFF),
@@ -73,21 +92,53 @@ pub fn u32ToBytes(value: u32) [4]u8 {
     };
 }
 
-test u32ToBytes {
+pub fn u32ToBytesV1(value: u32) [4]u8 {
+    var result: [4]u8 = undefined;
+    for (0..4) |index| {
+        const i: u5 = @intCast(index);
+        // result[i] = @intCast(u8, value >> (8 * (3 - i)) & 0xFF);
+
+        result[index] = @as(u8, @intCast(value >> (8 * (3 - i)) & 0xFF));
+    }
+
+    return result;
+}
+
+test u32ToBytesV1 {
     const value1: u32 = 5;
-    const bytes1 = u32ToBytes(value1);
+    const bytes1 = u32ToBytesV1(value1);
     const want1 = [4]u8{ 0, 0, 0, 5 };
 
     try std.testing.expect(std.mem.eql(u8, &want1, &bytes1));
 
     const value2: u32 = 256;
-    const bytes2 = u32ToBytes(value2);
+    const bytes2 = u32ToBytesV1(value2);
     const want2 = [4]u8{ 0, 0, 1, 0 };
 
     try std.testing.expect(std.mem.eql(u8, &want2, &bytes2));
 
     const value3: u32 = 3000;
-    const bytes3 = u32ToBytes(value3);
+    const bytes3 = u32ToBytesV1(value3);
+    const want3 = [4]u8{ 0, 0, 11, 184 };
+
+    try std.testing.expect(std.mem.eql(u8, &want3, &bytes3));
+}
+
+test u32ToBytesV2 {
+    const value1: u32 = 5;
+    const bytes1 = u32ToBytesV2(value1);
+    const want1 = [4]u8{ 0, 0, 0, 5 };
+
+    try std.testing.expect(std.mem.eql(u8, &want1, &bytes1));
+
+    const value2: u32 = 256;
+    const bytes2 = u32ToBytesV2(value2);
+    const want2 = [4]u8{ 0, 0, 1, 0 };
+
+    try std.testing.expect(std.mem.eql(u8, &want2, &bytes2));
+
+    const value3: u32 = 3000;
+    const bytes3 = u32ToBytesV2(value3);
     const want3 = [4]u8{ 0, 0, 11, 184 };
 
     try std.testing.expect(std.mem.eql(u8, &want3, &bytes3));

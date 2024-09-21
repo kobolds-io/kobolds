@@ -169,7 +169,6 @@ test "parses 100_000 10 byte messages in less than 5 milliseconds using a single
     try parser.parse(&parsed_messages, input_data.items);
     const duration = timer.read();
 
-    // std.debug.print("duration {any}us\n", .{duration / std.time.ns_per_us});
     try std.testing.expect((duration / std.time.ns_per_ms) <= 5);
     try std.testing.expectEqual(MESSAGES_COUNT, parsed_messages.items.len);
 

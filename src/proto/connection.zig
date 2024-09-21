@@ -58,13 +58,11 @@ pub const Connection = struct {
 
         const end: u64 = timer.read() + (timeout_ms * 1_000_000);
 
-        // std.debug.print("start {d} end {d}\n", .{ start, end });
-
         while (self.running) {
             self.inbox.mutex.lock();
 
             if (self.inbox.messages.items.len > 0) {
-                std.debug.print("got message {any}\n", .{self.inbox.messages.items[0]});
+                std.log.debug("got message {any}", .{self.inbox.messages.items[0]});
                 const v = self.inbox.popHead();
                 self.inbox.mutex.unlock();
                 return v;
@@ -89,7 +87,7 @@ pub const Connection = struct {
         if (self.running) {
             self.running = false;
             self.stream.close();
-            std.debug.print("connection closed {d}\n", .{self.id});
+            std.log.debug("connection closed {d}", .{self.id});
         }
     }
 
@@ -97,12 +95,12 @@ pub const Connection = struct {
         self.running = true;
 
         const read_loop_thread = std.Thread.spawn(.{}, Connection.readLoop, .{self}) catch |err| {
-            std.debug.print("could not spawn readloop {any}\n", .{err});
+            std.log.debug("could not spawn readloop {any}", .{err});
             return;
         };
 
         const write_loop_thread = std.Thread.spawn(.{}, Connection.writeLoop, .{self}) catch |err| {
-            std.debug.print("could not spawn writeLoop {any}\n", .{err});
+            std.log.debug("could not spawn writeLoop {any}", .{err});
             return;
         };
 
@@ -114,12 +112,12 @@ pub const Connection = struct {
         self.running = true;
 
         const read_loop_thread = std.Thread.spawn(.{}, Connection.readLoop, .{self}) catch |err| {
-            std.debug.print("could not spawn readloop {any}\n", .{err});
+            std.log.debug("could not spawn readloop {any}", .{err});
             return;
         };
 
         const write_loop_thread = std.Thread.spawn(.{}, Connection.writeLoop, .{self}) catch |err| {
-            std.debug.print("could not spawn writeLoop {any}\n", .{err});
+            std.log.debug("could not spawn writeLoop {any}", .{err});
             return;
         };
 
@@ -139,7 +137,7 @@ pub const Connection = struct {
     fn readLoop(self: *Self) void {
         defer {
             self.close();
-            std.debug.print("read loop closing\n", .{});
+            std.log.debug("read loop closing", .{});
         }
 
         var parsed_messages_gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -158,25 +156,25 @@ pub const Connection = struct {
         defer parser.deinit();
 
         while (self.running) {
-            std.debug.print("read loop\n", .{});
+            std.log.debug("read loop", .{});
             var buf: [1024]u8 = undefined;
 
             const n = self.stream.read(&buf) catch |err| {
-                std.debug.print("could not read from stream {any}\n", .{err});
+                std.log.debug("could not read from stream {any}", .{err});
                 return;
             };
 
             if (n == 0) {
-                std.debug.print("read 0 bytes from connection\n", .{});
+                std.log.debug("read 0 bytes from connection", .{});
                 return;
             }
 
             parser.parse(&parsed_messages, buf[0..n]) catch |err| {
-                std.debug.print("could not parse buffer {any}\n", .{err});
+                std.log.debug("could not parse buffer {any}", .{err});
                 return;
             };
 
-            std.debug.print("parsed messages [0] {any}\n", .{parsed_messages.items[0]});
+            std.log.debug("parsed messages [0] {any}", .{parsed_messages.items[0]});
 
             if (parsed_messages.items.len > 0) {
                 // TODO: don't use the page allocator, instead use an already initialized allocator
@@ -188,26 +186,26 @@ pub const Connection = struct {
                 //      to be able to swap between decoding
                 for (parsed_messages.items) |msg_bytes| {
                     const di = cbor.DataItem.new(msg_bytes) catch |err| {
-                        std.debug.print("could not create cbor DataItem from bytes {any}\n", .{err});
+                        std.log.debug("could not create cbor DataItem from bytes {any}", .{err});
                         continue;
                     };
 
                     const message = Message.cborParse(di, .{ .allocator = allocator }) catch |err| {
-                        std.debug.print("could not parse message {any}\n", .{err});
+                        std.log.debug("could not parse message {any}", .{err});
                         continue;
                     };
 
-                    std.debug.print("inbox message {any}\n", .{message});
+                    std.log.debug("inbox message {any}", .{message});
 
                     self.inbox.mutex.lock();
                     defer self.inbox.mutex.unlock();
                     // TODO: there should be a lock here
                     self.inbox.append(message) catch |err| {
-                        std.debug.print("could not add message to inbox {any}\n", .{err});
+                        std.log.debug("could not add message to inbox {any}", .{err});
                         continue;
                     };
 
-                    std.debug.print("inbox.messages.items {any}\n", .{self.inbox.messages.items});
+                    std.log.debug("inbox.messages.items {any}", .{self.inbox.messages.items});
                 }
 
                 parsed_messages.clearAndFree();
@@ -218,7 +216,7 @@ pub const Connection = struct {
     fn writeLoop(self: *Self) void {
         defer {
             self.close();
-            std.debug.print("write loop closing\n", .{});
+            std.log.debug("write loop closing", .{});
         }
 
         const MAX_BYTES: usize = 1024;
@@ -243,7 +241,7 @@ pub const Connection = struct {
                 for (self.outbox.messages.items) |msg| {
                     utils.serialize(&write_buffer, msg) catch |err| {
                         // TODO: we should remove this message as it is now broken
-                        std.debug.print("could not serialize message {any}\n", .{err});
+                        std.log.debug("could not serialize message {any}", .{err});
                         continue;
                     };
                 }
@@ -259,11 +257,9 @@ pub const Connection = struct {
             const bytes_to_write = if (write_buffer.items.len < MAX_BYTES) write_buffer.items.len else MAX_BYTES;
 
             const n = self.stream.write(write_buffer.items[0..bytes_to_write]) catch |err| {
-                std.debug.print("unable to write to stream {any}\n", .{err});
+                std.log.debug("unable to write to stream {any}", .{err});
                 return;
             };
-
-            // std.debug.print("wrote n bytes {d}\n", .{n});
 
             // shift the remaining bytes to the head of the write_buffer for the next loop
             std.mem.copyForwards(u8, write_buffer.items, write_buffer.items[n..]);

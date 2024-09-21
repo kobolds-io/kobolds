@@ -82,7 +82,7 @@ pub const Node = struct {
         var listener = try address.listen(.{ .reuse_port = false });
         defer listener.deinit();
 
-        std.debug.print("listening for new node connections on {any}\n", .{address});
+        std.log.debug("listening for new node connections on {any}", .{address});
 
         while (listener.accept()) |server_connection| {
             const thread = try std.Thread.spawn(
@@ -98,7 +98,7 @@ pub const Node = struct {
 
     pub fn handleConnection(self: *Self, stream: net.Stream) void {
         defer {
-            std.debug.print("connections {d}\n", .{self.connections.count()});
+            std.log.debug("connections {d}", .{self.connections.count()});
         }
 
         var mailbox_gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -106,13 +106,13 @@ pub const Node = struct {
         defer _ = mailbox_gpa.deinit();
 
         const inbox = mailbox_allocator.create(Mailbox) catch |err| {
-            std.debug.print("could not create inbox {any}\n", .{err});
+            std.log.debug("could not create inbox {any}", .{err});
             return;
         };
         defer mailbox_allocator.destroy(inbox);
 
         const outbox = mailbox_allocator.create(Mailbox) catch |err| {
-            std.debug.print("could not create outbox {any}\n", .{err});
+            std.log.debug("could not create outbox {any}", .{err});
             return;
         };
         defer mailbox_allocator.destroy(outbox);
@@ -126,22 +126,22 @@ pub const Node = struct {
         var connection = Connection.new(.{ .stream = stream, .inbox = inbox, .outbox = outbox });
 
         self.inboxes.put(connection.id, inbox) catch |err| {
-            std.debug.print("could not add inbox {any}\n", .{err});
+            std.log.debug("could not add inbox {any}", .{err});
             return;
         };
         defer _ = self.inboxes.remove(connection.id);
         self.outboxes.put(connection.id, outbox) catch |err| {
-            std.debug.print("could not add outbox {any}\n", .{err});
+            std.log.debug("could not add outbox {any}", .{err});
             return;
         };
         defer _ = self.outboxes.remove(connection.id);
 
         // TODO: need a mechanic to remove the connection
         self.addConnection(&connection) catch |err| {
-            std.debug.print("could not add connection {d} {any}\n", .{ connection.id, err });
+            std.log.debug("could not add connection {d} {any}", .{ connection.id, err });
             return;
         };
-        std.debug.print("connections {d}\n", .{self.connections.count()});
+        std.log.debug("connections {d}", .{self.connections.count()});
         defer _ = self.removeConnection(connection.id);
 
         // TODO: create a handle connection function to spawn allocators and all of that
@@ -165,7 +165,7 @@ pub const Node = struct {
     pub fn connect(self: *Self, allocator: std.mem.Allocator, opts: ConnectOpts) !*Connection {
         const addr = try std.net.Address.parseIp(opts.host, opts.port);
         const stream = try std.net.tcpConnectToAddress(addr);
-        std.debug.print("connected to {s}:{d}\n", .{ opts.host, opts.port });
+        std.log.debug("connected to {s}:{d}", .{ opts.host, opts.port });
 
         var connection = Connection.new(.{ .allocator = allocator, .stream = stream });
 

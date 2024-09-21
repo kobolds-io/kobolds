@@ -1,13 +1,9 @@
 // this file is a global importer for all tests
 comptime {
     _ = @import("main.zig");
-    _ = @import("./proto/benchmarks.zig");
-    _ = @import("./proto/connection.zig");
-    _ = @import("./proto/mailbox.zig");
-    _ = @import("./proto/message_headers.zig");
-    _ = @import("./proto/message_type.zig");
-    _ = @import("./proto/message.zig");
-    _ = @import("./proto/node.zig");
-    _ = @import("./proto/parser.zig");
-    _ = @import("./proto/utils.zig");
+    _ = @import("./protocol/parser.zig");
+    _ = @import("./protocol/message.zig");
+    _ = @import("./protocol/hash.zig");
+    _ = @import("./protocol/connection.zig");
+    _ = @import("./protocol/message_bus.zig");
 }

@@ -70,7 +70,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        // .test_runner = b.path("src/test_runner.zig"),
     });
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
@@ -79,7 +78,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
-        // .test_runner = b.path("src/test_runner.zig"),
     });
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
@@ -91,6 +89,39 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
 
+    const lib_cicd_tests = b.addTest(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .test_runner = b.path("src/cicd_test_runner.zig"),
+    });
+
+    const run_lib_cicd_tests = b.addRunArtifact(lib_cicd_tests);
+    const exe_cicd_tests = b.addTest(.{
+        .root_source_file = b.path("src/test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .test_runner = b.path("src/cicd_test_runner.zig"),
+    });
+
+    const run_exe_cicd_tests = b.addRunArtifact(exe_cicd_tests);
+    const cicd_test_step = b.step("test-ci", "Run unit tests with more verbose output");
+    cicd_test_step.dependOn(&run_lib_cicd_tests.step);
+    cicd_test_step.dependOn(&run_exe_cicd_tests.step);
+
+    const bench_lib = b.addTest(.{
+        .name = "bench",
+        .root_source_file = b.path("src/bench.zig"),
+        .target = target,
+        .optimize = optimize,
+        .test_runner = b.path("src/cicd_test_runner.zig"),
+    });
+
+    const run_bench_tests = b.addRunArtifact(bench_lib);
+    const bench_test_step = b.step("bench", "Run benchmark tests with more verbose output");
+    bench_test_step.dependOn(&run_bench_tests.step);
+
+    //TODO: remove zbor dep
     // add dependencies ------------------------
     // zbor
     const zbor_dep = b.dependency(
@@ -101,8 +132,8 @@ pub fn build(b: *std.Build) void {
 
     exe.root_module.addImport("zbor", zbor_module);
     lib.root_module.addImport("zbor", zbor_module);
-    exe_unit_tests.root_module.addImport("zbor", zbor_module);
-    lib_unit_tests.root_module.addImport("zbor", zbor_module);
+    exe_cicd_tests.root_module.addImport("zbor", zbor_module);
+    lib_cicd_tests.root_module.addImport("zbor", zbor_module);
 
     // uuid
     const uuid_dep = b.dependency("uuid", .{ .target = target, .optimize = optimize });
@@ -112,6 +143,8 @@ pub fn build(b: *std.Build) void {
     lib.root_module.addImport("uuid", uuid_module);
     exe_unit_tests.root_module.addImport("uuid", uuid_module);
     lib_unit_tests.root_module.addImport("uuid", uuid_module);
+    exe_cicd_tests.root_module.addImport("uuid", uuid_module);
+    lib_cicd_tests.root_module.addImport("uuid", uuid_module);
 
     // zig-cli
 
@@ -122,6 +155,8 @@ pub fn build(b: *std.Build) void {
     lib.root_module.addImport("zig-cli", zig_cli_module);
     exe_unit_tests.root_module.addImport("zig-cli", zig_cli_module);
     lib_unit_tests.root_module.addImport("zig-cli", zig_cli_module);
+    exe_cicd_tests.root_module.addImport("zig-cli", zig_cli_module);
+    lib_cicd_tests.root_module.addImport("zig-cli", zig_cli_module);
 
     // currently doesn't work
     // // zig-string
@@ -135,17 +170,21 @@ pub fn build(b: *std.Build) void {
     // lib.root_module.addImport("zstring", zstring_module);
     // exe_unit_tests.root_module.addImport("zstring", zstring_module);
     // lib_unit_tests.root_module.addImport("zstring", zstring_module);
+    // exe_cicd_tests.root_module.addImport("zstring", zbor_module);
+    // lib_cicd_tests.root_module.addImport("zstring", zbor_module);
 
-    // currently doesn't work
-    // // zbench
-    // const zbench_dep = b.dependency(
-    //     "zbench",
-    //     .{ .target = target, .optimize = optimize },
-    // );
-    // const zbench_module = zbench_dep.module("zbench");
-    //
+    // zbench
+    const zbench_dep = b.dependency(
+        "zbench",
+        .{ .target = target, .optimize = optimize },
+    );
+    const zbench_module = zbench_dep.module("zbench");
+
+    bench_lib.root_module.addImport("zbench", zbench_module);
     // exe.root_module.addImport("zbench", zbench_module);
     // lib.root_module.addImport("zbench", zbench_module);
     // exe_unit_tests.root_module.addImport("zbench", zbench_module);
     // lib_unit_tests.root_module.addImport("zbench", zbench_module);
+    // exe_cicd_tests.root_module.addImport("zbench", zbench_module);
+    // lib_cicd_tests.root_module.addImport("zbench", zbench_module);
 }

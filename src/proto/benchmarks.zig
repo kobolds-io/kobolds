@@ -1,4 +1,4 @@
-// TODO: Fix the imports
+// FIX: the imports
 const std = @import("std");
 const Message = @import("./message.zig").Message;
 const Parser = @import("./parser.zig").Parser;

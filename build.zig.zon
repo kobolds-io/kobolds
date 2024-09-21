@@ -44,10 +44,10 @@
         // },
 
         // currently not compatible with zig 0.13.0
-        // .zbench = .{
-        //     .url = "https://github.com/hendriknielaender/zBench/archive/main.tar.gz",
-        //     .hash = "1220038bd3428215781dcefef3a4fb0f68fa59b29e5cd3941bec8c0fb81d9235b978",
-        // },
+        .zbench = .{
+            .url = "https://github.com/hendriknielaender/zBench/archive/v0.9.0.tar.gz",
+            .hash = "1220e6a63ee4c75827bc331579c9aaf0a778a2649c20861034d8a290f3daadaa4b91",
+        },
     },
 
     // Specifies the set of files and directories that are included in this package.

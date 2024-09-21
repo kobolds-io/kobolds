@@ -1,20 +1,24 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const cli = @import("zig-cli");
 
-const Connection = @import("../proto/connection.zig").Connection;
-const Mailbox = @import("../proto/mailbox.zig").Mailbox;
-const Message = @import("../proto/message.zig").Message;
-const Node = @import("../proto/node.zig").Node;
+const Connection = @import("../protocol/connection.zig").Connection;
+const Mailbox = @import("../protocol/mailbox.zig").Mailbox;
+const Message = @import("../protocol/message.zig").Message;
+const Node = @import("../protocol/node.zig").Node;
+const NodeConfig = @import("../protocol/node.zig").NodeConfig;
+const Client = @import("../protocol/client.zig").Client;
+const ClientConfig = @import("../protocol/client.zig").ClientConfig;
 
-var node_config = struct {
-    host: []const u8 = "127.0.0.1",
-    port: u16 = 4000,
-}{};
+var node_config = NodeConfig{
+    .host = "127.0.0.1",
+    .port = 4000,
+};
 
-var connect_config = struct {
-    host: []const u8 = "127.0.0.1",
-    port: u16 = 4000,
-}{};
+var client_config = ClientConfig{
+    .host = "127.0.0.1",
+    .port = 4000,
+};
 
 pub fn run() !void {
     var app_runner = try cli.AppRunner.init(std.heap.page_allocator);
@@ -26,9 +30,9 @@ pub fn run() !void {
     };
 
     const node_run_command = cli.Command{
-        .name = "run",
+        .name = "listen",
         .description = cli.Description{
-            .one_line = "run a node",
+            .one_line = "listen for new connections",
             .detailed = "start a node and listen for incomming connections",
         },
 
@@ -55,12 +59,12 @@ pub fn run() !void {
             .{
                 .long_name = "host",
                 .help = "host to listen on",
-                .value_ref = app_runner.mkRef(&connect_config.host),
+                .value_ref = app_runner.mkRef(&client_config.host),
             },
             .{
                 .long_name = "port",
                 .help = "port to bind to",
-                .value_ref = app_runner.mkRef(&connect_config.port),
+                .value_ref = app_runner.mkRef(&client_config.port),
             },
         },
         .target = .{ .action = .{ .exec = runPing } },
@@ -81,6 +85,8 @@ pub fn run() !void {
                 .one_line = "a pretty quick messaging system",
                 .detailed = "Harpy is a node based messaging system for communicating reliably between machines. Visit [URL] for more information ",
             },
+            //            .target = .{ .action = .{ .exec = runNoop } },
+
             .target = .{ .subcommands = &.{ node_root_command, version_root_command } },
         },
         .author = "butterworks",
@@ -91,52 +97,34 @@ pub fn run() !void {
 }
 
 pub fn runNode() !void {
-    std.debug.print("node config.host {s}\n", .{node_config.host});
-    std.debug.print("node config.port {d}\n", .{node_config.port});
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var node = try Node.init(allocator, .{
-        .host = node_config.host,
-        .port = node_config.port,
-    });
+    var node = Node.init(allocator, node_config);
     defer node.deinit();
 
-    try node.listen();
+    try node.run();
 }
 
 pub fn runPing() !void {
-    var mailbox_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const mailbox_allocator = mailbox_gpa.allocator();
-    defer _ = mailbox_gpa.deinit();
+    // creating a client to communicate with the node
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
-    // create inbox & outbox
-    var inbox = Mailbox.init(mailbox_allocator);
-    defer inbox.deinit();
+    var client = Client.init(allocator, client_config);
+    defer client.deinit();
 
-    var outbox = Mailbox.init(mailbox_allocator);
-    defer outbox.deinit();
+    try client.connect();
+    defer client.close();
 
-    // connect to the remote machine
-    const addr = try std.net.Address.parseIp(connect_config.host, connect_config.port);
-    const stream = try std.net.tcpConnectToAddress(addr);
-
-    var connection = Connection.new(.{ .stream = stream, .inbox = &inbox, .outbox = &outbox });
-    defer connection.close();
-
-    // spawn the read and write loops to send and receive data
-    connection.run();
-
-    const request = Message.new("node/ping", "");
-    try connection.send(request);
-
-    const reply = try connection.receive(1_000);
-
-    std.debug.print("got reply {any}\n", .{reply});
+    // try client.ping();
+    // std.time.sleep(std.time.ns_per_ms * 10);
 }
 
 pub fn runVersion() !void {
-    std.debug.print("0.0.0\n", .{});
+    std.log.debug("0.0.0", .{});
 }
+
+pub fn runNoop() !void {}
