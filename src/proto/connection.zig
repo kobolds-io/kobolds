@@ -267,5 +267,3 @@ pub const Connection = struct {
         }
     }
 };
-
-test "it deinits correctly" {}
