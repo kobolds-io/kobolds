@@ -1,5 +1,4 @@
 const std = @import("std");
-const cbor = @import("zbor");
 
 const Message = @import("./message.zig").Message;
 

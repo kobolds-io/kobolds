@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
-const utils = @import("../proto/utils.zig");
+const utils = @import("./utils.zig");
 const constants = @import("./constants.zig");
 
 const ProtocolError = @import("./errors.zig").ProtocolError;
