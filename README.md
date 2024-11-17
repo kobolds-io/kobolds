@@ -78,7 +78,7 @@ It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and esp
 | complete | name                                                                                     | priority |
 | -------- | ---------------------------------------------------------------------------------------- | -------- |
 | ❌       | [create harpy communication protocol](https://github.com/butterworks-io/harpy/issues/3)  | high     |
-| ❌       | [create basic message parser](https://github.com/butterworks-io/harpy/issues/4)          | high     |
+| ✔️       | [create basic message parser](https://github.com/butterworks-io/harpy/issues/4)          | high     |
 | ❌       | [create basic node](https://github.com/butterworks-io/harpy/issues/5)                    | high     |
 | ❌       | [create basic node](https://github.com/butterworks-io/harpy/issues/6)                    | high     |
 | ❌       | [create basic cli](https://github.com/butterworks-io/harpy/issues/7)                     | high     |
