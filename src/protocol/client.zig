@@ -2,7 +2,6 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 const Connection = @import("./connection.zig").Connection;
-const Context = @import("./context.zig").Context;
 const Mailbox = @import("mailbox.zig").Mailbox;
 const Message = @import("message.zig").Message;
 const MessageType = @import("message.zig").MessageType;
@@ -99,8 +98,7 @@ pub const Client = struct {
         std.time.sleep(50 * std.time.ns_per_ms);
 
         var connect_request = Message.new();
-        connect_request.header.id = 0;
-        connect_request.header.message_type = .Connect;
+        connect_request.headers.message_type = .Ping;
 
         // FIX: const reply = try self.request(connect_request);
         try self.connection.send(connect_request);
@@ -115,8 +113,8 @@ pub const Client = struct {
         assert(self.connected);
 
         var ping_msg = Message.new();
-        ping_msg.header.id = 123;
-        ping_msg.header.message_type = .Ping;
+        ping_msg.headers.id = 123;
+        ping_msg.headers.message_type = .Ping;
 
         std.log.debug("sending ping!", .{});
         // try self.request(ping_msg);
@@ -136,26 +134,5 @@ pub const Client = struct {
     // TODO: this should return a protocol error
     pub fn request(self: *Self) !Message {
         _ = self;
-    }
-
-    /// Subscribe to a topic and perform an action on the message received
-    // pub fn subscribe(self: *Self, ctx: *Context, topic: []const u8, callback: SubscribeHandler) !void {
-    //     // ensure that the client is connected
-    //     assert(self.connected);
-    //
-    //     _ = ctx;
-    //     _ = topic;
-    //     _ = callback;
-    //
-    //     // when a node subscribes to a topic it happens locally to the node.
-    // }
-
-    /// publish a message to a topic which is routed to all subscribers to the topic
-    pub fn publish(self: *Self, ctx: *Context, message: Message) !void {
-        // ensure that the client is connected
-        assert(self.connected);
-        // ensure that the message being published is the correct structure
-        assert(message.header.message_type == MessageType.Publish);
-        _ = ctx;
     }
 };

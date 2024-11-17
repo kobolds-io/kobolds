@@ -114,7 +114,8 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/bench.zig"),
         .target = target,
         .optimize = optimize,
-        .test_runner = b.path("src/cicd_test_runner.zig"),
+
+        // .test_runner = b.path("src/cicd_test_runner.zig"),
     });
 
     const run_bench_tests = b.addRunArtifact(bench_lib);
@@ -157,21 +158,6 @@ pub fn build(b: *std.Build) void {
     lib_unit_tests.root_module.addImport("zig-cli", zig_cli_module);
     exe_cicd_tests.root_module.addImport("zig-cli", zig_cli_module);
     lib_cicd_tests.root_module.addImport("zig-cli", zig_cli_module);
-
-    // currently doesn't work
-    // // zig-string
-    // const zstring_dep = b.dependency(
-    //     "zstring",
-    //     .{ .target = target, .optimize = optimize },
-    // );
-    // const zstring_module = zstring_dep.module("zstring");
-    //
-    // exe.root_module.addImport("zstring", zstring_module);
-    // lib.root_module.addImport("zstring", zstring_module);
-    // exe_unit_tests.root_module.addImport("zstring", zstring_module);
-    // lib_unit_tests.root_module.addImport("zstring", zstring_module);
-    // exe_cicd_tests.root_module.addImport("zstring", zbor_module);
-    // lib_cicd_tests.root_module.addImport("zstring", zbor_module);
 
     // zbench
     const zbench_dep = b.dependency(

@@ -5,11 +5,10 @@ const net = std.net;
 const uuid = @import("uuid");
 
 const constants = @import("./constants.zig");
-const MessageBus = @import("./message_bus.zig").MessageBus;
 const Parser = @import("./parser.zig").Parser;
 const Message = @import("./message.zig").Message;
 const Mailbox = @import("./mailbox.zig").Mailbox;
-const Header = @import("./message.zig").Header;
+const Headers = @import("./message.zig").Headers;
 const ProtocolError = @import("./errors.zig").ProtocolError;
 
 // Connection manages, reads and writes to a socket.
@@ -95,7 +94,7 @@ pub const Connection = struct {
             self.close();
         }
 
-        var parser_buffer: [constants.max_parser_buffer_size]u8 = undefined;
+        var parser_buffer: [constants.parser_max_buffer_size]u8 = undefined;
         var parser_fba = std.heap.FixedBufferAllocator.init(&parser_buffer);
         const parser_allocator = parser_fba.allocator();
 
@@ -180,15 +179,18 @@ pub const Connection = struct {
                     if (message_opt != null) {
                         var message = message_opt.?;
 
-                        var encoded_message_buffer: [constants.max_message_size]u8 = undefined;
+                        var encoded_message_buffer: [constants.message_max_size]u8 = undefined;
                         var encoded_message_fba = std.heap.FixedBufferAllocator.init(&encoded_message_buffer);
                         const encoded_message_allocator = encoded_message_fba.allocator();
 
-                        // encode the message
-                        const encoded_message = Message.encode(encoded_message_allocator, &message) catch |err| {
-                            std.log.debug("could not encode message {any}", .{err});
-                            return;
-                        };
+                        const encoded_message = encoded_message_allocator.alloc(u8, message.size()) catch unreachable;
+                        message.encode(encoded_message);
+
+                        // // encode the message
+                        // const encoded_message = Message.encode(encoded_message_allocator, &message) catch |err| {
+                        //     std.log.debug("could not encode message {any}", .{err});
+                        //     return;
+                        // };
 
                         std.log.debug("before append to write buffer", .{});
                         write_buffer.appendSlice(encoded_message) catch |err| {
@@ -202,7 +204,7 @@ pub const Connection = struct {
             if (write_buffer.items.len == 0) continue;
 
             // get the minimum
-            const bytes_to_write = if (write_buffer.items.len < constants.max_parser_buffer_size) write_buffer.items.len else constants.max_parser_buffer_size;
+            const bytes_to_write = if (write_buffer.items.len < constants.parser_max_buffer_size) write_buffer.items.len else constants.parser_max_buffer_size;
 
             // FIX: we need to check if we are connected here because there is a
             // possibility that the stream is closed by the time we get here.

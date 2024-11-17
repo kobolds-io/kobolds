@@ -37,15 +37,8 @@
             .hash = "1220567f95aa81d2e6b67923177ae36dd72006f279b8fc6a42bb981ecfa412d9ec67",
         },
 
-        // currently not compatible with zig 0.13.0
-        // .zstring = .{
-        //     .url = "https://github.com/JakubSzark/zig-string/archive/refs/heads/master.tar.gz",
-        //     .hash = "1220671a059f6131ea3fdd42b3a0e16f06fc962fe5e1b62f7effdf1a4c33631141f8",
-        // },
-
-        // currently not compatible with zig 0.13.0
         .zbench = .{
-            .url = "https://github.com/hendriknielaender/zBench/archive/v0.9.0.tar.gz",
+            .url = "https://github.com/hendriknielaender/zBench/archive/v0.9.1.tar.gz",
             .hash = "1220e6a63ee4c75827bc331579c9aaf0a778a2649c20861034d8a290f3daadaa4b91",
         },
     },
