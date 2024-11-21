@@ -153,10 +153,4 @@ pub fn build(b: *std.Build) void {
     const zbench_module = zbench_dep.module("zbench");
 
     bench_lib.root_module.addImport("zbench", zbench_module);
-    // exe.root_module.addImport("zbench", zbench_module);
-    // lib.root_module.addImport("zbench", zbench_module);
-    // exe_unit_tests.root_module.addImport("zbench", zbench_module);
-    // lib_unit_tests.root_module.addImport("zbench", zbench_module);
-    // exe_cicd_tests.root_module.addImport("zbench", zbench_module);
-    // lib_cicd_tests.root_module.addImport("zbench", zbench_module);
 }
