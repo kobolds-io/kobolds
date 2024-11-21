@@ -122,20 +122,6 @@ pub fn build(b: *std.Build) void {
     const bench_test_step = b.step("bench", "Run benchmark tests with more verbose output");
     bench_test_step.dependOn(&run_bench_tests.step);
 
-    //TODO: remove zbor dep
-    // add dependencies ------------------------
-    // zbor
-    const zbor_dep = b.dependency(
-        "zbor",
-        .{ .target = target, .optimize = optimize },
-    );
-    const zbor_module = zbor_dep.module("zbor");
-
-    exe.root_module.addImport("zbor", zbor_module);
-    lib.root_module.addImport("zbor", zbor_module);
-    exe_cicd_tests.root_module.addImport("zbor", zbor_module);
-    lib_cicd_tests.root_module.addImport("zbor", zbor_module);
-
     // uuid
     const uuid_dep = b.dependency("uuid", .{ .target = target, .optimize = optimize });
     const uuid_module = uuid_dep.module("uuid");
