@@ -134,7 +134,6 @@ pub fn build(b: *std.Build) void {
     lib_cicd_tests.root_module.addImport("uuid", uuid_module);
 
     // zig-cli
-
     const zig_cli_dep = b.dependency("zig-cli", .{ .target = target, .optimize = optimize });
     const zig_cli_module = zig_cli_dep.module("zig-cli");
 
