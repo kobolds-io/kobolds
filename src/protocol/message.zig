@@ -1,6 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
+const gzip = std.compress.gzip;
+
 const constants = @import("./constants.zig");
 const utils = @import("./utils.zig");
 const hash = @import("./hash.zig");
@@ -24,7 +26,6 @@ pub const ErrorCode = enum(u8) {
 pub const Compression = enum(u8) {
     None,
     Gzip,
-    Zstd,
 };
 
 pub const Message = struct {
@@ -62,19 +63,84 @@ pub const Message = struct {
         self.headers.body_length = @intCast(v.len);
     }
 
-    // encodes the message
+    /// Compresses the body of the message according to the compression algorithim set in message headers.
+    /// Does not allow for overcompression which would put the message body in an unknowable state for
+    /// the consumer of the message body.
+    pub fn compress(self: *Self) !void {
+        // ensure that the message is not already compressed
+        if (self.headers.compressed) return error.AlreadyCompressed;
+        switch (self.headers.compression) {
+            .None => {},
+            .Gzip => {
+                const message_body = self.body();
+
+                // if the message.body is empty, do nothing and just return early this will be faster
+                // and can eliminate errors. This should be checked on the decompress call
+                if (message_body.len == 0) return;
+
+                // create a reader that can read the message_body
+                var reader_fbs = std.io.fixedBufferStream(message_body);
+                const reader = reader_fbs.reader();
+
+                // at worse this message is going to be as big as the body already is. This isn't ideal.
+                // TODO: remove the requirement to have a separate buffer
+                var writer_buf: [constants.message_max_body_size]u8 = undefined;
+                var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
+                const writer_allocator = writer_fba.allocator();
+
+                var writer_list = std.ArrayList(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
+                defer writer_list.deinit();
+                const writer = writer_list.writer();
+
+                try gzip.compress(reader, writer, .{});
+
+                // set the message body
+                self.setBody(writer_list.items);
+                self.headers.compressed = true;
+            },
+        }
+    }
+
+    /// Decompresses the body of the message according to the compression algorithim set in message headers.
+    /// Does not allow for overdecompression which would put the message body in an unknowable state for
+    /// the consumer of the message body.
+    pub fn decompress(self: *Self) !void {
+        // ensure that the message is not already compressed
+        if (!self.headers.compressed and self.headers.compression != .None) return error.AlreadyDecompressed;
+        switch (self.headers.compression) {
+            .None => {},
+            .Gzip => {
+                const message_body = self.body();
+                // if the message.body is empty, do nothing and just return early this will be faster
+                // and can eliminate errors. This should be checked on the compress call
+                if (message_body.len == 0) return;
+
+                // create a reader that can read the message_body
+                var reader_fbs = std.io.fixedBufferStream(message_body);
+                const reader = reader_fbs.reader();
+
+                // at worse this message is going to be as big as the body already is.
+                var writer_buf: [constants.message_max_body_size]u8 = undefined;
+                var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
+                const writer_allocator = writer_fba.allocator();
+
+                var writer_list = std.ArrayList(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
+                defer writer_list.deinit();
+                const writer = writer_list.writer();
+
+                try gzip.decompress(reader, writer);
+
+                // set the message body
+                self.setBody(writer_list.items);
+                self.headers.compressed = false;
+            },
+        }
+    }
+
+    /// encodes the message into bytes that can be sent through a socket
     pub fn encode(self: *Self, buf: []u8) void {
         assert(self.size() <= constants.message_max_size);
         assert(buf.len == self.size());
-
-        // TODO: we should compress the body and update the headers
-        //  if headers.compression is set to None, do nothing
-        //  if compression is set to something we should
-        //      1. compress the body and get the bytes
-        //      2. update the headers.body_length with the length of the compressed body
-        //      3. calculate and update the headers_checksum
-        //      4. calculate and update the body_checksum
-        //      5. return the encoded bytes
 
         // create a buffer that can hold the entirety of the headers payload
         var headers_buf: [@sizeOf(Headers)]u8 = undefined;
@@ -133,7 +199,8 @@ pub const Headers = extern struct {
     protocol_version: u8 = 0,
     message_type: MessageType = .Request,
     compression: Compression = .None,
-    padding: [33]u8 = [_]u8{0} ** 33,
+    compressed: bool = false,
+    padding: [32]u8 = [_]u8{0} ** 32,
 
     reserved: [128]u8 = [_]u8{0} ** 128,
 
@@ -177,6 +244,7 @@ pub const Headers = extern struct {
         list.appendAssumeCapacity(self.protocol_version);
         list.appendAssumeCapacity(@intFromEnum(self.message_type));
         list.appendAssumeCapacity(@intFromEnum(self.compression));
+        list.appendAssumeCapacity(@intFromBool(self.compressed));
         list.appendSliceAssumeCapacity(&self.padding);
         list.appendSliceAssumeCapacity(&self.reserved);
 
@@ -197,7 +265,8 @@ pub const Request = extern struct {
     protocol_version: u8 = 0,
     message_type: MessageType = .Request,
     compression: Compression = .None,
-    padding: [33]u8 = [_]u8{0} ** 33,
+    compressed: bool = false,
+    padding: [32]u8 = [_]u8{0} ** 32,
 
     transaction_id: u64 = 0,
 
@@ -216,7 +285,8 @@ pub const Reply = extern struct {
     protocol_version: u8 = 0,
     message_type: MessageType = .Request,
     compression: Compression = .None,
-    padding: [33]u8 = [_]u8{0} ** 33,
+    compressed: bool = false,
+    padding: [32]u8 = [_]u8{0} ** 32,
 
     transaction_id: u64 = 0,
     error_code: ErrorCode = .Ok,
@@ -236,7 +306,8 @@ pub const Ping = extern struct {
     protocol_version: u8 = 0,
     message_type: MessageType = .Request,
     compression: Compression = .None,
-    padding: [33]u8 = [_]u8{0} ** 33,
+    compressed: bool = false,
+    padding: [32]u8 = [_]u8{0} ** 32,
 
     reserved: [128]u8 = [_]u8{0} ** 128,
 };
@@ -253,7 +324,8 @@ pub const Pong = extern struct {
     protocol_version: u8 = 0,
     message_type: MessageType = .Request,
     compression: Compression = .None,
-    padding: [33]u8 = [_]u8{0} ** 33,
+    compressed: bool = false,
+    padding: [32]u8 = [_]u8{0} ** 32,
 
     reserved: [128]u8 = [_]u8{0} ** 128,
 };

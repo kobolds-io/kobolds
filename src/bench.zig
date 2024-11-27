@@ -34,6 +34,27 @@ pub fn BenchmarkMessageEncode(_: std.mem.Allocator) void {
     message.encode(backing_buf[0..message.size()]);
 }
 
+pub fn BenchmarkMessageCompressGzip(_: std.mem.Allocator) void {
+    const body = comptime "a" ** constants.message_max_body_size;
+    var message = Message.new();
+    message.headers.compression = .Gzip;
+    message.headers.compressed = false;
+    message.setBody(body);
+
+    message.compress() catch unreachable;
+}
+
+pub fn BenchmarkMessageDecompressGzip(_: std.mem.Allocator) void {
+    // this body is "a" ** constants.message_max_body_size but compressed with gzip
+    const body = [_]u8{ 31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 237, 192, 129, 12, 0, 0, 0, 195, 48, 214, 249, 75, 156, 227, 73, 91, 0, 0, 0, 0, 0, 0, 0, 192, 187, 1, 213, 102, 111, 13, 0, 32, 0, 0 };
+    var message = Message.new();
+    message.headers.compression = .Gzip;
+    message.headers.compressed = true;
+    message.setBody(&body);
+
+    message.decompress() catch unreachable;
+}
+
 pub fn BenchmarkMessageDecode(_: std.mem.Allocator) void {
     const body = [_]u8{97} ** constants.message_max_body_size;
     const encoded_message = [_]u8{ 180, 53, 75, 231, 147, 154, 254, 149, 112, 23, 160, 125, 67, 13, 103, 92, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100 } ++ body;
@@ -58,15 +79,13 @@ test {
     defer _ = parser_gpa.deinit();
     const parser_allocator = parser_gpa.allocator();
 
-    // var parser_buf: [constants.parser_max_buffer_size]u8 = undefined;
-    // var parser_fba = std.heap.FixedBufferAllocator.init(&parser_buf);
-    // const parser_allocator = parser_fba.allocator();
-
     var parser = Parser.init(parser_allocator);
     defer parser.deinit();
 
     try bench.add("message.encode", BenchmarkMessageEncode, .{});
     try bench.add("message.decode", BenchmarkMessageDecode, .{});
+    try bench.add("message.compress gzip", BenchmarkMessageCompressGzip, .{});
+    try bench.add("message.decompress gzip", BenchmarkMessageDecompressGzip, .{});
     try bench.addParam("parser.parse", &ParserBenchmark.new(&messages, &parser), .{});
 
     const stderr = std.io.getStdErr().writer();

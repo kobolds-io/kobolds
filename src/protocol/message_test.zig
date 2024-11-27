@@ -74,38 +74,56 @@ test "constructing and casting Headers" {
     try std.testing.expect(std.mem.eql(u8, headers.reserved[0..transaction_id_bytes.len], transaction_id_bytes));
 }
 
-test "compression" {
-    // NOTE:
-    // does compressing the payload actually help? - yes
-    // I think I would only be able to compress the body of the payload
-    // not the headers because i would not know the size of the headers to be parsed
-    // especially of the bytes are read over multiple read operations. the alternative
-    // is to compress the entire message and use a length prefixed protocol which defeats
-    // the purpose of having the headers struct
-
-    const gzip = std.compress.gzip;
-
+test "compression: none" {
     const body = "a" ** constants.message_max_body_size;
     var message = Message.new();
     message.setBody(body);
 
-    const allocator = std.testing.allocator;
-    const encoded_message = try allocator.alloc(u8, message.size());
-    defer allocator.free(encoded_message);
+    // assert that the message is constructed in the way we want.
+    try std.testing.expectEqual(body.len, message.body().len);
+    try std.testing.expectEqual(message.headers.compression, .None);
+    try std.testing.expect(std.mem.eql(u8, body, message.body()));
 
-    message.encode(encoded_message);
+    // this compression call should do nothing
+    try message.compress();
 
-    var fbs = std.io.fixedBufferStream(message.body());
-    var compress_reader = fbs.reader();
+    try std.testing.expectEqual(body.len, message.body().len);
+    try std.testing.expect(std.mem.eql(u8, body, message.body()));
+    try std.testing.expectEqual(false, message.headers.compressed);
+}
 
-    var writer_list = std.ArrayList(u8).init(allocator);
-    defer writer_list.deinit();
-    const compress_writer = writer_list.writer();
+test "compression: gzip" {
+    const body = "a" ** constants.message_max_body_size;
+    var message = Message.new();
+    message.setBody(body);
+    message.headers.compression = .Gzip;
 
-    try gzip.compress(&compress_reader, compress_writer, .{});
+    // assert that the message is constructed in the way we want.
+    try std.testing.expectEqual(body.len, message.body().len);
+    try std.testing.expectEqual(.Gzip, message.headers.compression);
+    try std.testing.expectEqual(false, message.headers.compressed);
+    try std.testing.expect(std.mem.eql(u8, body, message.body()));
 
-    // std.debug.print("encoded_message {any}\n", .{encoded_message});
-    // std.debug.print("encoded_message.len {any}\n", .{encoded_message.len});
-    // std.debug.print("compressed_message {any}\n", .{writer_list.items});
-    // std.debug.print("compressed_message.len {any}\n", .{writer_list.items.len});
+    // this compression call should gzip the body
+    try message.compress();
+
+    const want_gzip = [_]u8{ 31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 237, 192, 129, 12, 0, 0, 0, 195, 48, 214, 249, 75, 156, 227, 73, 91, 0, 0, 0, 0, 0, 0, 0, 192, 187, 1, 213, 102, 111, 13, 0, 32, 0, 0 };
+
+    // expect that the gzipped value is consistent
+    try std.testing.expect(std.mem.eql(u8, &want_gzip, message.body()));
+    try std.testing.expectEqual(true, message.headers.compressed);
+
+    // expect that you cannot overcompress the message
+    try std.testing.expectError(error.AlreadyCompressed, message.compress());
+
+    // decompress the message
+    try message.decompress();
+
+    // ensure that the decompressed contents match the original contents
+    try std.testing.expectEqual(body.len, message.body().len);
+    try std.testing.expectEqual(false, message.headers.compressed);
+    try std.testing.expect(std.mem.eql(u8, body, message.body()));
+
+    // expect that you cannot overdecompress the message
+    try std.testing.expectError(error.AlreadyDecompressed, message.decompress());
 }
