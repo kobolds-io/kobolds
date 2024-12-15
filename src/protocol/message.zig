@@ -1,11 +1,10 @@
 const std = @import("std");
-const testing = std.testing;
 const assert = std.debug.assert;
 const gzip = std.compress.gzip;
 
-const constants = @import("./constants.zig");
-const utils = @import("./utils.zig");
-const hash = @import("./hash.zig");
+const constants = @import("../constants.zig");
+const utils = @import("../utils.zig");
+const hash = @import("../hash.zig");
 const ProtocolError = @import("./errors.zig").ProtocolError;
 
 pub const MessageType = enum(u8) {
@@ -14,13 +13,16 @@ pub const MessageType = enum(u8) {
     Reply,
     Ping,
     Pong,
+    Accept,
 };
 
 pub const ErrorCode = enum(u8) {
+    Undefined,
     Ok,
     Error,
     Unauthorized,
     Timeout,
+    MissingHandler,
 };
 
 pub const Compression = enum(u8) {
@@ -28,17 +30,39 @@ pub const Compression = enum(u8) {
     Gzip,
 };
 
+pub const ProtocolVersion = enum(u8) {
+    Unsupported,
+    v1,
+};
+
 pub const Message = struct {
     const Self = @This();
     headers: Headers,
     body_buffer: [constants.message_max_body_size]u8,
+
+    // A reference to the next message to be processed
+    next: ?*Message,
+
+    // how many times this message is referenced
+    ref_count: u32,
 
     // create an uninitialized message container
     pub fn new() Message {
         return Message{
             .headers = Headers{ .message_type = .Undefined },
             .body_buffer = undefined,
+            .next = null,
+            .ref_count = 0,
         };
+    }
+
+    pub fn ref(self: *Self) void {
+        self.ref_count += 1;
+    }
+
+    pub fn deref(self: *Self) void {
+        assert(self.ref_count != 0);
+        self.ref_count -= 1;
     }
 
     // this needs to be a mut ref to self
@@ -146,8 +170,8 @@ pub const Message = struct {
         var headers_buf: [@sizeOf(Headers)]u8 = undefined;
         const headers_checksum_payload = self.headers.toChecksumPayload(&headers_buf);
 
-        self.headers.headers_checksum = hash.checksumV3(headers_checksum_payload);
-        self.headers.body_checksum = hash.checksumV3(self.body());
+        self.headers.headers_checksum = hash.checksum(headers_checksum_payload);
+        self.headers.body_checksum = hash.checksum(self.body());
 
         @memcpy(buf[0..@sizeOf(Headers)], std.mem.asBytes(&self.headers));
         @memcpy(buf[@sizeOf(Headers)..self.size()], self.body());
@@ -171,8 +195,14 @@ pub const Message = struct {
         const headers_checksum_payload = self.headers.toChecksumPayload(&headers_buf);
 
         // compare the header_checksum received from the data against a recomputed checksum based on the values provided
-        if (!hash.verifyV3(self.headers.headers_checksum, headers_checksum_payload)) {
-            return ProtocolError.InvalidHeaderChecksum;
+        if (!hash.verify(self.headers.headers_checksum, headers_checksum_payload)) {
+            return ProtocolError.InvalidHeadersChecksum;
+        }
+
+        // let's just exit if we don't support the protocol version
+        switch (self.headers.protocol_version) {
+            .v1 => {},
+            else => @panic("unsupported version"),
         }
 
         // this means that we don't have the full message body and should wait for more data.
@@ -182,25 +212,54 @@ pub const Message = struct {
         const body_bytes = data[@sizeOf(Headers)..self.size()];
 
         // verify the body checksum to ensure the body is valid
-        if (!hash.verifyV3(self.headers.body_checksum, body_bytes)) {
+        if (!hash.verify(self.headers.body_checksum, body_bytes)) {
             return ProtocolError.InvalidBodyChecksum;
         }
 
         self.setBody(body_bytes);
     }
+
+    // FIX: this is a BS function and there should be a nicer way to call this instead of
+    // repeating the same logic found in Headers.Type just figure out what kind of message headers
+    // this is
+    pub fn validate(self: Self) ?[]const u8 {
+        return switch (self.headers.message_type) {
+            .Request => {
+                const headers: *const Request = self.headers.intoConst(.Request).?;
+                return headers.validate();
+            },
+            .Reply => {
+                const headers: *const Reply = self.headers.intoConst(.Reply).?;
+                return headers.validate();
+            },
+            .Ping => {
+                const headers: *const Ping = self.headers.intoConst(.Ping).?;
+                return headers.validate();
+            },
+            .Pong => {
+                const headers: *const Pong = self.headers.intoConst(.Pong).?;
+                return headers.validate();
+            },
+            .Accept => {
+                const headers: *const Accept = self.headers.intoConst(.Accept).?;
+                return headers.validate();
+            },
+            else => "unsupported message type",
+        };
+    }
 };
 
 pub const Headers = extern struct {
     const Self = @This();
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    origin_id: u64 = 0,
+    headers_checksum: u128 = 0,
+    body_checksum: u128 = 0,
+    origin_id: u128 = 0,
     body_length: u32 = 0,
-    protocol_version: u8 = 0,
+    protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .Undefined,
     compression: Compression = .None,
     compressed: bool = false,
-    padding: [32]u8 = [_]u8{0} ** 32,
+    padding: [72]u8 = [_]u8{0} ** 72,
 
     reserved: [128]u8 = [_]u8{0} ** 128,
 
@@ -210,6 +269,7 @@ pub const Headers = extern struct {
             .Reply => Reply,
             .Ping => Ping,
             .Pong => Pong,
+            .Accept => Accept,
             .Undefined => unreachable,
         };
     }
@@ -237,11 +297,11 @@ pub const Headers = extern struct {
         var list = std.ArrayList(u8).initCapacity(fba_allocator, @sizeOf(Headers)) catch unreachable;
 
         // this excludes header_checksum & body_checksum
-        list.appendSliceAssumeCapacity(&utils.u64ToBytes(0)); // headers_checksum
-        list.appendSliceAssumeCapacity(&utils.u64ToBytes(0)); // body_checksum
-        list.appendSliceAssumeCapacity(&utils.u64ToBytes(self.origin_id));
+        list.appendSliceAssumeCapacity(&utils.u128ToBytes(0)); // headers_checksum
+        list.appendSliceAssumeCapacity(&utils.u128ToBytes(0)); // body_checksum
+        list.appendSliceAssumeCapacity(&utils.u128ToBytes(self.origin_id));
         list.appendSliceAssumeCapacity(&utils.u32ToBytes(self.body_length));
-        list.appendAssumeCapacity(self.protocol_version);
+        list.appendAssumeCapacity(@intFromEnum(self.protocol_version));
         list.appendAssumeCapacity(@intFromEnum(self.message_type));
         list.appendAssumeCapacity(@intFromEnum(self.compression));
         list.appendAssumeCapacity(@intFromBool(self.compressed));
@@ -251,6 +311,11 @@ pub const Headers = extern struct {
         assert(list.items.len == @sizeOf(Headers));
         return list.items;
     }
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        _ = self;
+        unreachable;
+    }
 };
 
 pub const Request = extern struct {
@@ -258,19 +323,34 @@ pub const Request = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    origin_id: u64 = 0,
+    headers_checksum: u128 = 0,
+    body_checksum: u128 = 0,
+    origin_id: u128 = 0,
     body_length: u32 = 0,
-    protocol_version: u8 = 0,
+    protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .Request,
     compression: Compression = .None,
     compressed: bool = false,
-    padding: [32]u8 = [_]u8{0} ** 32,
+    padding: [72]u8 = [_]u8{0} ** 72,
 
-    transaction_id: u64 = 0,
+    transaction_id: u128 = 0,
 
-    reserved: [120]u8 = [_]u8{0} ** 120,
+    reserved: [112]u8 = [_]u8{0} ** 112,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .Request);
+
+        // common headers
+        if (self.protocol_version == .Unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+        return null;
+    }
 };
 
 pub const Reply = extern struct {
@@ -278,20 +358,37 @@ pub const Reply = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    origin_id: u64 = 0,
+    headers_checksum: u128 = 0,
+    body_checksum: u128 = 0,
+    origin_id: u128 = 0,
     body_length: u32 = 0,
-    protocol_version: u8 = 0,
-    message_type: MessageType = .Request,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .Reply,
     compression: Compression = .None,
     compressed: bool = false,
-    padding: [32]u8 = [_]u8{0} ** 32,
+    padding: [72]u8 = [_]u8{0} ** 72,
 
-    transaction_id: u64 = 0,
+    transaction_id: u128 = 0,
     error_code: ErrorCode = .Ok,
 
-    reserved: [119]u8 = [_]u8{0} ** 119,
+    reserved: [111]u8 = [_]u8{0} ** 111,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .Reply);
+
+        // common headers
+        if (self.protocol_version == .Unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.error_code == .Undefined) return "invalid error_code";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
+        return null;
+    }
 };
 
 pub const Ping = extern struct {
@@ -299,17 +396,36 @@ pub const Ping = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    origin_id: u64 = 0,
+    headers_checksum: u128 = 0,
+    body_checksum: u128 = 0,
+    origin_id: u128 = 0,
     body_length: u32 = 0,
-    protocol_version: u8 = 0,
-    message_type: MessageType = .Request,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .Ping,
     compression: Compression = .None,
     compressed: bool = false,
-    padding: [32]u8 = [_]u8{0} ** 32,
+    padding: [72]u8 = [_]u8{0} ** 72,
 
-    reserved: [128]u8 = [_]u8{0} ** 128,
+    transaction_id: u128 = 0,
+
+    reserved: [112]u8 = [_]u8{0} ** 112,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .Ping);
+
+        // common headers
+        if (self.body_length > 0) return "invalid body_length";
+        if (self.protocol_version == .Unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
+        return null;
+    }
 };
 
 pub const Pong = extern struct {
@@ -317,15 +433,76 @@ pub const Pong = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    origin_id: u64 = 0,
+    headers_checksum: u128 = 0,
+    body_checksum: u128 = 0,
+    origin_id: u128 = 0,
     body_length: u32 = 0,
-    protocol_version: u8 = 0,
-    message_type: MessageType = .Request,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .Pong,
     compression: Compression = .None,
     compressed: bool = false,
-    padding: [32]u8 = [_]u8{0} ** 32,
+    padding: [72]u8 = [_]u8{0} ** 72,
 
-    reserved: [128]u8 = [_]u8{0} ** 128,
+    transaction_id: u128 = 0,
+    error_code: ErrorCode = .Ok,
+
+    reserved: [111]u8 = [_]u8{0} ** 111,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .Pong);
+
+        // common headers
+        if (self.body_length > 0) return "invalid body_length";
+        if (self.protocol_version == .Unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.error_code == .Undefined) return "invalid error_code";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
+        return null;
+    }
+};
+
+/// Message used to relay to the connecting client/node how they should communicate
+/// going forward
+pub const Accept = extern struct {
+    comptime {
+        assert(@sizeOf(@This()) == @sizeOf(Headers));
+    }
+
+    headers_checksum: u128 = 0,
+    body_checksum: u128 = 0,
+    origin_id: u128 = 0, // this will be the node_id
+    body_length: u32 = 0,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .Accept,
+    compression: Compression = .None,
+    compressed: bool = false,
+    padding: [72]u8 = [_]u8{0} ** 72,
+
+    accepted_origin_id: u128 = 0, // this will be the ID to be used by the connected
+
+    reserved: [112]u8 = [_]u8{0} ** 112,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .Accept);
+
+        // common headers
+        if (self.protocol_version == .Unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure the origin_id is valid
+        if (self.origin_id == 0) return "invalid origin_id";
+
+        // ensure the accepted_origin_id is valid
+        if (self.accepted_origin_id == 0) return "invalid accepted_origin_id";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+        return null;
+    }
 };

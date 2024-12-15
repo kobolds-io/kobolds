@@ -4,7 +4,7 @@ pub const ProtocolError = error{
     /// a Header or there is not enough data for the body.
     NotEnoughData,
     /// The Header.header_checksum checksum does not match the expected checksum
-    InvalidHeaderChecksum,
+    InvalidHeadersChecksum,
     /// The Header.body_checksum checksum does not match the expected checksum
     InvalidBodyChecksum,
     /// Already connected
@@ -15,4 +15,6 @@ pub const ProtocolError = error{
     ConnectionReadError,
     /// Connection is running
     ConnectionRunning,
+    // The version of the protocol is not supported and cannot be handled
+    UnsupportedProtocol,
 };

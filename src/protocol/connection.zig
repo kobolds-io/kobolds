@@ -4,10 +4,10 @@ const net = std.net;
 
 const uuid = @import("uuid");
 
-const constants = @import("./constants.zig");
+const constants = @import("../constants.zig");
 const Parser = @import("./parser.zig").Parser;
 const Message = @import("./message.zig").Message;
-const Mailbox = @import("./mailbox.zig").Mailbox;
+const Mailbox = @import("../data_structures/mailbox.zig").Mailbox;
 const Headers = @import("./message.zig").Headers;
 const ProtocolError = @import("./errors.zig").ProtocolError;
 
@@ -21,6 +21,8 @@ pub const Connection = struct {
     stream: net.Stream,
     connected: bool,
     mutex: std.Thread.Mutex,
+
+    sent_count: u32,
 
     read_loop_running: bool = false,
     write_loop_running: bool = false,
@@ -36,6 +38,7 @@ pub const Connection = struct {
             .mutex = std.Thread.Mutex{},
             .read_loop_running = false,
             .write_loop_running = false,
+            .sent_count = 0,
         };
     }
 
@@ -94,22 +97,22 @@ pub const Connection = struct {
             self.close();
         }
 
-        var parser_buffer: [constants.parser_max_buffer_size]u8 = undefined;
-        var parser_fba = std.heap.FixedBufferAllocator.init(&parser_buffer);
-        const parser_allocator = parser_fba.allocator();
+        // var parser_buffer: [constants.parser_max_buffer_size]u8 = undefined;
+        // var parser_fba = std.heap.FixedBufferAllocator.init(&parser_buffer);
+        var parser_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        defer _ = parser_gpa.deinit();
+        const parser_allocator = parser_gpa.allocator();
 
         var parser = Parser.init(parser_allocator);
         defer parser.deinit();
 
-        var buf: [constants.connection_read_buffer_size]u8 = undefined;
+        var buf: [constants.connection_recv_buffer_size]u8 = undefined;
         while (self.connected) {
-            std.log.debug("about to read", .{});
             const n = self.stream.read(&buf) catch |err| {
                 std.log.debug("could not read from stream {any}", .{err});
                 return;
             };
 
-            std.log.debug("after read", .{});
             if (n == 0) {
                 std.log.debug("read 0 bytes from connection, connection was closed by remote", .{});
                 return;
@@ -186,13 +189,7 @@ pub const Connection = struct {
                         const encoded_message = encoded_message_allocator.alloc(u8, message.size()) catch unreachable;
                         message.encode(encoded_message);
 
-                        // // encode the message
-                        // const encoded_message = Message.encode(encoded_message_allocator, &message) catch |err| {
-                        //     std.log.debug("could not encode message {any}", .{err});
-                        //     return;
-                        // };
-
-                        std.log.debug("before append to write buffer", .{});
+                        self.sent_count += 1;
                         write_buffer.appendSlice(encoded_message) catch |err| {
                             std.log.debug("could not append encoded message {any}", .{err});
                             return;
@@ -208,12 +205,13 @@ pub const Connection = struct {
 
             // FIX: we need to check if we are connected here because there is a
             // possibility that the stream is closed by the time we get here.
-
-            std.log.debug("self.stream {any}", .{write_buffer.items});
             const n = self.stream.write(write_buffer.items[0..bytes_to_write]) catch |err| {
                 std.log.debug("unable to write to stream {any}", .{err});
                 return;
             };
+
+            // std.debug.print("sent count {d}\n", .{self.sent_count});
+            // std.debug.print("wrote {d} bytes\n", .{n});
 
             // shift the remaining bytes to the head of the write_buffer for the next loop
             std.mem.copyForwards(u8, write_buffer.items, write_buffer.items[n..]);

@@ -1,14 +1,16 @@
 const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
-const constants = @import("./constants.zig");
-const utils = @import("./utils.zig");
-const hash = @import("./hash.zig");
+const constants = @import("../constants.zig");
+const utils = @import("../utils.zig");
+const hash = @import("../hash.zig");
 
 const Message = @import("./message.zig").Message;
 const Headers = @import("./message.zig").Headers;
 const Request = @import("./message.zig").Request;
 const Reply = @import("./message.zig").Reply;
+const Ping = @import("./message.zig").Ping;
+const Pong = @import("./message.zig").Pong;
 
 test "encoding" {
     const allocator = std.testing.allocator;
@@ -19,7 +21,7 @@ test "encoding" {
     message.headers.message_type = .Reply;
     message.setBody(body);
 
-    const want = [_]u8{ 180, 53, 75, 231, 147, 154, 254, 149, 112, 23, 160, 125, 67, 13, 103, 92, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100 };
+    const want = [_]u8{ 201, 7, 38, 247, 18, 5, 211, 75, 0, 0, 0, 0, 0, 0, 0, 0, 112, 23, 160, 125, 67, 13, 103, 92, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100 };
 
     const buf = try allocator.alloc(u8, message.size());
     defer allocator.free(buf);
@@ -44,6 +46,7 @@ test "decoding" {
 
     // encode the message for transport
     original_message.encode(encoded_message);
+    // std.debug.print("encoded message {any}\n", .{encoded_message});
 
     var decoded_message = Message.new();
     try decoded_message.decode(encoded_message);
@@ -126,4 +129,40 @@ test "compression: gzip" {
 
     // expect that you cannot overdecompress the message
     try std.testing.expectError(error.AlreadyDecompressed, message.decompress());
+}
+
+test "headers validation" {
+    // Test Request headers
+    var request_headers = Request{};
+    try std.testing.expect(request_headers.validate() != null);
+
+    request_headers.transaction_id = 1;
+
+    try std.testing.expectEqual(null, request_headers.validate());
+
+    // Test Reply Headers
+    var reply_headers = Reply{};
+    try std.testing.expect(reply_headers.validate() != null);
+
+    reply_headers.transaction_id = 1;
+    reply_headers.error_code = .Ok;
+
+    try std.testing.expectEqual(null, reply_headers.validate());
+
+    // Test Ping headers
+    var ping_headers = Ping{};
+    try std.testing.expect(ping_headers.validate() != null);
+
+    ping_headers.transaction_id = 1;
+
+    try std.testing.expectEqual(null, ping_headers.validate());
+
+    // Test Pong Headers
+    var pong_headers = Pong{};
+    try std.testing.expect(pong_headers.validate() != null);
+
+    pong_headers.transaction_id = 1;
+    pong_headers.error_code = .Ok;
+
+    try std.testing.expectEqual(null, pong_headers.validate());
 }

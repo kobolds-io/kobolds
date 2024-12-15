@@ -5,8 +5,8 @@ const assert = std.debug.assert;
 const uuid = @import("uuid");
 
 const Connection = @import("connection.zig").Connection;
+const Mailbox = @import("../data_structures/mailbox.zig").Mailbox;
 const Message = @import("message.zig").Message;
-const Mailbox = @import("mailbox.zig").Mailbox;
 const MessageType = @import("message.zig").MessageType;
 const ProtocolError = @import("./errors.zig").ProtocolError;
 

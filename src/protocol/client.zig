@@ -2,9 +2,14 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 const Connection = @import("./connection.zig").Connection;
-const Mailbox = @import("mailbox.zig").Mailbox;
+const Mailbox = @import("../data_structures/mailbox.zig").Mailbox;
 const Message = @import("message.zig").Message;
+const Request = @import("./message.zig").Request;
+const Reply = @import("./message.zig").Reply;
+const Ping = @import("./message.zig").Ping;
+const Pong = @import("./message.zig").Pong;
 const MessageType = @import("message.zig").MessageType;
+
 const ProtocolError = @import("./errors.zig").ProtocolError;
 
 pub const ClientConfig = struct {
@@ -100,11 +105,17 @@ pub const Client = struct {
         var connect_request = Message.new();
         connect_request.headers.message_type = .Ping;
 
-        // FIX: const reply = try self.request(connect_request);
-        try self.connection.send(connect_request);
+        // set the transaction_id
+        var ping_headers: *Ping = connect_request.headers.into(.Ping).?;
+        ping_headers.transaction_id = 123;
+
+        for (0..5000) |_| {
+            // FIX: const reply = try self.request(connect_request);
+            try self.connection.send(connect_request);
+        }
 
         // sleep while we send message
-        std.time.sleep(50 * std.time.ns_per_ms);
+        std.time.sleep(5000 * std.time.ns_per_ms);
         // TODO: there should be a receive method here that listens for a new message
     }
 
