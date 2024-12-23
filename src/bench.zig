@@ -2,9 +2,9 @@ const std = @import("std");
 const zbench = @import("zbench");
 const assert = std.debug.assert;
 
-const Parser = @import("./protocol/parser.zig").Parser;
-const Parser2 = @import("./protocol/parser.zig").Parser2;
-const Message = @import("./protocol/message.zig").Message;
+const Parser = @import("./parser.zig").Parser;
+const Parser2 = @import("./parser.zig").Parser2;
+const Message = @import("./message.zig").Message;
 const MessageQueue = @import("./data_structures/message_queue.zig").MessageQueue;
 const constants = @import("./constants.zig");
 
