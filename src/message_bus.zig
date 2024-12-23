@@ -39,7 +39,7 @@ pub const MessageBus = struct {
 
     /// A transaction map of K transaction_id, V origin_id used to correlate messages
     /// to the senders and receivers
-    transaction_map: std.AutoHashMap(u128, u128),
+    transaction_map: std.AutoHashMap(uuid.Uuid, u128),
 
     /// Map of all active connections
     connections: std.AutoHashMap(u128, *Connection),
@@ -61,7 +61,7 @@ pub const MessageBus = struct {
             .processing_queue = MessageQueue.new(constants.queue_size_max),
             .transaction_map = std.AutoHashMap(u128, u128).init(allocator),
             .processed_messages_count = 0,
-            .connections = std.AutoHashMap(u128, *Connection).init(allocator),
+            .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .connections_mutex = std.Thread.Mutex{},
             .allocator = allocator,
         };
@@ -79,7 +79,6 @@ pub const MessageBus = struct {
 
         self.connections.deinit();
         self.transaction_map.deinit();
-        // self.processing_queue.reset();
     }
 
     pub fn handleMessage(self: *MessageBus, message: *Message) !void {
@@ -122,14 +121,6 @@ pub const MessageBus = struct {
                     pong.deref();
                     self.message_pool.destroy(pong);
                 }
-
-                // FIX: I am immediately dereferencing here
-                // pong.deref();
-                // try self.message_pool.destroy(pong);
-
-                // TODO: enqueue the message to be written back to the origin_id
-                // put the pong message in a map for messages destined for this connection
-                // nodes should always respond to Ping messages
             },
             .Pong => {
                 log.debug("received pong {any}", .{message.headers.message_type});
