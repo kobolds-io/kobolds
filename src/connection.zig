@@ -50,6 +50,11 @@ pub const Connection = struct {
     inbox_mutex: std.Thread.Mutex,
     outbox_mutex: std.Thread.Mutex,
 
+    bytes_sent: u128,
+    bytes_recv: u128,
+    messages_sent: u128,
+    messages_recv: u128,
+
     pub fn init(
         message_pool: *MessagePool,
         io: *IO,
@@ -85,6 +90,10 @@ pub const Connection = struct {
             .outbox = MessageQueue.new(null),
             .inbox_mutex = std.Thread.Mutex{},
             .outbox_mutex = std.Thread.Mutex{},
+            .bytes_sent = 0,
+            .bytes_recv = 0,
+            .messages_sent = 0,
+            .messages_recv = 0,
         };
     }
 
@@ -174,6 +183,9 @@ pub const Connection = struct {
 
                 message.encode(buf[0..message_size]);
 
+                self.bytes_sent += message_size;
+                self.messages_sent += 1;
+
                 // append the encoded message to the send_buffer
                 send_buffer_list.appendSliceAssumeCapacity(buf[0..message_size]);
 
@@ -212,11 +224,11 @@ pub const Connection = struct {
             return;
         }
 
-        // log.debug("recv bytes {}", .{bytes});
-
         // create a temporary list that will store messges
         var messages = std.ArrayList(Message).initCapacity(self.allocator, 10) catch unreachable;
         defer messages.deinit();
+
+        self.bytes_recv += bytes;
 
         // try to parse the bytes into messages
         self.parser.parse(&messages, self.recv_buffer[0..bytes]) catch |err| switch (err) {
@@ -236,6 +248,9 @@ pub const Connection = struct {
             // if we are receiving many invalid messages, we should simply close the connection.
             // the client could then reconnect and we can get into a healthy state.
         };
+
+        // this includes both valid and invalid messages
+        self.messages_recv += messages.items.len;
 
         self.inbox_mutex.lock();
         defer self.inbox_mutex.unlock();
@@ -277,8 +292,6 @@ pub const Connection = struct {
             };
         }
 
-        // log.debug("received {} messages", .{messages.items.len});
-
         self.recv_submitted = false;
         self.recv_buffer = undefined;
     }
@@ -298,17 +311,23 @@ pub const Connection = struct {
         const bytes_sent: usize = res catch 0;
 
         // TODO: figure out how to handle these cases
-        if (bytes_sent == 0) {
+        if (bytes_sent == 0 and self.outbox.count > 0) {
             log.err("was unable to send bytes to connection", .{});
             // TODO: drop all messages for this connection
-            log.debug("dropping {} messages", .{self.outbox.count});
-            self.outbox.reset();
+            log.debug("dereferencing {} messages and clearing outbox", .{self.outbox.count});
+            // deref the message so that it can be destroyed later
+            while (self.outbox.dequeue()) |message| {
+                message.deref();
+                if (message.ref_count == 0) {
+                    self.message_pool.destroy(message);
+                }
+            }
+
+            self.state = .close;
         }
 
         self.send_submitted = false;
         self.send_buffer = undefined;
-
-        // log.debug("send bytes {}", .{bytes_sent});
     }
 
     pub fn onClose(self: *Connection, comp: *IO.Completion, res: IO.CloseError!void) void {

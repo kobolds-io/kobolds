@@ -222,28 +222,28 @@ pub const MessageBus = struct {
         }
 
         // work for a maximum of {time} before releasing control back to the main thread
-        // const processing_deadline = std.time.nanoTimestamp() + (5 * std.time.ns_per_ms);
+        const processing_deadline = std.time.nanoTimestamp() + (5 * std.time.ns_per_ms);
 
         // ensure that we have not exceeded the processing deadline
-        // while (processing_deadline >= std.time.nanoTimestamp()) {
-        // if there are no items to process, then do nothing
-        while (self.processing_queue.dequeue()) |message| {
-            assert(message.ref_count == 1);
-            // TODO: a timeout should be passed to handleMessage just in case?
-            try self.handleMessage(message);
+        while (processing_deadline >= std.time.nanoTimestamp()) {
+            // if there are no items to process, then do nothing
+            while (self.processing_queue.dequeue()) |message| {
+                assert(message.ref_count == 1);
+                // TODO: a timeout should be passed to handleMessage just in case?
+                try self.handleMessage(message);
 
-            assert(message.ref_count == 0);
+                assert(message.ref_count == 0);
 
-            // once the message has been handled, we should deref the message
-            if (message.ref_count == 0) {
-                self.message_pool.destroy(message);
-            }
+                // once the message has been handled, we should deref the message
+                if (message.ref_count == 0) {
+                    self.message_pool.destroy(message);
+                }
 
-            // TODO: we should check that messages aren't getting stuck in the system. I think that
-            // having a timestamp on each message as to when it was created might be an easy way to check
-            // but then you get into crazy time syncing problems
-            // } else break; // exit if there are no more messages to be processed
-            // }
+                // TODO: we should check that messages aren't getting stuck in the system. I think that
+                // having a timestamp on each message as to when it was created might be an easy way to check
+                // but then you get into crazy time syncing problems
+            } else break; // exit if there are no more messages to be processed
+
         }
     }
 };

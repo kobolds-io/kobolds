@@ -184,46 +184,46 @@ test "protocol" {
     try bench.run(stderr);
 }
 
-test "data_structures" {
-    // var bench = zbench.Benchmark.init(std.testing.allocator, .{});
-    var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = std.math.maxInt(u16) });
-    defer bench.deinit();
-
-    var queue_messages_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = queue_messages_gpa.deinit();
-    const queue_messages_allocator = queue_messages_gpa.allocator();
-
-    var queue_messages = std.ArrayList(Message).initCapacity(queue_messages_allocator, constants.queue_size_max) catch unreachable;
-    defer queue_messages.deinit();
-
-    for (0..constants.queue_size_max) |_| {
-        queue_messages.appendAssumeCapacity(Message.new());
-    }
-
-    var dequeue_messages_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = dequeue_messages_gpa.deinit();
-    const dequeue_messages_allocator = dequeue_messages_gpa.allocator();
-
-    var dequeue_messages = std.ArrayList(Message).initCapacity(dequeue_messages_allocator, constants.queue_size_max) catch unreachable;
-    defer dequeue_messages.deinit();
-
-    for (0..constants.queue_size_max) |_| {
-        dequeue_messages.appendAssumeCapacity(Message.new());
-    }
-
-    var dequeue_queue = MessageQueue.new(constants.queue_size_max);
-
-    // do the initial setup for the Dequeue benchmark test
-    for (dequeue_messages.items) |*message| {
-        dequeue_queue.enqueue(message) catch unreachable;
-    }
-
-    try bench.addParam("MessageQueue.enqueue", &MessageQueueEnqueueBenchmark.new(&queue_messages), .{});
-    try bench.addParam("MessageQueue.dequeue", &MessageQueueDequeueBenchmark.new(&dequeue_messages, &dequeue_queue), .{});
-
-    const stderr = std.io.getStdErr().writer();
-
-    try stderr.writeAll("\n");
-
-    try bench.run(stderr);
+test "MessageQueue" {
+    // // var bench = zbench.Benchmark.init(std.testing.allocator, .{});
+    // var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = std.math.maxInt(u16) });
+    // defer bench.deinit();
+    //
+    // var queue_messages_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // defer _ = queue_messages_gpa.deinit();
+    // const queue_messages_allocator = queue_messages_gpa.allocator();
+    //
+    // var queue_messages = std.ArrayList(Message).initCapacity(queue_messages_allocator, constants.queue_size_max) catch unreachable;
+    // defer queue_messages.deinit();
+    //
+    // for (0..constants.queue_size_max) |_| {
+    //     queue_messages.appendAssumeCapacity(Message.new());
+    // }
+    //
+    // var dequeue_messages_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // defer _ = dequeue_messages_gpa.deinit();
+    // const dequeue_messages_allocator = dequeue_messages_gpa.allocator();
+    //
+    // var dequeue_messages = std.ArrayList(Message).initCapacity(dequeue_messages_allocator, constants.queue_size_max) catch unreachable;
+    // defer dequeue_messages.deinit();
+    //
+    // for (0..constants.queue_size_max) |_| {
+    //     dequeue_messages.appendAssumeCapacity(Message.new());
+    // }
+    //
+    // var dequeue_queue = MessageQueue.new(constants.queue_size_max);
+    //
+    // // do the initial setup for the Dequeue benchmark test
+    // for (dequeue_messages.items) |*message| {
+    //     dequeue_queue.enqueue(message) catch unreachable;
+    // }
+    //
+    // try bench.addParam("MessageQueue.enqueue", &MessageQueueEnqueueBenchmark.new(&queue_messages), .{});
+    // try bench.addParam("MessageQueue.dequeue", &MessageQueueDequeueBenchmark.new(&dequeue_messages, &dequeue_queue), .{});
+    //
+    // const stderr = std.io.getStdErr().writer();
+    //
+    // try stderr.writeAll("\n");
+    //
+    // try bench.run(stderr);
 }
