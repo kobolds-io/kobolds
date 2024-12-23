@@ -7,13 +7,13 @@ const uuid = @import("uuid");
 
 const constants = @import("constants.zig");
 
-const Message = @import("./protocol/message.zig").Message;
-const Accept = @import("./protocol/message.zig").Accept;
-const Request = @import("./protocol/message.zig").Request;
-const Reply = @import("./protocol/message.zig").Reply;
-const Ping = @import("./protocol/message.zig").Ping;
-const Pong = @import("./protocol/message.zig").Pong;
-const MessageType = @import("./protocol/message.zig").MessageType;
+const Message = @import("./message.zig").Message;
+const Accept = @import("./message.zig").Accept;
+const Request = @import("./message.zig").Request;
+const Reply = @import("./message.zig").Reply;
+const Ping = @import("./message.zig").Ping;
+const Pong = @import("./message.zig").Pong;
+const MessageType = @import("./message.zig").MessageType;
 
 const Connection = @import("./connection.zig").Connection;
 

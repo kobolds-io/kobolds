@@ -1,5 +1,5 @@
 const std = @import("std");
-const Headers = @import("./protocol/message.zig").Headers;
+const Headers = @import("./message.zig").Headers;
 
 /// the maximum size of a message body
 pub const message_max_body_size = 1024 * 8; // 8kb

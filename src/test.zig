@@ -4,9 +4,9 @@ comptime {
     _ = @import("./hash.zig");
     _ = @import("./io/test.zig");
     // _ = @import("main.zig");
-    // _ = @import("./protocol/connection.zig");
-    _ = @import("./protocol/message_test.zig");
-    _ = @import("./protocol/parser_test.zig");
+    // _ = @import("./connection.zig");
+    _ = @import("./message_test.zig");
+    _ = @import("./parser_test.zig");
     _ = @import("./utils.zig");
     _ = @import("./data_structures/message_queue.zig");
     _ = @import("./node.zig");

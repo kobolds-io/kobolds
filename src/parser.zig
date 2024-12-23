@@ -1,6 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const constants = @import("../constants.zig");
+const constants = @import("./constants.zig");
 const log = std.log.scoped(.Parser);
 
 const ProtocolError = @import("./errors.zig").ProtocolError;

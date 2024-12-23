@@ -6,16 +6,16 @@ const log = std.log.scoped(.Client);
 const uuid = @import("uuid");
 
 const constants = @import("constants.zig");
-const Message = @import("./protocol/message.zig").Message;
-const Accept = @import("./protocol/message.zig").Accept;
-const Pong = @import("./protocol/message.zig").Pong;
-const Ping = @import("./protocol/message.zig").Ping;
+const Message = @import("./message.zig").Message;
+const Accept = @import("./message.zig").Accept;
+const Pong = @import("./message.zig").Pong;
+const Ping = @import("./message.zig").Ping;
 
-const Compression = @import("./protocol/message.zig").Compression;
+const Compression = @import("./message.zig").Compression;
 const MessagePool = @import("./message_pool.zig").MessagePool;
 const MessageQueue = @import("./data_structures/message_queue.zig").MessageQueue;
 const Connection = @import("./connection.zig").Connection;
-const ProtocolError = @import("./protocol/errors.zig").ProtocolError;
+const ProtocolError = @import("./errors.zig").ProtocolError;
 const IO = @import("./io.zig").IO;
 
 pub const ClientConfig = struct {

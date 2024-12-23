@@ -1,9 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
-const constants = @import("../constants.zig");
-const utils = @import("../utils.zig");
-const hash = @import("../hash.zig");
+const constants = @import("./constants.zig");
+const utils = @import("./utils.zig");
+const hash = @import("./hash.zig");
 
 const Message = @import("./message.zig").Message;
 const Headers = @import("./message.zig").Headers;

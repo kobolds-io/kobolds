@@ -3,13 +3,8 @@ const assert = std.debug.assert;
 const cli = @import("zig-cli");
 
 const constants = @import("../constants.zig");
-const Connection = @import("../protocol/connection.zig").Connection;
 const Mailbox = @import("../data_structures/mailbox.zig").Mailbox;
-const Message = @import("../protocol/message.zig").Message;
-const Node = @import("../protocol/node.zig").Node;
-const NodeConfig = @import("../protocol/node.zig").NodeConfig;
-const Client = @import("../protocol/client.zig").Client;
-const ClientConfig = @import("../protocol/client.zig").ClientConfig;
+const Message = @import("../message.zig").Message;
 
 const Node2 = @import("../node.zig").Node;
 const NodeConfig2 = @import("../node.zig").NodeConfig;
@@ -19,11 +14,6 @@ const IO = @import("../io.zig").IO;
 
 const Client2 = @import("../client.zig").Client;
 const ClientConfig2 = @import("../client.zig").ClientConfig;
-
-var node_config = NodeConfig{
-    .host = "127.0.0.1",
-    .port = 8000,
-};
 
 var node_config2 = NodeConfig2{
     .host = "127.0.0.1",
@@ -36,11 +26,6 @@ var client_config2 = ClientConfig2{
     .compression = .None,
 };
 
-var client_config = ClientConfig{
-    .host = "127.0.0.1",
-    .port = 8000,
-};
-
 pub fn run() !void {
     var app_runner = try cli.AppRunner.init(std.heap.page_allocator);
 
@@ -48,29 +33,6 @@ pub fn run() !void {
         .name = "version",
         .description = cli.Description{ .one_line = "print versions" },
         .target = .{ .action = .{ .exec = runVersion } },
-    };
-
-    const node_listen_command = cli.Command{
-        .name = "listen",
-        .description = cli.Description{
-            .one_line = "listen for new connections",
-            .detailed = "start a node and listen for incomming connections",
-        },
-
-        .options = &.{
-            .{
-                .long_name = "host",
-                .help = "host to listen on",
-                .value_ref = app_runner.mkRef(&node_config.host),
-            },
-            .{
-                .long_name = "port",
-                .help = "port to bind to",
-                .value_ref = app_runner.mkRef(&node_config.port),
-            },
-        },
-
-        .target = .{ .action = .{ .exec = nodeListen } },
     };
 
     const node_listen2_command = cli.Command{
@@ -103,33 +65,15 @@ pub fn run() !void {
             .{
                 .long_name = "host",
                 .help = "host to listen on",
-                .value_ref = app_runner.mkRef(&client_config.host),
+                .value_ref = app_runner.mkRef(&client_config2.host),
             },
             .{
                 .long_name = "port",
                 .help = "port to bind to",
-                .value_ref = app_runner.mkRef(&client_config.port),
+                .value_ref = app_runner.mkRef(&client_config2.port),
             },
         },
         .target = .{ .action = .{ .exec = runPing2 } },
-    };
-
-    const node_ping_command = cli.Command{
-        .name = "ping",
-        .description = cli.Description{ .one_line = "ping a node" },
-        .options = &.{
-            .{
-                .long_name = "host",
-                .help = "host to listen on",
-                .value_ref = app_runner.mkRef(&client_config.host),
-            },
-            .{
-                .long_name = "port",
-                .help = "port to bind to",
-                .value_ref = app_runner.mkRef(&client_config.port),
-            },
-        },
-        .target = .{ .action = .{ .exec = runPing } },
     };
 
     const node_root_command = cli.Command{
@@ -137,8 +81,6 @@ pub fn run() !void {
         .description = cli.Description{ .one_line = "commands to control nodes" },
         .target = .{
             .subcommands = &.{
-                node_listen_command,
-                node_ping_command,
                 node_listen2_command,
                 node_ping2_command,
             },
@@ -161,17 +103,6 @@ pub fn run() !void {
     };
 
     return app_runner.run(&app);
-}
-
-pub fn nodeListen() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
-
-    var node = Node.init(allocator, node_config);
-    defer node.deinit();
-
-    try node.run();
 }
 
 pub fn nodeListen2() !void {
@@ -255,22 +186,6 @@ pub fn runPing2() !void {
             };
         }
     }
-}
-
-pub fn runPing() !void {
-    // creating a client to communicate with the node
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
-
-    var client = Client.init(allocator, client_config);
-    defer client.deinit();
-
-    try client.connect();
-    defer client.close();
-
-    // try client.ping();
-    // std.time.sleep(std.time.ns_per_ms * 10);
 }
 
 pub fn runVersion() !void {

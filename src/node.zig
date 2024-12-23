@@ -6,11 +6,11 @@ const log = std.log.scoped(.Node);
 
 const uuid = @import("uuid");
 
-const Message = @import("./protocol/message.zig").Message;
+const Message = @import("./message.zig").Message;
 const MessageBus = @import("message_bus.zig").MessageBus;
 const MessagePool = @import("message_pool.zig").MessagePool;
 const Connection = @import("connection.zig").Connection;
-const ProtocolError = @import("./protocol/errors.zig").ProtocolError;
+const ProtocolError = @import("./errors.zig").ProtocolError;
 const IO = @import("./io.zig").IO;
 
 const constants = @import("./constants.zig");

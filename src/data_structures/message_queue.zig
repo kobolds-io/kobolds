@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const testing = std.testing;
-const Message = @import("../protocol/message.zig").Message;
+const Message = @import("../message.zig").Message;
 const constants = @import("../constants.zig");
 
 pub const QueueError = error{
@@ -65,8 +65,6 @@ pub const MessageQueue = struct {
             self.count -= 1;
             current = tmp;
         }
-
-        std.debug.print("reset count {}\n", .{self.count});
 
         assert(self.head == null);
         assert(self.count == 0);

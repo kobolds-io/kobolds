@@ -3,7 +3,7 @@ const assert = std.debug.assert;
 const log = std.log.scoped(.MessagePool);
 
 const constants = @import("constants.zig");
-const Message = @import("./protocol/message.zig").Message;
+const Message = @import("./message.zig").Message;
 const MessageQueue = @import("./data_structures/message_queue.zig").MessageQueue;
 
 /// MessagePool acts like a global allocator with a fixed number of pointers avaialble for use.

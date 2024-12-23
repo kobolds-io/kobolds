@@ -8,11 +8,11 @@ const uuid = @import("uuid");
 
 const constants = @import("constants.zig");
 
-const Message = @import("./protocol/message.zig").Message;
-const Parser = @import("./protocol/parser.zig").Parser;
+const Message = @import("./message.zig").Message;
+const Parser = @import("./parser.zig").Parser;
 const MessagePool = @import("message_pool.zig").MessagePool;
 const MessageQueue = @import("./data_structures//message_queue.zig").MessageQueue;
-const ProtocolError = @import("./protocol/errors.zig").ProtocolError;
+const ProtocolError = @import("./errors.zig").ProtocolError;
 const IO = @import("./io.zig").IO;
 
 const ConnectionState = enum {
@@ -298,7 +298,12 @@ pub const Connection = struct {
         const bytes_sent: usize = res catch 0;
 
         // TODO: figure out how to handle these cases
-        if (bytes_sent == 0) unreachable;
+        if (bytes_sent == 0) {
+            log.err("was unable to send bytes to connection", .{});
+            // TODO: drop all messages for this connection
+            log.debug("dropping {} messages", .{self.outbox.count});
+            self.outbox.reset();
+        }
 
         self.send_submitted = false;
         self.send_buffer = undefined;
