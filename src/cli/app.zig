@@ -35,8 +35,8 @@ pub fn run() !void {
         .target = .{ .action = .{ .exec = runVersion } },
     };
 
-    const node_listen2_command = cli.Command{
-        .name = "listen2",
+    const node_listen_command = cli.Command{
+        .name = "listen",
         .description = cli.Description{
             .one_line = "listen for new connections",
             .detailed = "start a node and listen for incomming connections",
@@ -55,11 +55,11 @@ pub fn run() !void {
             },
         },
 
-        .target = .{ .action = .{ .exec = nodeListen2 } },
+        .target = .{ .action = .{ .exec = nodeListen } },
     };
 
-    const node_ping2_command = cli.Command{
-        .name = "ping2",
+    const node_ping_command = cli.Command{
+        .name = "ping",
         .description = cli.Description{ .one_line = "ping a node" },
         .options = &.{
             .{
@@ -81,8 +81,8 @@ pub fn run() !void {
         .description = cli.Description{ .one_line = "commands to control nodes" },
         .target = .{
             .subcommands = &.{
-                node_listen2_command,
-                node_ping2_command,
+                node_listen_command,
+                node_ping_command,
             },
         },
     };
@@ -105,7 +105,7 @@ pub fn run() !void {
     return app_runner.run(&app);
 }
 
-pub fn nodeListen2() !void {
+pub fn nodeListen() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
@@ -132,6 +132,7 @@ pub fn nodeListen2() !void {
 
     try node.run();
 }
+
 pub fn runPing2() !void {
     // creating a client to communicate with the node
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
