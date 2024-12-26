@@ -1,10 +1,10 @@
-# Harpy
+# kobolds
 
-**Harpy is currently under heavy development - use at your own risk**
+**kobolds is currently under heavy development - use at your own risk**
 
 ## Description
 
-`harpy` is a modern, high performing messaging system for communication between different machines across different networks. This means it's easy to scale, easy to apply and robust and reliable enough to support modern workloads.
+`kobolds` is a modern, high performing messaging system for communication between different machines across different networks. This means it's easy to scale, easy to apply and robust and reliable enough to support modern workloads.
 
 ## Quickstart
 
@@ -21,33 +21,33 @@ Build the cli and run it
 zig build --fetch
 
 # run the cli
-./zig-out/bin/harpy
+./zig-out/bin/kobolds
 ```
 
 Start a node locally
 
 ```bash
 # run node with the default configuration
-./zig-out/bin/harpy node run
+./zig-out/bin/kobolds node run
 ```
 
 subscribe to a topic
 
 ```bash
 # subscribe to any messages published to the `/hello` topic
-./zig-out/bin/harpy node sub /hello
+./zig-out/bin/kobolds node sub /hello
 ```
 
 publish to a topic
 
 ```bash
 # publish a message the the `/hello` topic
-./zig-out/bin/harpy node pub /hello "this is my cool message"
+./zig-out/bin/kobolds node pub /hello "this is my cool message"
 ```
 
 ## Background
 
-It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and especially `ros` and brings many of the conveiniences of the modern cloud environment. `harpy` means to offer several convenient features like load balancing, key value store, message/worker queues, multi transport & encoding as well as providing clients in multiple languages.
+It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and especially `ros` and brings many of the conveiniences of the modern cloud environment. `kobolds` means to offer several convenient features like load balancing, key value store, message/worker queues, multi transport & encoding as well as providing clients in multiple languages.
 
 ## Goals
 
@@ -75,15 +75,15 @@ It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and esp
 
 ### Version 0.1.x
 
-| complete | name                                                                                     | priority |
-| -------- | ---------------------------------------------------------------------------------------- | -------- |
-| ❌       | [create harpy communication protocol](https://github.com/butterworks-io/harpy/issues/3)  | high     |
-| ✔️       | [create basic message parser](https://github.com/butterworks-io/harpy/issues/4)          | high     |
-| ❌       | [create basic node](https://github.com/butterworks-io/harpy/issues/5)                    | high     |
-| ❌       | [create basic node](https://github.com/butterworks-io/harpy/issues/6)                    | high     |
-| ❌       | [create basic cli](https://github.com/butterworks-io/harpy/issues/7)                     | high     |
-| ❌       | [create single node publish/subscribe](https://github.com/butterworks-io/harpy/issues/8) | high     |
-| ❌       | [create single node request/reply](https://github.com/butterworks-io/harpy/issues/9)     | high     |
+| complete | name                                                                                    | priority |
+| -------- | --------------------------------------------------------------------------------------- | -------- |
+| ❌       | [create kobolds communication protocol](https://github.com/kobolds-io/kobolds/issues/3) | high     |
+| ✔️       | [create basic message parser](https://github.com/kobolds-io/kobolds/issues/4)           | high     |
+| ❌       | [create basic node](https://github.com/kobolds-io/kobolds/issues/5)                     | high     |
+| ❌       | [create basic node](https://github.com/kobolds-io/kobolds/issues/6)                     | high     |
+| ❌       | [create basic cli](https://github.com/kobolds-io/kobolds/issues/7)                      | high     |
+| ❌       | [create single node publish/subscribe](https://github.com/kobolds-io/kobolds/issues/8)  | high     |
+| ❌       | [create single node request/reply](https://github.com/kobolds-io/kobolds/issues/9)      | high     |
 
 ### Version 0.2.x
 

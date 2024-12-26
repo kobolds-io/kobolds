@@ -166,16 +166,16 @@ pub fn run() !void {
 
     const app = cli.App{
         .command = cli.Command{
-            .name = "harpy",
+            .name = "kobolds",
             .description = .{
-                .one_line = "a pretty quick messaging system",
-                .detailed = "Harpy is a node based messaging system for communicating reliably between machines. Visit [URL] for more information ",
+                .one_line = "a quick and reliable messaging system",
+                .detailed = "Kobolds is a node based messaging system for communicating reliably between machines. Visit [URL] for more information ",
             },
             //            .target = .{ .action = .{ .exec = runNoop } },
 
             .target = .{ .subcommands = &.{ node_root_command, version_root_command } },
         },
-        .author = "butterworks",
+        .author = "kobolds",
         .version = "cli version 0.0.0",
     };
 
