@@ -18,7 +18,7 @@ test "encoding" {
     // this live as long as the scope of this function
     const body = "hello world";
     var message = Message.new();
-    message.headers.message_type = .Reply;
+    message.headers.message_type = .reply;
     message.setBody(body);
 
     const want = [_]u8{ 201, 7, 38, 247, 18, 5, 211, 75, 0, 0, 0, 0, 0, 0, 0, 0, 112, 23, 160, 125, 67, 13, 103, 92, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100 };
@@ -39,7 +39,7 @@ test "decoding" {
     const body = "a" ** constants.message_max_body_size;
     var original_message = Message.new();
     original_message.setBody(body);
-    original_message.headers.message_type = .Request;
+    original_message.headers.message_type = .request;
 
     const encoded_message = try allocator.alloc(u8, original_message.size());
     defer allocator.free(encoded_message);
@@ -56,7 +56,7 @@ test "decoding" {
 }
 
 test "constructing and casting Headers" {
-    var headers = Headers{ .message_type = .Request };
+    var headers = Headers{ .message_type = .request };
 
     // ensure that the reserved field is empty
     try std.testing.expect(headers.reserved.len > 0);
@@ -64,7 +64,7 @@ test "constructing and casting Headers" {
         try std.testing.expectEqual(0, byte);
     }
 
-    const req_headers: *Request = headers.into(.Request).?;
+    const req_headers: *Request = headers.into(.request).?;
 
     // assert that the request is the correct type w/ correct fields
     try std.testing.expect(@TypeOf(req_headers) == *Request);
@@ -84,7 +84,7 @@ test "compression: none" {
 
     // assert that the message is constructed in the way we want.
     try std.testing.expectEqual(body.len, message.body().len);
-    try std.testing.expectEqual(message.headers.compression, .None);
+    try std.testing.expectEqual(message.headers.compression, .none);
     try std.testing.expect(std.mem.eql(u8, body, message.body()));
 
     // this compression call should do nothing
@@ -99,11 +99,11 @@ test "compression: gzip" {
     const body = "a" ** constants.message_max_body_size;
     var message = Message.new();
     message.setBody(body);
-    message.headers.compression = .Gzip;
+    message.headers.compression = .gzip;
 
     // assert that the message is constructed in the way we want.
     try std.testing.expectEqual(body.len, message.body().len);
-    try std.testing.expectEqual(.Gzip, message.headers.compression);
+    try std.testing.expectEqual(.gzip, message.headers.compression);
     try std.testing.expectEqual(false, message.headers.compressed);
     try std.testing.expect(std.mem.eql(u8, body, message.body()));
 
@@ -145,7 +145,7 @@ test "headers validation" {
     try std.testing.expect(reply_headers.validate() != null);
 
     reply_headers.transaction_id = 1;
-    reply_headers.error_code = .Ok;
+    reply_headers.error_code = .ok;
 
     try std.testing.expectEqual(null, reply_headers.validate());
 
@@ -162,7 +162,7 @@ test "headers validation" {
     try std.testing.expect(pong_headers.validate() != null);
 
     pong_headers.transaction_id = 1;
-    pong_headers.error_code = .Ok;
+    pong_headers.error_code = .ok;
 
     try std.testing.expectEqual(null, pong_headers.validate());
 }

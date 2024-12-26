@@ -1,13 +1,14 @@
 const std = @import("std");
+const testing = std.testing;
 const assert = std.debug.assert;
-const log = std.log.scoped(.MessagePool);
+const log = std.log.scoped(.Pool);
 
-const constants = @import("constants.zig");
+const constants = @import("./constants.zig");
 const Message = @import("./message.zig").Message;
 const MessageQueue = @import("./data_structures/message_queue.zig").MessageQueue;
 
-/// MessagePool acts like a global allocator with a fixed number of pointers avaialble for use.
-/// Each allocated pointer will be valid throughout the lifespan of the MessagePool but will be
+/// The Pool acts like a global allocator with a fixed number of pointers availble for use.
+/// Each allocated pointer will be valid throughout the lifespan of the Pool but will be
 /// reused by other messages.
 pub const MessagePool = struct {
     /// Queue of message pointers that can be freely overriden. The message pointer
@@ -22,8 +23,6 @@ pub const MessagePool = struct {
 
     /// backing array list that actually holds the value of each message
     messages: std.ArrayList(Message),
-
-    mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, message_pool_size: u32) !MessagePool {
         assert(message_pool_size <= constants.message_pool_max_size);
@@ -50,7 +49,6 @@ pub const MessagePool = struct {
             .messages = messages,
             .assigned_map = std.AutoHashMap(*Message, bool).init(allocator),
             .unassigned_queue = unassigned_queue,
-            .mutex = std.Thread.Mutex{},
         };
     }
 
@@ -60,10 +58,21 @@ pub const MessagePool = struct {
         self.messages.deinit();
     }
 
-    pub fn create(self: *MessagePool) !*Message {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+    pub fn tick(self: *MessagePool) !void {
+        var assigned_messages_iter = self.assigned_map.keyIterator();
+        while (assigned_messages_iter.next()) |k| {
+            if (k.*.ref_count == 0) {
+                // TODO: this could be an unsafe destroy call where we skip all safety checks and just
+                // absolutely nuke this message to get it ready as fast as possible
+                self.destroy(k.*);
+            }
+        }
 
+        // TODO: there should be some sort of tracking to ensure that messages aren't hogging resources
+        // for too long. This could happen if there is a message that get's stuck somewhere
+    }
+
+    pub fn create(self: *MessagePool) !*Message {
         if (self.unassigned_queue.count == 0) return error.OutOfMemory;
         if (self.unassigned_queue.dequeue()) |ptr| {
             try self.assigned_map.put(ptr, true);
@@ -77,9 +86,6 @@ pub const MessagePool = struct {
     }
 
     pub fn destroy(self: *MessagePool, message_ptr: *Message) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         assert(message_ptr.ref_count == 0);
 
         // free the ptr from the assinged queue and give it back to the unassigned queue
@@ -93,3 +99,74 @@ pub const MessagePool = struct {
         self.unassigned_queue.enqueue(message_ptr) catch unreachable;
     }
 };
+
+test "create" {
+    // Create a message pool
+    const allocator = std.testing.allocator;
+
+    var pool = try MessagePool.init(allocator, 100);
+    defer pool.deinit();
+
+    try testing.expectEqual(0, pool.assigned_map.count());
+
+    const message = try pool.create();
+    defer pool.destroy(message);
+
+    try testing.expectEqual(1, pool.assigned_map.count());
+
+    for (0..pool.unassigned_queue.count) |_| {
+        _ = try pool.create();
+    }
+
+    // try and add one more and get the error
+    try testing.expectError(error.OutOfMemory, pool.create());
+}
+
+test "destroy" {
+    // Create a message pool
+    const allocator = std.testing.allocator;
+
+    var pool = try MessagePool.init(allocator, 100);
+    defer pool.deinit();
+
+    try testing.expectEqual(0, pool.assigned_map.count());
+
+    const message = try pool.create();
+
+    try testing.expectEqual(1, pool.assigned_map.count());
+    pool.destroy(message);
+
+    try testing.expectEqual(0, pool.assigned_map.count());
+}
+
+test "tick" {
+    // Create a message pool
+    const allocator = std.testing.allocator;
+
+    var pool = try MessagePool.init(allocator, 100);
+    defer pool.deinit();
+
+    try testing.expectEqual(0, pool.assigned_map.count());
+
+    for (0..50) |_| {
+        var message = try pool.create();
+        message.ref();
+    }
+
+    try testing.expectEqual(50, pool.assigned_map.count());
+
+    // loop over each of the messages and deref a them
+    try pool.tick();
+
+    // ensure that nothing was destroyed
+    try testing.expectEqual(50, pool.assigned_map.count());
+
+    var assigned_messages_iter = pool.assigned_map.keyIterator();
+    while (assigned_messages_iter.next()) |message| {
+        message.*.deref();
+    }
+
+    try pool.tick();
+
+    try testing.expectEqual(0, pool.assigned_map.count());
+}

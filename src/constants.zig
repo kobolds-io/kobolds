@@ -20,16 +20,15 @@ pub const connection_recv_buffer_size = 4096;
 /// The number of bytes used as the send buffer in each connection
 pub const connection_send_buffer_size = 4096;
 
-/// FIX: remove this requirement
-/// The sleep duration of the connection
-pub const connection_write_loop_interval = 10 * std.time.ns_per_ms;
-
 /// The number of iterations to be executed for benchmark tests
 pub const benchmark_testing_iterations = 3_500_000;
 
 /// The number of milliseconds the IO instance will wait until it flushes
 /// submissions and completions from.
-pub const io_tick_ms: u63 = 5;
+pub const io_tick_ms: u63 = 10;
+
+/// Number of entries used for the submission and completion queues
+pub const io_uring_entries: u16 = 256;
 
 /// Optionally verify if operations based on this boolean.
 pub const verify: bool = true;
@@ -38,7 +37,10 @@ pub const verify: bool = true;
 pub const queue_size_max: u32 = 100_000;
 
 /// Default size of a queue when no size is provided
-pub const queue_size_default: u32 = 5_000;
+pub const queue_size_default: u32 = 10_000;
 
 /// Maximum size of the message pool
 pub const message_pool_max_size: u32 = 100_000;
+
+/// Default number of workers spawned
+pub const worker_default_threads: u32 = 10;

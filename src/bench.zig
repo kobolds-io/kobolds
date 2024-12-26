@@ -59,7 +59,7 @@ pub fn BenchmarkMessageEncode(_: std.mem.Allocator) void {
 pub fn BenchmarkMessageCompressGzip(_: std.mem.Allocator) void {
     const body = comptime "a" ** constants.message_max_body_size;
     var message = Message.new();
-    message.headers.compression = .Gzip;
+    message.headers.compression = .gzip;
     message.headers.compressed = false;
     message.setBody(body);
 
@@ -70,7 +70,7 @@ pub fn BenchmarkMessageDecompressGzip(_: std.mem.Allocator) void {
     // this body is "a" ** constants.message_max_body_size but compressed with gzip
     const body = [_]u8{ 31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 237, 192, 129, 12, 0, 0, 0, 195, 48, 214, 249, 75, 156, 227, 73, 91, 0, 0, 0, 0, 0, 0, 0, 192, 187, 1, 213, 102, 111, 13, 0, 32, 0, 0 };
     var message = Message.new();
-    message.headers.compression = .Gzip;
+    message.headers.compression = .gzip;
     message.headers.compressed = true;
     message.setBody(&body);
 

@@ -5,7 +5,7 @@ const log = std.log.scoped(.MessageBus);
 
 const uuid = @import("uuid");
 
-const constants = @import("constants.zig");
+const constants = @import("./constants.zig");
 
 const Message = @import("./message.zig").Message;
 const Accept = @import("./message.zig").Accept;
@@ -18,9 +18,8 @@ const MessageType = @import("./message.zig").MessageType;
 const Connection = @import("./connection.zig").Connection;
 
 const MessageQueue = @import("./data_structures/message_queue.zig").MessageQueue;
-const MessagePool = @import("message_pool.zig").MessagePool;
-
-const IO = @import("io.zig").IO;
+const MessagePool = @import("./message_pool.zig").MessagePool;
+const IO = @import("./io.zig").IO;
 
 pub const MessageBus = struct {
     /// identifier of the node
@@ -42,7 +41,7 @@ pub const MessageBus = struct {
     transaction_map: std.AutoHashMap(uuid.Uuid, u128),
 
     /// Map of all active connections
-    connections: std.AutoHashMap(u128, *Connection),
+    connections: std.AutoHashMap(uuid.Uuid, *Connection),
 
     /// Mutex for the connections_map ensuring that connections are added/removed atomically
     connections_mutex: std.Thread.Mutex,
@@ -59,8 +58,8 @@ pub const MessageBus = struct {
             .io = io,
             .message_pool = message_pool,
             .processing_queue = MessageQueue.new(constants.queue_size_max),
-            .transaction_map = std.AutoHashMap(u128, u128).init(allocator),
             .processed_messages_count = 0,
+            .transaction_map = std.AutoHashMap(uuid.Uuid, u128).init(allocator),
             .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .connections_mutex = std.Thread.Mutex{},
             .allocator = allocator,
@@ -85,10 +84,9 @@ pub const MessageBus = struct {
         defer self.processed_messages_count += 1;
         defer message.deref();
         switch (message.headers.message_type) {
-            .Ping => {
-
+            .ping => {
                 // cast the headers into the correct headers type
-                const ping_headers: *const Ping = message.headers.intoConst(.Ping).?;
+                const ping_headers: *const Ping = message.headers.intoConst(.ping).?;
 
                 // drop this message if we have no idea who to end a pong back to
                 if (ping_headers.origin_id == 0) {
@@ -99,10 +97,10 @@ pub const MessageBus = struct {
                 // create a pong message
                 var pong = try self.message_pool.create();
                 pong.* = Message.new();
-                pong.headers.message_type = .Pong;
-                var pong_headers: *Pong = pong.headers.into(.Pong).?;
+                pong.headers.message_type = .pong;
+                var pong_headers: *Pong = pong.headers.into(.pong).?;
                 pong_headers.transaction_id = ping_headers.transaction_id;
-                pong_headers.error_code = .Ok;
+                pong_headers.error_code = .ok;
 
                 // make a reference to the new pong message
                 pong.ref();
@@ -110,24 +108,35 @@ pub const MessageBus = struct {
                 // add the message to the outbox queue of the connection
                 if (self.connections.get(ping_headers.origin_id)) |conn| {
                     // try to have the message enqueued in the outbox
-                    try conn.outbox.enqueue(pong);
-                    errdefer {
-                        log.err("could not enqueue pong message", .{});
-                        pong.deref();
-                        self.message_pool.destroy(pong);
-                    }
+                    conn.outbox.enqueue(pong) catch |err| switch (err) {
+                        error.QueueFull => {
+                            log.err("dropping message {any}", .{err});
+                            pong.deref();
+                            self.message_pool.destroy(pong);
+                        },
+                        else => unreachable,
+                    };
                 } else {
                     log.err("could not enqueue pong message", .{});
                     pong.deref();
                     self.message_pool.destroy(pong);
                 }
             },
-            .Pong => {
+            .pong => {
                 log.debug("received pong {any}", .{message.headers.message_type});
             },
-            // .Request => {},
-            // .Reply => {},
-            // .Accept => {},
+            .request => {
+                // cast the headers into the correct headers type
+                const req_headers: *const Request = message.headers.intoConst(.request).?;
+
+                // drop this message if we have no idea who to end a pong back to
+                if (req_headers.origin_id == 0) {
+                    log.warn("received req message without an origin_id", .{});
+                    return;
+                }
+            },
+            // .reply => {},
+            // .accept => {},
             else => |t| {
                 log.err("received unhandled message type {any}", .{t});
                 @panic("reach unrecoverable state");
@@ -157,10 +166,10 @@ pub const MessageBus = struct {
         errdefer self.message_pool.destroy(accept_message);
 
         accept_message.* = Message.new();
-        accept_message.headers.message_type = .Accept;
+        accept_message.headers.message_type = .accept;
         accept_message.ref();
 
-        var accept_headers: *Accept = accept_message.headers.into(.Accept).?;
+        var accept_headers: *Accept = accept_message.headers.into(.accept).?;
         accept_headers.accepted_origin_id = conn_id;
         accept_headers.origin_id = self.id;
 
@@ -175,7 +184,18 @@ pub const MessageBus = struct {
         // const start = timer.read();
         // defer log.debug("self.processed_messages_count {d}", .{self.processed_messages_count});
         // defer log.debug("free messages {d}", .{self.message_pool.unassigned_queue.count});
-        // defer log.debug("tick took {d}us", .{(timer.read() - start) / std.time.ns_per_us});
+
+        // defer {
+        //     const end = timer.read();
+        //     // log.debug("tick took {d}ns", .{(end - start)});
+        //     log.debug("tick took {d}us", .{(end - start) / std.time.ns_per_us});
+        // }
+        // defer {
+        //     const total_time = (timer.read() - start) / std.time.ns_per_us;
+        //     if (total_time > 5) {
+        //         log.debug("tick took {d}us", .{total_time});
+        //     }
+        // }
 
         // try to lock the connections so that only this method can modify the existing list of connections
         if (self.connections_mutex.tryLock()) {
@@ -220,6 +240,7 @@ pub const MessageBus = struct {
             // if there are no items to process, then do nothing
             while (self.processing_queue.dequeue()) |message| {
                 assert(message.ref_count == 1);
+
                 // TODO: a timeout should be passed to handleMessage just in case?
                 try self.handleMessage(message);
 
@@ -233,8 +254,11 @@ pub const MessageBus = struct {
                 // TODO: we should check that messages aren't getting stuck in the system. I think that
                 // having a timestamp on each message as to when it was created might be an easy way to check
                 // but then you get into crazy time syncing problems
-            } else break; // exit if there are no more messages to be processed
-
+            } else {
+                return;
+            }
+        } else {
+            log.warn("unable to process all messages before processing_deadline. remaining messages in processing_queue {d}", .{self.processing_queue.count});
         }
     }
 };

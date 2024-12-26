@@ -8,30 +8,29 @@ const hash = @import("./hash.zig");
 const ProtocolError = @import("./errors.zig").ProtocolError;
 
 pub const MessageType = enum(u8) {
-    Undefined,
-    Request,
-    Reply,
-    Ping,
-    Pong,
-    Accept,
+    undefined,
+    request,
+    reply,
+    ping,
+    pong,
+    accept,
 };
 
 pub const ErrorCode = enum(u8) {
-    Undefined,
-    Ok,
-    Error,
-    Unauthorized,
-    Timeout,
-    MissingHandler,
+    undefined,
+    ok,
+    err,
+    unauthorized,
+    timeout,
 };
 
 pub const Compression = enum(u8) {
-    None,
-    Gzip,
+    none,
+    gzip,
 };
 
 pub const ProtocolVersion = enum(u8) {
-    Unsupported,
+    unsupported,
     v1,
 };
 
@@ -49,7 +48,7 @@ pub const Message = struct {
     // create an uninitialized message container
     pub fn new() Message {
         return Message{
-            .headers = Headers{ .message_type = .Undefined },
+            .headers = Headers{ .message_type = .undefined },
             .body_buffer = undefined,
             .next = null,
             .ref_count = 0,
@@ -94,8 +93,8 @@ pub const Message = struct {
         // ensure that the message is not already compressed
         if (self.headers.compressed) return error.AlreadyCompressed;
         switch (self.headers.compression) {
-            .None => {},
-            .Gzip => {
+            .none => {},
+            .gzip => {
                 const message_body = self.body();
 
                 // if the message.body is empty, do nothing and just return early this will be faster
@@ -130,10 +129,10 @@ pub const Message = struct {
     /// the consumer of the message body.
     pub fn decompress(self: *Self) !void {
         // ensure that the message is not already compressed
-        if (!self.headers.compressed and self.headers.compression != .None) return error.AlreadyDecompressed;
+        if (!self.headers.compressed and self.headers.compression != .none) return error.AlreadyDecompressed;
         switch (self.headers.compression) {
-            .None => {},
-            .Gzip => {
+            .none => {},
+            .gzip => {
                 const message_body = self.body();
                 // if the message.body is empty, do nothing and just return early this will be faster
                 // and can eliminate errors. This should be checked on the compress call
@@ -224,24 +223,24 @@ pub const Message = struct {
     // this is
     pub fn validate(self: Self) ?[]const u8 {
         return switch (self.headers.message_type) {
-            .Request => {
-                const headers: *const Request = self.headers.intoConst(.Request).?;
+            .request => {
+                const headers: *const Request = self.headers.intoConst(.request).?;
                 return headers.validate();
             },
-            .Reply => {
-                const headers: *const Reply = self.headers.intoConst(.Reply).?;
+            .reply => {
+                const headers: *const Reply = self.headers.intoConst(.reply).?;
                 return headers.validate();
             },
-            .Ping => {
-                const headers: *const Ping = self.headers.intoConst(.Ping).?;
+            .ping => {
+                const headers: *const Ping = self.headers.intoConst(.ping).?;
                 return headers.validate();
             },
-            .Pong => {
-                const headers: *const Pong = self.headers.intoConst(.Pong).?;
+            .pong => {
+                const headers: *const Pong = self.headers.intoConst(.pong).?;
                 return headers.validate();
             },
-            .Accept => {
-                const headers: *const Accept = self.headers.intoConst(.Accept).?;
+            .accept => {
+                const headers: *const Accept = self.headers.intoConst(.accept).?;
                 return headers.validate();
             },
             else => "unsupported message type",
@@ -256,8 +255,8 @@ pub const Headers = extern struct {
     origin_id: u128 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .Undefined,
-    compression: Compression = .None,
+    message_type: MessageType = .undefined,
+    compression: Compression = .none,
     compressed: bool = false,
     padding: [72]u8 = [_]u8{0} ** 72,
 
@@ -265,12 +264,12 @@ pub const Headers = extern struct {
 
     pub fn Type(comptime message_type: MessageType) type {
         return switch (message_type) {
-            .Request => Request,
-            .Reply => Reply,
-            .Ping => Ping,
-            .Pong => Pong,
-            .Accept => Accept,
-            .Undefined => unreachable,
+            .request => Request,
+            .reply => Reply,
+            .ping => Ping,
+            .pong => Pong,
+            .accept => Accept,
+            .undefined => unreachable,
         };
     }
 
@@ -328,8 +327,8 @@ pub const Request = extern struct {
     origin_id: u128 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .Request,
-    compression: Compression = .None,
+    message_type: MessageType = .request,
+    compression: Compression = .none,
     compressed: bool = false,
     padding: [72]u8 = [_]u8{0} ** 72,
 
@@ -338,10 +337,10 @@ pub const Request = extern struct {
     reserved: [112]u8 = [_]u8{0} ** 112,
 
     pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .Request);
+        assert(self.message_type == .request);
 
         // common headers
-        if (self.protocol_version == .Unsupported) return "invalid protocol_version";
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
         for (self.padding) |b| if (b != 0) return "invalid padding";
 
         // ensure this transaction is valid
@@ -363,26 +362,26 @@ pub const Reply = extern struct {
     origin_id: u128 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .Reply,
-    compression: Compression = .None,
+    message_type: MessageType = .reply,
+    compression: Compression = .none,
     compressed: bool = false,
     padding: [72]u8 = [_]u8{0} ** 72,
 
     transaction_id: u128 = 0,
-    error_code: ErrorCode = .Ok,
+    error_code: ErrorCode = .ok,
 
     reserved: [111]u8 = [_]u8{0} ** 111,
 
     pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .Reply);
+        assert(self.message_type == .reply);
 
         // common headers
-        if (self.protocol_version == .Unsupported) return "invalid protocol_version";
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
         for (self.padding) |b| if (b != 0) return "invalid padding";
 
         // ensure this transaction is valid
         if (self.transaction_id == 0) return "invalid transaction_id";
-        if (self.error_code == .Undefined) return "invalid error_code";
+        if (self.error_code == .undefined) return "invalid error_code";
 
         // ensure reserved is empty
         for (self.reserved) |b| if (b != 0) return "invalid reserved";
@@ -401,8 +400,8 @@ pub const Ping = extern struct {
     origin_id: u128 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .Ping,
-    compression: Compression = .None,
+    message_type: MessageType = .ping,
+    compression: Compression = .none,
     compressed: bool = false,
     padding: [72]u8 = [_]u8{0} ** 72,
 
@@ -411,11 +410,11 @@ pub const Ping = extern struct {
     reserved: [112]u8 = [_]u8{0} ** 112,
 
     pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .Ping);
+        assert(self.message_type == .ping);
 
         // common headers
         if (self.body_length > 0) return "invalid body_length";
-        if (self.protocol_version == .Unsupported) return "invalid protocol_version";
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
         for (self.padding) |b| if (b != 0) return "invalid padding";
 
         // ensure this transaction is valid
@@ -438,27 +437,27 @@ pub const Pong = extern struct {
     origin_id: u128 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .Pong,
-    compression: Compression = .None,
+    message_type: MessageType = .pong,
+    compression: Compression = .none,
     compressed: bool = false,
     padding: [72]u8 = [_]u8{0} ** 72,
 
     transaction_id: u128 = 0,
-    error_code: ErrorCode = .Ok,
+    error_code: ErrorCode = .ok,
 
     reserved: [111]u8 = [_]u8{0} ** 111,
 
     pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .Pong);
+        assert(self.message_type == .pong);
 
         // common headers
         if (self.body_length > 0) return "invalid body_length";
-        if (self.protocol_version == .Unsupported) return "invalid protocol_version";
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
         for (self.padding) |b| if (b != 0) return "invalid padding";
 
         // ensure this transaction is valid
         if (self.transaction_id == 0) return "invalid transaction_id";
-        if (self.error_code == .Undefined) return "invalid error_code";
+        if (self.error_code == .undefined) return "invalid error_code";
 
         // ensure reserved is empty
         for (self.reserved) |b| if (b != 0) return "invalid reserved";
@@ -479,8 +478,8 @@ pub const Accept = extern struct {
     origin_id: u128 = 0, // this will be the node_id
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .Accept,
-    compression: Compression = .None,
+    message_type: MessageType = .accept,
+    compression: Compression = .none,
     compressed: bool = false,
     padding: [72]u8 = [_]u8{0} ** 72,
 
@@ -489,10 +488,10 @@ pub const Accept = extern struct {
     reserved: [112]u8 = [_]u8{0} ** 112,
 
     pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .Accept);
+        assert(self.message_type == .accept);
 
         // common headers
-        if (self.protocol_version == .Unsupported) return "invalid protocol_version";
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
         for (self.padding) |b| if (b != 0) return "invalid padding";
 
         // ensure the origin_id is valid

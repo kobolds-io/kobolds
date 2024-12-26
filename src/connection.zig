@@ -10,7 +10,9 @@ const constants = @import("constants.zig");
 
 const Message = @import("./message.zig").Message;
 const Parser = @import("./parser.zig").Parser;
-const MessagePool = @import("message_pool.zig").MessagePool;
+
+// TODO: this should just receive a message allocator and not a specific "message_pool"
+const MessagePool = @import("./message_pool.zig").MessagePool;
 const MessageQueue = @import("./data_structures//message_queue.zig").MessageQueue;
 const ProtocolError = @import("./errors.zig").ProtocolError;
 const IO = @import("./io.zig").IO;
@@ -102,11 +104,11 @@ pub const Connection = struct {
         self.allocator.destroy(self.send_completion);
         self.allocator.destroy(self.close_completion);
 
-        self.inbox_mutex.lock();
-        defer self.inbox_mutex.unlock();
-
-        self.outbox_mutex.lock();
-        defer self.outbox_mutex.unlock();
+        // self.inbox_mutex.lock();
+        // defer self.inbox_mutex.unlock();
+        //
+        // self.outbox_mutex.lock();
+        // defer self.outbox_mutex.unlock();
 
         while (self.inbox.dequeue()) |message_ptr| {
             message_ptr.deref();
@@ -137,7 +139,7 @@ pub const Connection = struct {
                 }
 
                 // TODO: Cancel send submission if there is one
-                // TODO: Cancel read submission if there is one
+                // TODO: Cancel recv submission if there is one
 
                 // break out of the tick
                 return;
@@ -234,13 +236,13 @@ pub const Connection = struct {
         self.parser.parse(&messages, self.recv_buffer[0..bytes]) catch |err| switch (err) {
             ProtocolError.InvalidHeadersChecksum, ProtocolError.InvalidBodyChecksum => {
                 // log.debug("corrupted message found bytes: {any}", .{self.recv_buffer[0..bytes]});
-                // log.debug("corrupted message found err: {any}", .{err});
+                log.debug("corrupted message found err: {any}", .{err});
                 // close this connection
                 self.state = .close;
                 return;
             },
             else => {
-                // this is the case where the message isn't corrupted, we just can't parse it
+                // this is the case where the message isn't corrupted, we just can't parse it for whatever reason
                 log.debug("unable to parse messages {any}", .{err});
             },
 
@@ -265,8 +267,7 @@ pub const Connection = struct {
                 return;
             }
 
-            // NOTE: This is the first time this message enters the system and should
-            // immediately be referenced
+            // NOTE: This is the first time this message enters the system and should immediately be referenced
             const message_ptr = self.message_pool.create() catch |err| {
                 log.err("inbox message_pool.create() returned err: {any}", .{err});
                 log.err("dropping {d} messages", .{messages.items.len - i});

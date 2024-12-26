@@ -11,6 +11,9 @@ const Accept = @import("./message.zig").Accept;
 const Pong = @import("./message.zig").Pong;
 const Ping = @import("./message.zig").Ping;
 
+const Reqeust = @import("./message.zig").Request;
+const Reply = @import("./message.zig").Reply;
+
 const Compression = @import("./message.zig").Compression;
 const MessagePool = @import("./message_pool.zig").MessagePool;
 const MessageQueue = @import("./data_structures/message_queue.zig").MessageQueue;
@@ -26,7 +29,7 @@ pub const ClientConfig = struct {
     port: u16 = 8000,
 
     /// default compression applied to the bodies of messages
-    compression: Compression = .None,
+    compression: Compression = .none,
 };
 
 pub const Client = struct {
@@ -191,13 +194,13 @@ pub const Client = struct {
 
     pub fn handleMessage(self: *Client, message: *Message) !void {
         switch (message.headers.message_type) {
-            .Accept => {
+            .accept => {
                 // ensure that we have not already set this origin_id
                 log.debug("self.connection.origin_id {}", .{self.connection.id});
                 assert(self.connection.id == 0);
 
                 // cast the headers into the correct headers type
-                const accept_headers: *const Accept = message.headers.intoConst(.Accept).?;
+                const accept_headers: *const Accept = message.headers.intoConst(.accept).?;
 
                 // ensure that we are not getting some messed up message
                 assert(accept_headers.origin_id != accept_headers.accepted_origin_id);
@@ -212,10 +215,10 @@ pub const Client = struct {
 
                 // cast the message to the correct type
             },
-            .Pong => {
+            .pong => {
 
                 // cast the headers into the correct headers type
-                const pong_headers: *const Pong = message.headers.intoConst(.Pong).?;
+                const pong_headers: *const Pong = message.headers.intoConst(.pong).?;
 
                 _ = pong_headers;
 
@@ -231,25 +234,51 @@ pub const Client = struct {
     pub fn ping(self: *Client) !void {
         if (!self.connected or !self.accepted) return ProtocolError.ConnectionClosed;
 
+        // FIX: this is just a hack
+        if (self.message_pool.unassigned_queue.count < 50) return;
+
         const message = try self.message_pool.create();
         errdefer self.message_pool.destroy(message);
 
         // construct a ping message
         message.* = Message.new();
-        message.headers.message_type = .Ping;
+        message.headers.message_type = .ping;
         message.headers.compression = self.config.compression;
 
-        var ping_headers: *Ping = message.headers.into(.Ping).?;
+        var ping_headers: *Ping = message.headers.into(.ping).?;
         ping_headers.transaction_id = uuid.v7.new();
 
         // compress the message according to the compression scheme
         try message.compress();
 
-        try self.request(message);
+        try self.enqueue_send_message(message);
+    }
+
+    pub fn request(self: *Client, topic: []const u8, body: []const u8) !void {
+        _ = topic;
+        if (!self.connected or !self.accepted) return ProtocolError.ConnectionClosed;
+
+        const message = try self.message_pool.create();
+        errdefer self.message_pool.destroy(message);
+
+        // construct a ping message
+        message.* = Message.new();
+        message.headers.message_type = .request;
+        message.headers.compression = .gzip;
+
+        var req_headers: *Reqeust = message.headers.into(.request).?;
+        req_headers.transaction_id = uuid.v7.new();
+
+        message.setBody(body);
+
+        // compress the message according to the compression scheme
+        try message.compress();
+
+        try self.enqueue_send_message(message);
     }
 
     // TODO: this should return a Request struct
-    pub fn request(self: *Client, message: *Message) !void {
+    pub fn enqueue_send_message(self: *Client, message: *Message) !void {
         if (!self.connected or !self.accepted) return ProtocolError.ConnectionClosed;
 
         message.headers.origin_id = self.connection.id;

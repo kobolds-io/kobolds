@@ -10,4 +10,6 @@ comptime {
     _ = @import("./utils.zig");
     _ = @import("./data_structures/message_queue.zig");
     _ = @import("./node.zig");
+    _ = @import("./message_pool.zig");
+    _ = @import("./message_bus.zig");
 }
