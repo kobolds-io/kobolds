@@ -6,10 +6,7 @@ const constants = @import("../constants.zig");
 const Mailbox = @import("../data_structures/mailbox.zig").Mailbox;
 const Message = @import("../message.zig").Message;
 
-const Node = @import("../node.zig").Node;
-const NodeConfig = @import("../node.zig").NodeConfig;
-
-const Node2 = @import("../node/node.zig").Node;
+const Node = @import("../node/node.zig").Node;
 const NodeConfig2 = @import("../node/node.zig").NodeConfig;
 
 const MessagePool = @import("../message_pool.zig").MessagePool;
@@ -18,12 +15,7 @@ const IO = @import("../io.zig").IO;
 const Client = @import("../client.zig").Client;
 const ClientConfig2 = @import("../client.zig").ClientConfig;
 
-var node_config = NodeConfig{
-    .host = "127.0.0.1",
-    .port = 8000,
-};
-
-var node_config2 = NodeConfig2{
+var node_config = NodeConfig2{
     .host = "127.0.0.1",
     .port = 8000,
     .worker_thread_count = 10,
@@ -62,37 +54,14 @@ pub fn run() !void {
                 .help = "port to bind to",
                 .value_ref = app_runner.mkRef(&node_config.port),
             },
-        },
-
-        .target = .{ .action = .{ .exec = nodeListen } },
-    };
-
-    const node_listen2_command = cli.Command{
-        .name = "listen2",
-        .description = cli.Description{
-            .one_line = "listen for new connections",
-            .detailed = "start a node and listen for incomming connections",
-        },
-
-        .options = &.{
-            .{
-                .long_name = "host",
-                .help = "host to listen on",
-                .value_ref = app_runner.mkRef(&node_config2.host),
-            },
-            .{
-                .long_name = "port",
-                .help = "port to bind to",
-                .value_ref = app_runner.mkRef(&node_config2.port),
-            },
             .{
                 .long_name = "workers",
                 .help = "worker threads to be spawned",
-                .value_ref = app_runner.mkRef(&node_config2.worker_thread_count),
+                .value_ref = app_runner.mkRef(&node_config.worker_thread_count),
             },
         },
 
-        .target = .{ .action = .{ .exec = nodeListen2 } },
+        .target = .{ .action = .{ .exec = nodeListen } },
     };
 
     const node_ping_command = cli.Command{
@@ -156,7 +125,6 @@ pub fn run() !void {
         .target = .{
             .subcommands = &.{
                 node_listen_command,
-                node_listen2_command,
                 node_ping_command,
                 node_request_command,
                 node_bench_command,
@@ -171,7 +139,6 @@ pub fn run() !void {
                 .one_line = "a quick and reliable messaging system",
                 .detailed = "Kobolds is a node based messaging system for communicating reliably between machines. Visit [URL] for more information ",
             },
-            //            .target = .{ .action = .{ .exec = runNoop } },
 
             .target = .{ .subcommands = &.{ node_root_command, version_root_command } },
         },
@@ -187,23 +154,12 @@ pub fn nodeListen() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var node = try Node.init(allocator, node_config);
-    defer node.deinit();
-
-    try node.run();
-}
-
-pub fn nodeListen2() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
-
     // validate the config
     const max_cpu_count = try std.Thread.getCpuCount();
-    assert(node_config2.worker_thread_count >= 1);
-    assert(node_config2.worker_thread_count <= max_cpu_count);
+    assert(node_config.worker_thread_count >= 1);
+    assert(node_config.worker_thread_count <= max_cpu_count);
 
-    var node = try Node2.init(allocator, node_config2);
+    var node = try Node.init(allocator, node_config);
     defer node.deinit();
 
     try node.run();
@@ -222,7 +178,7 @@ pub fn runPing() !void {
     defer _ = message_pool_gpa.deinit();
     const message_pool_allocator = message_pool_gpa.allocator();
 
-    var message_pool = try MessagePool.init(message_pool_allocator, 10_000);
+    var message_pool = try MessagePool.init(message_pool_allocator, constants.message_pool_max_size / 5);
     defer message_pool.deinit();
 
     var client = try Client.init(allocator, &io, &message_pool, client_config);
@@ -254,7 +210,7 @@ pub fn runRequest() !void {
     defer _ = message_pool_gpa.deinit();
     const message_pool_allocator = message_pool_gpa.allocator();
 
-    var message_pool = try MessagePool.init(message_pool_allocator, 10_000);
+    var message_pool = try MessagePool.init(message_pool_allocator, constants.message_pool_max_size / 5);
     defer message_pool.deinit();
 
     var client = try Client.init(allocator, &io, &message_pool, client_config);
@@ -307,7 +263,7 @@ pub fn runBench() !void {
     defer _ = message_pool_gpa.deinit();
     const message_pool_allocator = message_pool_gpa.allocator();
 
-    var message_pool = try MessagePool.init(message_pool_allocator, 10_000);
+    var message_pool = try MessagePool.init(message_pool_allocator, constants.message_pool_max_size / 5);
     defer message_pool.deinit();
 
     var client = try Client.init(allocator, &io, &message_pool, client_config);
@@ -322,7 +278,10 @@ pub fn runBench() !void {
     }
 
     while (true) {
-        std.time.sleep(100 * std.time.ns_per_ms);
+        if (client.connection.outbox.count > 0) {
+            std.time.sleep(100 * std.time.ns_per_ms);
+            continue;
+        }
         for (0..100) |_| {
             client.ping() catch |err| switch (err) {
                 error.ConnectionClosed => {

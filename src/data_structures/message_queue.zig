@@ -19,13 +19,13 @@ pub const MessageQueue = struct {
 
     /// this is used internally to track the size of the queue, don't modify outside of queue
     count: u32,
-    max_size: u32,
+    capacity: u32,
 
     pub fn new(max_size: ?u32) Self {
-        var max_size_ = constants.queue_size_default;
+        var capacity_ = constants.message_queue_capacity_default;
         if (max_size) |n| {
-            assert(n <= constants.queue_size_max);
-            max_size_ = n;
+            assert(n <= constants.message_queue_capacity_max);
+            capacity_ = n;
         }
 
         // ensure that the
@@ -33,7 +33,7 @@ pub const MessageQueue = struct {
             .head = null,
             .tail = null,
             .count = 0,
-            .max_size = max_size_,
+            .capacity = capacity_,
         };
     }
 
@@ -74,7 +74,7 @@ pub const MessageQueue = struct {
     pub fn prepend(self: *Self, message: *Message) QueueError!void {
         assert(message.next == null);
 
-        if (self.count == self.max_size) {
+        if (self.count == self.capacity) {
             return QueueError.QueueFull;
         }
 
@@ -98,7 +98,7 @@ pub const MessageQueue = struct {
         // ensure that the new item is fresh and not referencing anything
         assert(message.next == null);
 
-        if (self.count == self.max_size) {
+        if (self.count == self.capacity) {
             return QueueError.QueueFull;
         }
 
@@ -124,7 +124,7 @@ pub const MessageQueue = struct {
         if (messages.len == 0) return;
 
         // check if adding these messages would overflow the count
-        if (self.count + messages.len > self.max_size) return QueueError.QueueFull;
+        if (self.count + messages.len > self.capacity) return QueueError.QueueFull;
 
         // we are just going to loop over each message and assign next to the next message
         var current: *Message = undefined;
@@ -189,7 +189,7 @@ pub const MessageQueue = struct {
         if (other.isEmpty()) return;
 
         // ensure that the new messages will fit into this queue
-        assert(self.count + other.count <= self.max_size);
+        assert(self.count + other.count <= self.capacity);
 
         if (self.isEmpty()) {
             self.head = other.head;
@@ -207,7 +207,7 @@ pub const MessageQueue = struct {
 
         assert(self.head != null);
         assert(self.tail != null);
-        assert(self.count <= self.max_size);
+        assert(self.count <= self.capacity);
     }
 
     /// Dequeue many items at a time, this is just as fast as calling dequeue individually

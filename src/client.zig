@@ -16,6 +16,7 @@ const Reply = @import("./message.zig").Reply;
 
 const Compression = @import("./message.zig").Compression;
 const MessagePool = @import("./message_pool.zig").MessagePool;
+const RingBuffer = @import("./data_structures/ring_buffer.zig").RingBuffer;
 const MessageQueue = @import("./data_structures/message_queue.zig").MessageQueue;
 const Connection = @import("./connection.zig").Connection;
 const ProtocolError = @import("./errors.zig").ProtocolError;
@@ -53,12 +54,27 @@ pub const Client = struct {
     connected: bool,
     accepted: bool,
 
+    inbox: *MessageQueue,
+    outbox: *RingBuffer(*Message),
+
     loop_thread: std.Thread,
     shutdown: bool,
 
     pub fn init(allocator: std.mem.Allocator, io: *IO, message_pool: *MessagePool, config: ClientConfig) !Self {
         const connect_completion = try allocator.create(IO.Completion);
         errdefer allocator.destroy(connect_completion);
+
+        // create the inbox and outbox for the connection
+        const inbox = try allocator.create(MessageQueue);
+        errdefer allocator.destroy(inbox);
+
+        const outbox = try allocator.create(RingBuffer(*Message));
+        errdefer allocator.destroy(outbox);
+
+        inbox.* = MessageQueue.new(constants.message_queue_capacity_default);
+
+        outbox.* = RingBuffer(*Message).init(allocator, 5_000) catch unreachable;
+        errdefer outbox.deinit();
 
         return Self{
             .allocator = allocator,
@@ -72,6 +88,8 @@ pub const Client = struct {
             .connect_submitted = false,
             .connect_buf = undefined,
             .loop_thread = undefined,
+            .inbox = inbox,
+            .outbox = outbox,
             .shutdown = true,
         };
     }
@@ -85,6 +103,12 @@ pub const Client = struct {
             posix.close(self.socket);
             self.allocator.destroy(self.connection);
         }
+
+        self.inbox.clear();
+        self.outbox.deinit();
+
+        self.allocator.destroy(self.inbox);
+        self.allocator.destroy(self.outbox);
 
         self.shutdown = true;
     }
@@ -193,11 +217,11 @@ pub const Client = struct {
     }
 
     pub fn handleMessage(self: *Client, message: *Message) !void {
+        // log.info("received {any} message", .{message.headers.message_type});
         switch (message.headers.message_type) {
             .accept => {
                 // ensure that we have not already set this origin_id
-                log.debug("self.connection.origin_id {}", .{self.connection.id});
-                assert(self.connection.id == 0);
+                assert(self.connection.origin_id == 0);
 
                 // cast the headers into the correct headers type
                 const accept_headers: *const Accept = message.headers.intoConst(.accept).?;
@@ -205,22 +229,21 @@ pub const Client = struct {
                 // ensure that we are not getting some messed up message
                 assert(accept_headers.origin_id != accept_headers.accepted_origin_id);
 
-                self.connection.id = accept_headers.accepted_origin_id;
-
-                // This tells the connection to override the message.headers.origin_id to this connection's id
-                log.debug("received accept message from origin_id {}", .{accept_headers.origin_id});
-                log.debug("connection.origin_id set to {}", .{accept_headers.accepted_origin_id});
+                self.connection.origin_id = accept_headers.accepted_origin_id;
 
                 self.accepted = true;
 
                 // cast the message to the correct type
             },
             .pong => {
+                if (self.connection.messages_recv % 1_000 == 0) {
+                    log.debug("received pongs {}", .{self.connection.messages_recv});
+                }
 
                 // cast the headers into the correct headers type
-                const pong_headers: *const Pong = message.headers.intoConst(.pong).?;
+                // const pong_headers: *const Pong = message.headers.intoConst(.pong).?;
 
-                _ = pong_headers;
+                // _ = pong_headers;
 
                 // cast the message to the correct type
             },
@@ -281,7 +304,7 @@ pub const Client = struct {
     pub fn enqueue_send_message(self: *Client, message: *Message) !void {
         if (!self.connected or !self.accepted) return ProtocolError.ConnectionClosed;
 
-        message.headers.origin_id = self.connection.id;
+        message.headers.origin_id = self.connection.origin_id;
 
         // TODO: ensure that the message is a valid request message type
         // TODO: create a transaction for this request
@@ -310,14 +333,20 @@ pub const Client = struct {
             return;
         };
 
-        conn.* = Connection.init(client.message_pool, client.io, client.socket, client.allocator);
+        conn.* = Connection.init(
+            0,
+            client.io,
+            client.socket,
+            client.inbox,
+            client.outbox,
+            client.allocator,
+            client.message_pool,
+        );
 
         client.connection = conn;
         client.connected = true;
 
         log.info("connected {s}:{d}", .{ client.config.host, client.config.port });
-        // let's assume that we are connected?
-        // log.info("onConnect", .{});
     }
 };
 

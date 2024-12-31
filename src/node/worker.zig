@@ -1,105 +1,274 @@
 const std = @import("std");
+const posix = std.posix;
 const assert = std.debug.assert;
 const log = std.log.scoped(.Worker);
 
 const uuid = @import("uuid");
 
 const constants = @import("../constants.zig");
-const Message = @import("../message.zig").Message;
+
+const RingBuffer = @import("../data_structures/ring_buffer.zig").RingBuffer;
 const MessageQueue = @import("../data_structures/message_queue.zig").MessageQueue;
-
-// TODO: workers need to understand where a message should be routed. This
-// can be done by:
-//  - having a reference to all connections
-//  - tieing all messages to topics
-const Envelope = struct {
-    message: *Message,
-    destination: uuid.Uuid,
-    destination_type: DestinationType,
-};
-
-const DestinationType = enum {
-    topic,
-    service,
-    connection,
-    node,
-};
-
-// recv message
-// add message to processing queue
-// process_message
-//  1. figure out what kind of message it is
-//  2. wrap the message in an envelope
-//      - if connection -> route message directly to connection
-//      - if topic -> route message to topic handler
-//      - if service -> route message to service handler
-//      - if node -> route message to node handler
-//  3.
+const Message = @import("../message.zig").Message;
+const Accept = @import("../message.zig").Accept;
+const Connection = @import("../connection.zig").Connection;
+const Bus = @import("./bus.zig").Bus;
+const MessagePool = @import("../message_pool.zig").MessagePool;
+const IO = @import("../io.zig").IO;
 
 const WorkerState = enum {
-    busy,
-    idle,
+    running,
+    close,
     closed,
 };
 
-/// Worker that processes messages independent of threads
 pub const Worker = struct {
     const Self = @This();
+
+    node_id: uuid.Uuid,
+    allocator: std.mem.Allocator,
+    bus: *Bus,
+    message_pool: *MessagePool,
     id: u32,
-
-    /// Messages that have been fully processed and are ready to be dispatched
-    processed_messages: MessageQueue,
-
-    /// Messages that are yet to be processed
-    unprocessed_messages: MessageQueue,
-
-    // maybe this should be a read/write lock instead?
-    mutex: std.Thread.Mutex,
-
-    /// state of the worker
+    io: IO,
     state: WorkerState,
+    connections: std.AutoHashMap(uuid.Uuid, *Connection),
+    connections_mutex: std.Thread.Mutex,
+    inbox: MessageQueue,
+    inbox_mutex: std.Thread.Mutex,
 
-    processed_messages_count: u128,
+    pub fn init(
+        node_id: uuid.Uuid,
+        id: u32,
+        allocator: std.mem.Allocator,
+        bus: *Bus,
+        message_pool: *MessagePool,
+    ) !Self {
+        var io = try IO.init(8, 0);
+        errdefer io.deinit();
 
-    pub fn new(id: u32, queue_size: u32) Self {
         return Self{
+            .node_id = node_id,
+            .allocator = allocator,
             .id = id,
-            .processed_messages = MessageQueue.new(queue_size),
-            .unprocessed_messages = MessageQueue.new(queue_size),
-            .mutex = std.Thread.Mutex{},
-            .state = .idle,
-            .processed_messages_count = 0,
+            .io = io,
+            .connections_mutex = std.Thread.Mutex{},
+            .state = .closed,
+            .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
+            .inbox = MessageQueue.new(constants.message_queue_capacity_default),
+            .inbox_mutex = std.Thread.Mutex{},
+            .bus = bus,
+            .message_pool = message_pool,
         };
     }
 
-    pub fn tick(self: *Self) !void {
-        if (self.unprocessed_messages.count == 0) {
-            std.time.sleep(1 * std.time.ns_per_ms);
-            return;
+    pub fn deinit(self: *Self) void {
+        var connections_iter = self.connections.valueIterator();
+        while (connections_iter.next()) |conn_ptr| {
+            var conn = conn_ptr.*;
+
+            // the close function shuold have been called prior to the deinit
+            assert(conn.state == .closed);
+
+            // deinit the connection
+            conn.deinit();
+
+            // Destroy this connection
+            self.allocator.destroy(conn);
         }
 
-        // doing some work!
-        std.time.sleep(5 * std.time.ns_per_ms);
+        self.inbox_mutex.lock();
+        defer self.inbox_mutex.unlock();
 
-        self.processed_messages_count += self.unprocessed_messages.count;
+        while (self.inbox.dequeue()) |message| {
+            message.deref();
+        }
 
-        // FIX: actually process the message
-        self.processed_messages.concatenate(&self.unprocessed_messages);
-        self.unprocessed_messages.clear();
+        self.connections.deinit();
+        self.io.deinit();
+    }
 
-        // log.debug("worker {} processed {} messages", .{ self.id, self.processed_messages_count });
+    pub fn tick(self: *Self) !void {
+        if (self.connections_mutex.tryLock()) {
+            defer self.connections_mutex.unlock();
+
+            var conn_iter = self.connections.iterator();
+
+            while (conn_iter.next()) |entry| {
+                const conn = entry.value_ptr.*;
+
+                // remove this connection if it is already closed
+                if (conn.state == .closed) {
+                    conn.deinit();
+                    self.allocator.destroy(conn);
+                    _ = self.connections.remove(entry.key_ptr.*);
+                    continue;
+                }
+
+                // send or recv messages
+                try conn.tick();
+
+                if (conn.inbox.count > 0) {
+                    if (conn.inbox.count + self.inbox.count < self.inbox.capacity) {
+                        self.inbox_mutex.lock();
+                        defer self.inbox_mutex.unlock();
+
+                        // take all the messages in the inbox
+                        self.inbox.concatenate(conn.inbox);
+
+                        // clear the inbox completely
+                        conn.inbox.clear();
+                    }
+                }
+            }
+        }
+
+        // if (self.outbox.count > 0) {
+        //     log.debug("worker inbox count {}", .{self.inbox.count});
+        // }
+
+        // log.debug("bus {*}", .{self.bus});
+        // log.debug("bus_work_queue {*}", .{self.bus_work_queue});
+        // FIX: there is an issue with the worker referencing the bus' work queue. Do i need to pass a direct ref?
+
+        // log.debug("bus.work_queue.count {}", .{bus.work_queue.count});
+
+        // if (self.inbox.count == 0) return;
+        //
+        // // try to put all of the messages on this worker on the main bus' work_queue
+        // // if there is enough space to accomodate the messages in the worker queue
+        // if (self.inbox.count + self.work_queue.count < self.work_queue.capacity) {
+        //     self.work_queue_mutex.lock();
+        //     defer self.work_queue_mutex.unlock();
+        //
+        //     // have the worker push all of the messages to the message bus
+        //     self.work_queue.concatenate(&self.inbox);
+        //     self.inbox.clear();
+        //     // } else {
+        //     //     log.info("skipping worker {} due to bus.work_queue being too full", .{self.id});
+        // }
     }
 
     pub fn run(self: *Self) void {
+        assert(self.state != .running);
+
+        self.state = .running;
+        log.info("worker {} running", .{self.id});
+        defer log.debug("worker shutting down {}. state: {any}", .{ self.id, self.state });
+
         while (true) {
-            self.tick() catch unreachable;
+            switch (self.state) {
+                .running => {
+                    self.tick() catch |err| {
+                        log.err("worker.tick err {any}", .{err});
+                        unreachable;
+                    };
+                },
+                .close => {
+                    self.connections_mutex.lock();
+                    defer self.connections_mutex.unlock();
+
+                    // check if every connection is closed
+                    var all_connections_closed = true;
+
+                    var conn_iter = self.connections.valueIterator();
+                    while (conn_iter.next()) |conn_ptr| {
+                        var conn = conn_ptr.*;
+                        switch (conn.state) {
+                            .closed => continue,
+                            .close => {
+                                all_connections_closed = false;
+                                continue;
+                            },
+                            .ready => {
+                                conn.state = .close;
+                                all_connections_closed = false;
+                                continue;
+                            },
+                        }
+
+                        try conn.tick();
+                    }
+
+                    if (all_connections_closed) {
+                        self.state = .closed;
+                        return;
+                    }
+                },
+                .closed => return, // do nothing and exit this loop
+            }
+
+            self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
         }
     }
 
-    /// Shutdown immediately stops processing any new messages and removes them from the unprocessed queue.
-    /// It also changes the state of the worker to a shutdown state which doesn't allow new work to happen.
-    /// It is up to the caller to handle the messages that are locked in the processing & unprocessed queues.
     pub fn close(self: *Self) void {
-        self.state = .closed;
+        assert(self.state == .running);
+
+        self.state = .close;
+
+        // give this worker `n` ms to closed before we are going to just timeout
+        const closed_deadline = std.time.milliTimestamp() + 1_000;
+
+        // block until the worker fully closes
+        // while (self.state != .closed) {
+        while (self.state != .closed and std.time.milliTimestamp() < closed_deadline) {
+            std.time.sleep(1 * std.time.ns_per_ms);
+            // log.debug("waiting worker.id {}", .{self.id});
+        }
+
+        if (self.state == .closed) return;
+
+        log.warn("worker did not properly close all id: {}. deadline exceeded", .{self.id});
+    }
+
+    pub fn addConnection(
+        self: *Self,
+        conn_id: uuid.Uuid,
+        socket: posix.socket_t,
+        inbox: *MessageQueue,
+        outbox: *RingBuffer(*Message),
+    ) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        // create the actual connection
+        const conn = self.allocator.create(Connection) catch unreachable;
+        errdefer self.allocator.destroy(conn);
+
+        conn.* = Connection.init(
+            conn_id,
+            &self.io,
+            socket,
+            inbox,
+            outbox,
+            self.allocator,
+            self.message_pool,
+        );
+        errdefer conn.deinit();
+
+        // add a ref to this connection
+        self.connections.put(conn_id, conn) catch unreachable;
+
+        // add an accept message to this connection's inbox immediately
+        const accept_message = self.message_pool.create() catch |err| {
+            log.err("unable to create an accept message for connection {any}", .{err});
+            conn.state = .close;
+            return;
+        };
+
+        accept_message.* = Message.new();
+        accept_message.headers.message_type = .accept;
+        accept_message.ref();
+
+        var accept_headers: *Accept = accept_message.headers.into(.accept).?;
+        accept_headers.accepted_origin_id = conn_id;
+        accept_headers.origin_id = self.node_id;
+
+        log.debug("accept message ref_count {}", .{accept_message.ref_count});
+
+        conn.outbox.enqueue(accept_message) catch unreachable;
+
+        log.info("accepted a connection {}", .{conn.origin_id});
     }
 };

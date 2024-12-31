@@ -95,7 +95,7 @@ const MessageQueueEnqueueBenchmark = struct {
     }
 
     pub fn run(self: Self, _: std.mem.Allocator) void {
-        var queue = MessageQueue.new(constants.queue_size_max);
+        var queue = MessageQueue.new(constants.message_queue_capacity_max);
         assert(queue.isEmpty());
         for (self.messages.items) |*message| {
             // quickly reset the message
@@ -103,7 +103,7 @@ const MessageQueueEnqueueBenchmark = struct {
             queue.enqueue(message) catch unreachable;
         }
 
-        assert(queue.count == constants.queue_size_max);
+        assert(queue.count == constants.message_queue_capacity_max);
     }
 };
 
@@ -119,7 +119,7 @@ const MessageQueueDequeueBenchmark = struct {
     }
 
     pub fn run(self: MessageQueueDequeueBenchmark, _: std.mem.Allocator) void {
-        assert(self.queue.count == constants.queue_size_max);
+        assert(self.queue.count == constants.message_queue_capacity_max);
 
         for (self.messages.items) |*message| {
             const next = message.next;

@@ -86,6 +86,42 @@ pub const Message = struct {
         self.headers.body_length = @intCast(v.len);
     }
 
+    pub fn setTopic(self: *Self, v: []const u8) ProtocolError!void {
+        switch (self.headers.message_type) {
+            .request => {
+                if (v.len > constants.message_max_topic_name_size) return ProtocolError.InvalidTopicLength;
+
+                var req_headers: *Request = self.headers.into(.request).?;
+
+                @memcpy(req_headers.topic_name[0..v.len], v);
+                req_headers.topic_name_length = @intCast(v.len);
+            },
+            .reply => {
+                if (v.len > constants.message_max_topic_name_size) return ProtocolError.InvalidTopicLength;
+
+                var rep_headers: *Reply = self.headers.into(.reply).?;
+
+                @memcpy(rep_headers.topic_name[0..v.len], v);
+                rep_headers.topic_name_length = @intCast(v.len);
+            },
+            else => return ProtocolError.InvalidMessageOperation,
+        }
+    }
+
+    pub fn topic(self: *Self) ProtocolError![]const u8 {
+        switch (self.headers.message_type) {
+            .request => {
+                var req_headers: *Request = self.headers.into(.request).?;
+                return req_headers.topic_name[0..@intCast(req_headers.topic_name_length)];
+            },
+            .reply => {
+                var rep_headers: *Reply = self.headers.into(.reply).?;
+                return rep_headers.topic_name[0..@intCast(rep_headers.topic_name_length)];
+            },
+            else => return ProtocolError.InvalidMessageOperation,
+        }
+    }
+
     /// Compresses the body of the message according to the compression algorithim set in message headers.
     /// Does not allow for overcompression which would put the message body in an unknowable state for
     /// the consumer of the message body.
@@ -333,8 +369,10 @@ pub const Request = extern struct {
     padding: [72]u8 = [_]u8{0} ** 72,
 
     transaction_id: u128 = 0,
+    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
+    topic_name_length: u8 = 0,
 
-    reserved: [112]u8 = [_]u8{0} ** 112,
+    reserved: [47]u8 = [_]u8{0} ** 47,
 
     pub fn validate(self: @This()) ?[]const u8 {
         assert(self.message_type == .request);
@@ -345,6 +383,9 @@ pub const Request = extern struct {
 
         // ensure this transaction is valid
         if (self.transaction_id == 0) return "invalid transaction_id";
+
+        // ensure this topic_name is valid (no empty topic_names allowed)
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
 
         // ensure reserved is empty
         for (self.reserved) |b| if (b != 0) return "invalid reserved";
@@ -368,9 +409,11 @@ pub const Reply = extern struct {
     padding: [72]u8 = [_]u8{0} ** 72,
 
     transaction_id: u128 = 0,
+    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
+    topic_name_length: u8 = 0,
     error_code: ErrorCode = .ok,
 
-    reserved: [111]u8 = [_]u8{0} ** 111,
+    reserved: [46]u8 = [_]u8{0} ** 46,
 
     pub fn validate(self: @This()) ?[]const u8 {
         assert(self.message_type == .reply);
@@ -381,6 +424,10 @@ pub const Reply = extern struct {
 
         // ensure this transaction is valid
         if (self.transaction_id == 0) return "invalid transaction_id";
+
+        // ensure this topic_name is valid (no empty topic_names allowed)
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+
         if (self.error_code == .undefined) return "invalid error_code";
 
         // ensure reserved is empty

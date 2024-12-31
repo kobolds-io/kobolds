@@ -24,16 +24,18 @@ pub const MessagePool = struct {
     /// backing array list that actually holds the value of each message
     messages: std.ArrayList(Message),
 
+    mutex: std.Thread.Mutex,
+
     pub fn init(allocator: std.mem.Allocator, message_pool_size: u32) !MessagePool {
         assert(message_pool_size <= constants.message_pool_max_size);
         assert(message_pool_size > 0);
 
         var unassigned_queue = MessageQueue.new(message_pool_size);
-        var messages = try std.ArrayList(Message).initCapacity(allocator, unassigned_queue.max_size);
+        var messages = try std.ArrayList(Message).initCapacity(allocator, unassigned_queue.capacity);
         errdefer messages.deinit();
 
         // fill the messages list with unintialized messages
-        for (0..unassigned_queue.max_size) |_| {
+        for (0..unassigned_queue.capacity) |_| {
             messages.appendAssumeCapacity(Message.new());
         }
 
@@ -42,17 +44,21 @@ pub const MessagePool = struct {
         }
 
         // ensure that the free queue is fully stocked with free messages
-        assert(unassigned_queue.count == unassigned_queue.max_size);
+        assert(unassigned_queue.count == unassigned_queue.capacity);
         assert(messages.items.len == unassigned_queue.count);
 
         return MessagePool{
             .messages = messages,
             .assigned_map = std.AutoHashMap(*Message, bool).init(allocator),
             .unassigned_queue = unassigned_queue,
+            .mutex = std.Thread.Mutex{},
         };
     }
 
     pub fn deinit(self: *MessagePool) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         self.unassigned_queue.reset();
         self.assigned_map.deinit();
         self.messages.deinit();
@@ -73,6 +79,9 @@ pub const MessagePool = struct {
     }
 
     pub fn create(self: *MessagePool) !*Message {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         if (self.unassigned_queue.count == 0) return error.OutOfMemory;
         if (self.unassigned_queue.dequeue()) |ptr| {
             try self.assigned_map.put(ptr, true);
@@ -85,7 +94,37 @@ pub const MessagePool = struct {
         } else unreachable;
     }
 
+    pub fn createN(self: *MessagePool, n: u32) ![]*Message {
+        const max_size = (500 * @sizeOf(*Message));
+        // this is the max size of the backing buffer
+        assert(n < max_size);
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.unassigned_queue.count + n < self.unassigned_queue.capacity) return error.OutOfMemory;
+
+        var buf: [max_size]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        const allocator = fba.allocator();
+
+        var list = try std.ArrayList(*Message).initCapacity(allocator, n);
+
+        var i: u32 = 0;
+        while (i < n) {
+            if (self.unassigned_queue.dequeue()) |message_ptr| {
+                list.appendAssumeCapacity(message_ptr);
+            }
+            i += 1;
+        }
+
+        return list.items;
+    }
+
     pub fn destroy(self: *MessagePool, message_ptr: *Message) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         assert(message_ptr.ref_count == 0);
 
         // free the ptr from the assinged queue and give it back to the unassigned queue

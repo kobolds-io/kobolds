@@ -13,7 +13,8 @@ const Parser = @import("./parser.zig").Parser;
 
 // TODO: this should just receive a message allocator and not a specific "message_pool"
 const MessagePool = @import("./message_pool.zig").MessagePool;
-const MessageQueue = @import("./data_structures//message_queue.zig").MessageQueue;
+const MessageQueue = @import("./data_structures/message_queue.zig").MessageQueue;
+const RingBuffer = @import("./data_structures/ring_buffer.zig").RingBuffer;
 const ProtocolError = @import("./errors.zig").ProtocolError;
 const IO = @import("./io.zig").IO;
 
@@ -24,44 +25,38 @@ const ConnectionState = enum {
 };
 
 pub const Connection = struct {
-    id: uuid.Uuid,
-    socket: posix.socket_t,
-    message_pool: *MessagePool,
+    allocator: std.mem.Allocator,
+    bytes_recv: u128,
+    bytes_sent: u128,
+    close_completion: *IO.Completion,
+    close_submitted: bool,
+    inbox: *MessageQueue,
+    inbox_mutex: std.Thread.Mutex,
     io: *IO,
-
+    message_pool: *MessagePool,
+    messages_recv: u128,
+    messages_sent: u128,
+    origin_id: uuid.Uuid,
+    outbox_mutex: std.Thread.Mutex,
+    outbox: *RingBuffer(*Message),
+    parser: Parser,
+    recv_buffer: []u8,
+    recv_completion: *IO.Completion,
+    recv_submitted: bool,
+    send_buffer: []u8,
+    send_completion: *IO.Completion,
+    send_submitted: bool,
+    socket: posix.socket_t,
     state: ConnectionState,
 
-    recv_submitted: bool,
-    recv_completion: *IO.Completion,
-    recv_buffer: [constants.connection_recv_buffer_size]u8,
-
-    send_submitted: bool,
-    send_completion: *IO.Completion,
-    send_buffer: [constants.connection_send_buffer_size]u8,
-
-    close_submitted: bool,
-    close_completion: *IO.Completion,
-
-    parser: Parser,
-
-    allocator: std.mem.Allocator,
-
-    inbox: MessageQueue,
-    outbox: MessageQueue,
-
-    inbox_mutex: std.Thread.Mutex,
-    outbox_mutex: std.Thread.Mutex,
-
-    bytes_sent: u128,
-    bytes_recv: u128,
-    messages_sent: u128,
-    messages_recv: u128,
-
     pub fn init(
-        message_pool: *MessagePool,
+        id: uuid.Uuid,
         io: *IO,
         socket: posix.socket_t,
+        inbox: *MessageQueue,
+        outbox: *RingBuffer(*Message),
         allocator: std.mem.Allocator,
+        message_pool: *MessagePool,
     ) Connection {
         const recv_completion = allocator.create(IO.Completion) catch unreachable;
         errdefer allocator.destroy(recv_completion);
@@ -72,30 +67,36 @@ pub const Connection = struct {
         const close_completion = allocator.create(IO.Completion) catch unreachable;
         errdefer allocator.destroy(close_completion);
 
+        const recv_buffer = allocator.alloc(u8, constants.connection_recv_buffer_size) catch unreachable;
+        errdefer allocator.free(recv_buffer);
+
+        const send_buffer = allocator.alloc(u8, constants.connection_send_buffer_size) catch unreachable;
+        errdefer allocator.free(send_buffer);
+
         return Connection{
-            .id = 0,
-            .message_pool = message_pool,
+            .allocator = allocator,
+            .bytes_recv = 0,
+            .bytes_sent = 0,
+            .close_completion = close_completion,
+            .close_submitted = false,
+            .inbox = inbox,
+            .inbox_mutex = std.Thread.Mutex{},
             .io = io,
+            .message_pool = message_pool,
+            .messages_recv = 0,
+            .messages_sent = 0,
+            .origin_id = id,
+            .outbox_mutex = std.Thread.Mutex{},
+            .outbox = outbox,
+            .parser = Parser.init(allocator),
+            .recv_buffer = recv_buffer,
+            .recv_completion = recv_completion,
+            .recv_submitted = false,
+            .send_buffer = send_buffer,
+            .send_completion = send_completion,
+            .send_submitted = false,
             .socket = socket,
             .state = .ready,
-            .recv_submitted = false,
-            .recv_completion = recv_completion,
-            .recv_buffer = undefined,
-            .send_submitted = false,
-            .send_completion = send_completion,
-            .send_buffer = undefined,
-            .close_submitted = false,
-            .close_completion = close_completion,
-            .parser = Parser.init(allocator),
-            .allocator = allocator,
-            .inbox = MessageQueue.new(null),
-            .outbox = MessageQueue.new(null),
-            .inbox_mutex = std.Thread.Mutex{},
-            .outbox_mutex = std.Thread.Mutex{},
-            .bytes_sent = 0,
-            .bytes_recv = 0,
-            .messages_sent = 0,
-            .messages_recv = 0,
         };
     }
 
@@ -104,23 +105,32 @@ pub const Connection = struct {
         self.allocator.destroy(self.send_completion);
         self.allocator.destroy(self.close_completion);
 
+        self.allocator.free(self.recv_buffer);
+        self.allocator.free(self.send_buffer);
+
         // self.inbox_mutex.lock();
         // defer self.inbox_mutex.unlock();
         //
         // self.outbox_mutex.lock();
         // defer self.outbox_mutex.unlock();
 
-        while (self.inbox.dequeue()) |message_ptr| {
-            message_ptr.deref();
-            self.message_pool.destroy(message_ptr);
-        }
+        // FIX: Ensure inbox and outbox are properly destroyed
 
-        while (self.outbox.dequeue()) |message| {
-            message.deref();
-            self.message_pool.destroy(message);
-        }
-
-        // log.debug("remaining messages in message_pool {d}", .{self.message_pool.unassigned_queue.count});
+        // while (self.inbox.dequeue()) |message| {
+        //     message.deref();
+        //     // self.message_pool.destroy(message_ptr);
+        // }
+        //
+        // while (self.outbox.dequeue()) |message| {
+        //     message.deref();
+        // }
+        //
+        // // completely reset the inbox and outbox
+        // self.inbox.deinit();
+        //
+        // // log.debug("remaining messages in message_pool {d}", .{self.message_pool.unassigned_queue.count});
+        //
+        // self.outbox.deinit();
 
         self.parser.deinit();
     }
@@ -156,14 +166,14 @@ pub const Connection = struct {
                 Connection.onRecv,
                 self.recv_completion,
                 self.socket,
-                &self.recv_buffer,
+                self.recv_buffer,
             );
 
             self.recv_submitted = true;
         }
 
-        if (!self.send_submitted and !self.outbox.isEmpty()) {
-            var fba = std.heap.FixedBufferAllocator.init(&self.send_buffer);
+        if (!self.send_submitted and self.outbox.count > 0) {
+            var fba = std.heap.FixedBufferAllocator.init(self.send_buffer);
             const allocator = fba.allocator();
 
             var send_buffer_list = try std.ArrayList(u8).initCapacity(allocator, self.send_buffer.len);
@@ -174,12 +184,13 @@ pub const Connection = struct {
             // buffer that will hold any encoded message
             var buf: [constants.message_max_size]u8 = undefined;
 
-            while (self.outbox.dequeue()) |message| {
-                assert(message.ref_count >= 1);
+            var i: usize = 0;
+            // FIX: popping the LAST message is dumb. Should get the first message like a fifo queue.
+            while (self.outbox.dequeue()) |message| : (i += 1) {
                 const message_size = message.size();
+                // check if adding this message to the send queue would exeed it's capacity
                 if (send_buffer_list.items.len + message_size > send_buffer_list.capacity) {
-                    // we should push this message back to the head of the queue and break this loop;
-                    self.outbox.prepend(message) catch unreachable;
+                    try self.outbox.enqueue(message);
                     break;
                 }
 
@@ -192,12 +203,11 @@ pub const Connection = struct {
                 send_buffer_list.appendSliceAssumeCapacity(buf[0..message_size]);
 
                 message.deref();
-
                 if (message.ref_count == 0) {
                     self.message_pool.destroy(message);
-                } else {
-                    log.debug("dangling connection.outbox message! type: {any} ref: {any}", .{ message.headers.message_type, message.ref_count });
                 }
+
+                // FIX: need a way to ensure this message is destroyed
             }
 
             self.io.send(
@@ -257,7 +267,32 @@ pub const Connection = struct {
         self.inbox_mutex.lock();
         defer self.inbox_mutex.unlock();
 
+        // TODO: allocate all messages at the same time instead of serially
+        // TODO: enqueue all messages in the inbox simultaneously
+
+        // const ptrs = self.message_pool.createN(@intCast(messages.items.len)) catch unreachable;
+        //
+        // assert(ptrs.len == messages.items.len);
+        //
+        // for (ptrs, messages.items) |ptr, message| {
+        //     const reason_opt = message.validate();
+        //     if (reason_opt) |reason| {
+        //         // change the state to .close and exit this block
+        //         // on the next iteration of the loop this connection will be closed
+        //         self.state = .close;
+        //         log.err("invalid message: {s}", .{reason});
+        //         return;
+        //     }
+        //
+        //     ptr.* = message;
+        //     ptr.*.ref();
+        // }
+        //
+        // self.inbox.enqueueMany(ptrs) catch unreachable;
+
         for (messages.items, 0..) |message, i| {
+            // log.debug("received message {any}", .{message.headers.message_type});
+
             const reason_opt = message.validate();
             if (reason_opt) |reason| {
                 // change the state to .close and exit this block
@@ -294,7 +329,7 @@ pub const Connection = struct {
         }
 
         self.recv_submitted = false;
-        self.recv_buffer = undefined;
+        // self.recv_buffer = undefined;
     }
 
     pub fn onRecvTimeout(self: *Connection, comp: *IO.Completion, res: IO.TimeoutError!void) void {
@@ -302,7 +337,7 @@ pub const Connection = struct {
         _ = res catch 0;
 
         self.recv_submitted = false;
-        self.recv_buffer = undefined;
+        // self.recv_buffer = undefined;
 
         // std.debug.print("onRecvTimeout!\n", .{});
     }
@@ -324,11 +359,18 @@ pub const Connection = struct {
                 }
             }
 
+            // while (self.outbox.dequeue()) |message| {
+            //     message.deref();
+            //     if (message.ref_count == 0) {
+            //         self.message_pool.destroy(message);
+            //     }
+            // }
+
             self.state = .close;
         }
 
         self.send_submitted = false;
-        self.send_buffer = undefined;
+        // self.send_buffer = undefined;
     }
 
     pub fn onClose(self: *Connection, comp: *IO.Completion, res: IO.CloseError!void) void {

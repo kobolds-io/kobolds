@@ -17,4 +17,10 @@ pub const ProtocolError = error{
     ConnectionRunning,
     // The version of the protocol is not supported and cannot be handled
     UnsupportedProtocol,
+    // Length of the topic is invalid
+    InvalidTopicLength,
+    // Message does not support this operation
+    InvalidMessageOperation,
+    // A duplicate transaction id may not exist (at least at a service leve)
+    DuplicateTransactionId,
 };
