@@ -4,7 +4,7 @@
 
 ## Description
 
-`kobolds` is a modern, high performing messaging system for communication between different machines across different networks. This means it's easy to scale, easy to apply and robust and reliable enough to support modern workloads.
+`kobolds` is a modern, high performing messaging broker for communication between different machines across different networks and machines. This means it's easy to scale, easy to implement, robust and reliable enough to support modern workloads.
 
 ## Quickstart
 
@@ -28,21 +28,13 @@ Start a node locally
 
 ```bash
 # run node with the default configuration
-./zig-out/bin/kobolds node run
+./zig-out/bin/kobolds node listen
 ```
 
-subscribe to a topic
+benchmark the node
 
 ```bash
-# subscribe to any messages published to the `/hello` topic
-./zig-out/bin/kobolds node sub /hello
-```
-
-publish to a topic
-
-```bash
-# publish a message the the `/hello` topic
-./zig-out/bin/kobolds node pub /hello "this is my cool message"
+./zig-out/bin/kobolds node bench
 ```
 
 ## Background
