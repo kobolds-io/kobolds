@@ -224,11 +224,11 @@ pub const Connection = struct {
             return;
         }
 
+        self.bytes_recv += bytes;
+
         // create a temporary list that will store messges
         var messages = std.ArrayList(Message).initCapacity(self.allocator, 250) catch unreachable;
         defer messages.deinit();
-
-        self.bytes_recv += bytes;
 
         // try to parse the bytes into messages
         self.parser.parse(&messages, self.recv_buffer[0..bytes]) catch |err| switch (err) {
