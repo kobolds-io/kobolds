@@ -236,9 +236,9 @@ pub const Client = struct {
                 // cast the message to the correct type
             },
             .pong => {
-                if (self.connection.messages_recv % 1_000 == 0) {
-                    log.debug("received pongs {}", .{self.connection.messages_recv});
-                }
+                // if (self.connection.messages_recv % 1_000 == 0) {
+                // }
+                log.debug("received pong. Total messages {}", .{self.connection.messages_recv});
 
                 // cast the headers into the correct headers type
                 // const pong_headers: *const Pong = message.headers.intoConst(.pong).?;

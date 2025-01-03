@@ -89,11 +89,11 @@ pub const Worker = struct {
     }
 
     pub fn tick(self: *Self) !void {
+        if (self.connections.count() == 0) return;
+
         if (self.connections_mutex.tryLock()) {
             defer self.connections_mutex.unlock();
-
             var conn_iter = self.connections.iterator();
-
             while (conn_iter.next()) |entry| {
                 const conn = entry.value_ptr.*;
 
@@ -122,31 +122,6 @@ pub const Worker = struct {
                 }
             }
         }
-
-        // if (self.outbox.count > 0) {
-        //     log.debug("worker inbox count {}", .{self.inbox.count});
-        // }
-
-        // log.debug("bus {*}", .{self.bus});
-        // log.debug("bus_work_queue {*}", .{self.bus_work_queue});
-        // FIX: there is an issue with the worker referencing the bus' work queue. Do i need to pass a direct ref?
-
-        // log.debug("bus.work_queue.count {}", .{bus.work_queue.count});
-
-        // if (self.inbox.count == 0) return;
-        //
-        // // try to put all of the messages on this worker on the main bus' work_queue
-        // // if there is enough space to accomodate the messages in the worker queue
-        // if (self.inbox.count + self.work_queue.count < self.work_queue.capacity) {
-        //     self.work_queue_mutex.lock();
-        //     defer self.work_queue_mutex.unlock();
-        //
-        //     // have the worker push all of the messages to the message bus
-        //     self.work_queue.concatenate(&self.inbox);
-        //     self.inbox.clear();
-        //     // } else {
-        //     //     log.info("skipping worker {} due to bus.work_queue being too full", .{self.id});
-        // }
     }
 
     pub fn run(self: *Self) void {

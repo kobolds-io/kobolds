@@ -42,9 +42,6 @@ pub const Bus = struct {
     inboxes: std.AutoHashMap(uuid.Uuid, *MessageQueue),
     outboxes: std.AutoHashMap(uuid.Uuid, *RingBuffer(*Message)),
 
-    /// a map of (connection.id, temp_outbox)
-    // connection_outboxes: std.AutoHashMap(uuid.Uuid, *std.ArrayList(*Message)),
-
     pub fn init(
         node_id: uuid.Uuid,
         worker_thread_count: usize,
@@ -159,9 +156,10 @@ pub const Bus = struct {
         // const messages_already_processed: u128 = self.processed_messages_count;
         // defer {
         //     const end = timer.read();
+        //     const took = ((end - start) / std.time.ns_per_us);
         //
         //     log.debug("tick: {d:6}us, processed_tick: {d:6} processed_total: {d:8}, free: {d:6}, ", .{
-        //         ((end - start) / std.time.ns_per_us),
+        //         took,
         //         self.processed_messages_count - messages_already_processed,
         //         self.processed_messages_count,
         //         self.message_pool.unassigned_queue.count,
@@ -169,7 +167,6 @@ pub const Bus = struct {
         // }
 
         var worker_iter = self.workers.valueIterator();
-
         while (worker_iter.next()) |worker_ptr| {
             const worker = worker_ptr.*;
             if (worker.inbox.count > 0) {
@@ -208,15 +205,10 @@ pub const Bus = struct {
     }
 
     fn handleMessage(self: *Self, message: *Message) !void {
-        // just deref the message
         defer {
             self.processed_messages_count += 1;
             message.deref();
         }
-
-        // TODO: put the message in a connection outbox
-
-        // connection.outbox.enqueue(item);
 
         switch (message.headers.message_type) {
             .ping => {

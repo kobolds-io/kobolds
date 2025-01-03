@@ -148,11 +148,12 @@ pub const Node = struct {
         var printed = false;
 
         while (true) {
-            if (start == 0 and self.bus.processed_messages_count >= 10) {
+            if (start == 0 and self.bus.processed_messages_count > 0) {
                 timer.reset();
                 start = timer.read();
             }
-            if (self.bus.processed_messages_count >= 10) {
+
+            if (self.bus.processed_messages_count > 0) {
                 const now = timer.read();
                 const elapsed_seconds = (now - start) / std.time.ns_per_s;
 

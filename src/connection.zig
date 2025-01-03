@@ -108,34 +108,19 @@ pub const Connection = struct {
         self.allocator.free(self.recv_buffer);
         self.allocator.free(self.send_buffer);
 
-        // self.inbox_mutex.lock();
-        // defer self.inbox_mutex.unlock();
-        //
-        // self.outbox_mutex.lock();
-        // defer self.outbox_mutex.unlock();
-
-        // FIX: Ensure inbox and outbox are properly destroyed
-
-        // while (self.inbox.dequeue()) |message| {
-        //     message.deref();
-        //     // self.message_pool.destroy(message_ptr);
-        // }
-        //
-        // while (self.outbox.dequeue()) |message| {
-        //     message.deref();
-        // }
-        //
-        // // completely reset the inbox and outbox
-        // self.inbox.deinit();
-        //
-        // // log.debug("remaining messages in message_pool {d}", .{self.message_pool.unassigned_queue.count});
-        //
-        // self.outbox.deinit();
-
         self.parser.deinit();
     }
 
     pub fn tick(self: *Connection) !void {
+        // var timer = try std.time.Timer.start();
+        // defer timer.reset();
+        // const start = timer.read();
+        // defer {
+        //     const end = timer.read();
+        //     const took = ((end - start) / std.time.ns_per_us);
+        //     log.debug("connection tick: {d:6}us", .{took});
+        // }
+
         switch (self.state) {
             .close => {
                 if (!self.close_submitted) {
@@ -185,11 +170,11 @@ pub const Connection = struct {
             var buf: [constants.message_max_size]u8 = undefined;
 
             var i: usize = 0;
-            // FIX: popping the LAST message is dumb. Should get the first message like a fifo queue.
             while (self.outbox.dequeue()) |message| : (i += 1) {
                 const message_size = message.size();
-                // check if adding this message to the send queue would exeed it's capacity
                 if (send_buffer_list.items.len + message_size > send_buffer_list.capacity) {
+                    // check if adding this message to the send queue would exeed it's capacity
+                    // FIX: this message should be added to the head of the queue not the back
                     try self.outbox.enqueue(message);
                     break;
                 }
@@ -226,7 +211,10 @@ pub const Connection = struct {
     }
 
     pub fn onRecv(self: *Connection, comp: *IO.Completion, res: IO.RecvError!usize) void {
-        const bytes = res catch return;
+        const bytes = res catch |err| blk: {
+            log.err("could not parse bytes {any}", .{err});
+            break :blk 0;
+        };
         _ = comp;
 
         // this means that the connection has been closed by the peer and we should
@@ -237,7 +225,7 @@ pub const Connection = struct {
         }
 
         // create a temporary list that will store messges
-        var messages = std.ArrayList(Message).initCapacity(self.allocator, 10) catch unreachable;
+        var messages = std.ArrayList(Message).initCapacity(self.allocator, 250) catch unreachable;
         defer messages.deinit();
 
         self.bytes_recv += bytes;
