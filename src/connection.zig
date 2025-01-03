@@ -225,6 +225,7 @@ pub const Connection = struct {
         }
 
         self.bytes_recv += bytes;
+        // log.debug("received bytes total: {}, bytes: {}", .{ self.bytes_recv, bytes });
 
         // create a temporary list that will store messges
         var messages = std.ArrayList(Message).initCapacity(self.allocator, 250) catch unreachable;

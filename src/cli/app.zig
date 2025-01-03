@@ -263,7 +263,7 @@ pub fn runBench() !void {
     defer _ = message_pool_gpa.deinit();
     const message_pool_allocator = message_pool_gpa.allocator();
 
-    var message_pool = try MessagePool.init(message_pool_allocator, constants.message_pool_max_size / 5);
+    var message_pool = try MessagePool.init(message_pool_allocator, constants.message_pool_max_size / 50);
     defer message_pool.deinit();
 
     var client = try Client.init(allocator, &io, &message_pool, client_config);
@@ -279,10 +279,10 @@ pub fn runBench() !void {
 
     while (true) {
         if (client.connection.outbox.count > 0) {
-            std.time.sleep(100 * std.time.ns_per_ms);
+            std.time.sleep(500 * std.time.ns_per_ms);
             continue;
         }
-        for (0..100) |_| {
+        for (0..1000) |_| {
             client.ping() catch |err| switch (err) {
                 error.ConnectionClosed => {
                     std.time.sleep(100 * std.time.ns_per_ms);
