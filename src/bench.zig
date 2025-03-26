@@ -1,11 +1,15 @@
 const std = @import("std");
 const zbench = @import("zbench");
 const assert = std.debug.assert;
+const testing = std.testing;
 
-const Parser = @import("./parser.zig").Parser;
-const Parser2 = @import("./parser.zig").Parser2;
-const Message = @import("./message.zig").Message;
+const Parser = @import("./protocol/parser.zig").Parser;
+const Message = @import("./protocol/message.zig").Message;
+const ManagedQueue = @import("./data_structures/managed_queue.zig").ManagedQueue;
+const UnmanagedQueue = @import("./data_structures/unmanaged_queue.zig").UnmanagedQueue;
 const MessageQueue = @import("./data_structures/message_queue.zig").MessageQueue;
+const RingBuffer = @import("./data_structures/ring_buffer.zig").RingBuffer;
+
 const constants = @import("./constants.zig");
 
 const ParserBenchmark = struct {
@@ -21,26 +25,7 @@ const ParserBenchmark = struct {
 
     pub fn run(self: ParserBenchmark, _: std.mem.Allocator) void {
         const body = [_]u8{97} ** constants.message_max_body_size;
-        const encoded_message = ([_]u8{ 37, 58, 161, 118, 166, 59, 171, 63, 0, 0, 0, 0, 0, 0, 0, 0, 148, 217, 184, 248, 40, 131, 99, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } ++ body);
-
-        self.parser.parse(self.messages, &encoded_message) catch unreachable;
-    }
-};
-
-const Parser2Benchmark = struct {
-    messages: *std.ArrayList(Message),
-    parser: *Parser2,
-
-    fn new(messages: *std.ArrayList(Message), parser: *Parser2) Parser2Benchmark {
-        return .{
-            .messages = messages,
-            .parser = parser,
-        };
-    }
-
-    pub fn run(self: Parser2Benchmark, _: std.mem.Allocator) void {
-        const body = [_]u8{97} ** constants.message_max_body_size;
-        const encoded_message = ([_]u8{ 37, 58, 161, 118, 166, 59, 171, 63, 0, 0, 0, 0, 0, 0, 0, 0, 148, 217, 184, 248, 40, 131, 99, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } ++ body);
+        const encoded_message = ([_]u8{ 23, 215, 237, 54, 195, 69, 158, 226, 0, 0, 0, 0, 0, 0, 0, 0, 148, 217, 184, 248, 40, 131, 99, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 47, 104, 101, 108, 108, 111, 47, 119, 111, 114, 108, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } ++ body);
 
         self.parser.parse(self.messages, &encoded_message) catch unreachable;
     }
@@ -79,61 +64,101 @@ pub fn BenchmarkMessageDecompressGzip(_: std.mem.Allocator) void {
 
 pub fn BenchmarkMessageDecode(_: std.mem.Allocator) void {
     const body = [_]u8{97} ** constants.message_max_body_size;
-    const encoded_message = ([_]u8{ 37, 58, 161, 118, 166, 59, 171, 63, 0, 0, 0, 0, 0, 0, 0, 0, 148, 217, 184, 248, 40, 131, 99, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } ++ body);
+    const encoded_message = ([_]u8{ 209, 183, 227, 94, 36, 46, 62, 37, 0, 0, 0, 0, 0, 0, 0, 0, 112, 23, 160, 125, 67, 13, 103, 92, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 47, 104, 101, 108, 108, 111, 47, 119, 111, 114, 108, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100 } ++ body);
     var message = Message.new();
     message.decode(&encoded_message) catch unreachable;
 }
 
-const MessageQueueEnqueueBenchmark = struct {
+// pub fn BenchmarkManagedQueueEnqueue(allocator: std.mem.Allocator) void {
+//     var q = ManagedQueue(usize).init(allocator);
+//     defer q.deinit();
+//
+//     q.enqueue(1) catch unreachable;
+// }
+
+const BenchmarkUnmanagedQueueEnqueue = struct {
     const Self = @This();
-    messages: *std.ArrayList(Message),
 
-    fn new(messages: *std.ArrayList(Message)) Self {
+    messages_list: *std.ArrayList(UnmanagedQueue(*Message).NodeType),
+    queue: *UnmanagedQueue(*Message),
+
+    fn new(messages_list: *std.ArrayList(UnmanagedQueue(*Message).NodeType), queue: *UnmanagedQueue(*Message)) Self {
         return .{
-            .messages = messages,
-        };
-    }
-
-    pub fn run(self: Self, _: std.mem.Allocator) void {
-        var queue = MessageQueue.new(constants.message_queue_capacity_max);
-        assert(queue.isEmpty());
-        for (self.messages.items) |*message| {
-            // quickly reset the message
-            if (message.next != null) message.next = null;
-            queue.enqueue(message) catch unreachable;
-        }
-
-        assert(queue.count == constants.message_queue_capacity_max);
-    }
-};
-
-const MessageQueueDequeueBenchmark = struct {
-    messages: *std.ArrayList(Message),
-    queue: *MessageQueue,
-
-    fn new(messages: *std.ArrayList(Message), queue: *MessageQueue) MessageQueueDequeueBenchmark {
-        return .{
-            .messages = messages,
+            .messages_list = messages_list,
             .queue = queue,
         };
     }
 
-    pub fn run(self: MessageQueueDequeueBenchmark, _: std.mem.Allocator) void {
-        assert(self.queue.count == constants.message_queue_capacity_max);
+    pub fn run(self: Self, _: std.mem.Allocator) void {
+        for (self.messages_list.items) |*node| {
+            self.queue.enqueue(node);
+        }
+        self.queue.reset();
+    }
+};
 
-        for (self.messages.items) |*message| {
-            const next = message.next;
-            var m = self.queue.dequeue().?;
+const BenchmarkRingBufferEnqueue = struct {
+    const Self = @This();
 
-            m.next = next;
+    messages_list: *std.ArrayList(*Message),
+    queue: *RingBuffer(*Message),
+
+    fn new(messages_list: *std.ArrayList(*Message), queue: *RingBuffer(*Message)) Self {
+        return .{
+            .messages_list = messages_list,
+            .queue = queue,
+        };
+    }
+
+    pub fn run(self: Self, _: std.mem.Allocator) void {
+        for (self.messages_list.items) |message| {
+            // for every message in the messages array list we should enqueue it in the ring buffer
+            self.queue.enqueue(message) catch unreachable;
         }
 
-        assert(self.queue.isEmpty());
+        self.queue.reset();
+    }
+};
 
-        // this is a hacky resetting of the queue
-        self.queue.head = &self.messages.items[0];
-        self.queue.tail = &self.messages.items[self.messages.items.len - 1];
-        self.queue.count = @intCast(self.messages.items.len);
+const BenchmarkMessageQueueEnqueue = struct {
+    const Self = @This();
+
+    messages_list: *std.ArrayList(*Message),
+    queue: *MessageQueue,
+
+    fn new(messages_list: *std.ArrayList(*Message), queue: *MessageQueue) Self {
+        return .{
+            .messages_list = messages_list,
+            .queue = queue,
+        };
+    }
+
+    pub fn run(self: Self, _: std.mem.Allocator) void {
+        for (self.messages_list.items) |message| {
+            self.queue.enqueue(message);
+        }
+        self.queue.reset();
+    }
+};
+
+const BenchmarkManagedQueueEnqueue = struct {
+    const Self = @This();
+
+    messages_list: *std.ArrayList(*Message),
+    queue: *ManagedQueue(*Message),
+
+    fn new(messages_list: *std.ArrayList(*Message), queue: *ManagedQueue(*Message)) Self {
+        return .{
+            .messages_list = messages_list,
+            .queue = queue,
+        };
+    }
+
+    pub fn run(self: Self, _: std.mem.Allocator) void {
+        for (self.messages_list.items) |message| {
+            self.queue.enqueue(message) catch unreachable;
+        }
+        while (self.queue.dequeue()) |_| {}
     }
 };
 
@@ -162,21 +187,11 @@ test "protocol" {
     var parser = Parser.init(parser_allocator);
     defer parser.deinit();
 
-    var parser2_messages_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = parser2_messages_gpa.deinit();
-    const parser2_messages_allocator = parser2_messages_gpa.allocator();
-
-    var parser2_messages = std.ArrayList(Message).initCapacity(parser2_messages_allocator, std.math.maxInt(u16)) catch unreachable;
-    defer parser2_messages.deinit();
-
-    var parser2 = Parser2.new();
-
     try bench.add("Message.encode", BenchmarkMessageEncode, .{});
     try bench.add("Message.decode", BenchmarkMessageDecode, .{});
     try bench.add("Message.compress gzip", BenchmarkMessageCompressGzip, .{});
     try bench.add("Message.decompress gzip", BenchmarkMessageDecompressGzip, .{});
     try bench.addParam("Parser.parse", &ParserBenchmark.new(&parser_messages, &parser), .{});
-    try bench.addParam("Parser2.parse", &Parser2Benchmark.new(&parser2_messages, &parser2), .{});
 
     const stderr = std.io.getStdErr().writer();
 
@@ -184,46 +199,65 @@ test "protocol" {
     try bench.run(stderr);
 }
 
-test "MessageQueue" {
-    // // var bench = zbench.Benchmark.init(std.testing.allocator, .{});
-    // var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = std.math.maxInt(u16) });
-    // defer bench.deinit();
-    //
-    // var queue_messages_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // defer _ = queue_messages_gpa.deinit();
-    // const queue_messages_allocator = queue_messages_gpa.allocator();
-    //
-    // var queue_messages = std.ArrayList(Message).initCapacity(queue_messages_allocator, constants.queue_size_max) catch unreachable;
-    // defer queue_messages.deinit();
-    //
-    // for (0..constants.queue_size_max) |_| {
-    //     queue_messages.appendAssumeCapacity(Message.new());
-    // }
-    //
-    // var dequeue_messages_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // defer _ = dequeue_messages_gpa.deinit();
-    // const dequeue_messages_allocator = dequeue_messages_gpa.allocator();
-    //
-    // var dequeue_messages = std.ArrayList(Message).initCapacity(dequeue_messages_allocator, constants.queue_size_max) catch unreachable;
-    // defer dequeue_messages.deinit();
-    //
-    // for (0..constants.queue_size_max) |_| {
-    //     dequeue_messages.appendAssumeCapacity(Message.new());
-    // }
-    //
-    // var dequeue_queue = MessageQueue.new(constants.queue_size_max);
-    //
-    // // do the initial setup for the Dequeue benchmark test
-    // for (dequeue_messages.items) |*message| {
-    //     dequeue_queue.enqueue(message) catch unreachable;
-    // }
-    //
-    // try bench.addParam("MessageQueue.enqueue", &MessageQueueEnqueueBenchmark.new(&queue_messages), .{});
-    // try bench.addParam("MessageQueue.dequeue", &MessageQueueDequeueBenchmark.new(&dequeue_messages, &dequeue_queue), .{});
-    //
-    // const stderr = std.io.getStdErr().writer();
-    //
-    // try stderr.writeAll("\n");
-    //
-    // try bench.run(stderr);
+test "datastructures" {
+    const allocator = testing.allocator;
+
+    var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = std.math.maxInt(u16) });
+    defer bench.deinit();
+
+    var messages_list = std.ArrayList(*Message).initCapacity(allocator, 100) catch unreachable;
+    defer messages_list.deinit();
+
+    const body = [_]u8{97} ** constants.message_max_body_size;
+    for (0..messages_list.capacity) |i| {
+        const message = try allocator.create(Message);
+        errdefer allocator.destroy(message);
+
+        message.* = Message.new();
+        message.headers.message_type = .request;
+        message.setTransactionId(@intCast(i + 1));
+        message.setTopicName("test");
+        message.setBody(&body);
+
+        assert(message.validate() == null);
+
+        messages_list.appendAssumeCapacity(message);
+    }
+
+    defer {
+        for (messages_list.items) |message| {
+            allocator.destroy(message);
+        }
+    }
+
+    var unmanaged_queue_nodes = std.ArrayList(UnmanagedQueue(*Message).NodeType).initCapacity(allocator, @intCast(
+        messages_list.items.len,
+    )) catch unreachable;
+    defer unmanaged_queue_nodes.deinit();
+
+    for (messages_list.items) |message| {
+        unmanaged_queue_nodes.appendAssumeCapacity(UnmanagedQueue(*Message).NodeType.new(message));
+    }
+
+    var ring_buffer = try RingBuffer(*Message).init(allocator, @intCast(messages_list.items.len));
+    defer ring_buffer.deinit();
+
+    var managed_queue = ManagedQueue(*Message).init(allocator);
+    defer managed_queue.deinit();
+
+    var unmanaged_queue = UnmanagedQueue(*Message).new();
+    defer unmanaged_queue.reset();
+
+    var message_queue = MessageQueue.new();
+    defer message_queue.reset();
+
+    try bench.addParam("ManagedQueue.enqueue", &BenchmarkManagedQueueEnqueue.new(&messages_list, &managed_queue), .{});
+    try bench.addParam("UnmanagedQueue.enqueue", &BenchmarkUnmanagedQueueEnqueue.new(&unmanaged_queue_nodes, &unmanaged_queue), .{});
+    try bench.addParam("RingBuffer.enqueue", &BenchmarkRingBufferEnqueue.new(&messages_list, &ring_buffer), .{});
+    try bench.addParam("MessageQueue.enqueue", &BenchmarkMessageQueueEnqueue.new(&messages_list, &message_queue), .{});
+
+    const stderr = std.io.getStdErr().writer();
+
+    try stderr.writeAll("\n");
+    try bench.run(stderr);
 }

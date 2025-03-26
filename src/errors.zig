@@ -15,12 +15,14 @@ pub const ProtocolError = error{
     ConnectionReadError,
     /// Connection is running
     ConnectionRunning,
-    // The version of the protocol is not supported and cannot be handled
+    /// The version of the protocol is not supported and cannot be handled
     UnsupportedProtocol,
-    // Length of the topic is invalid
-    InvalidTopicLength,
-    // Message does not support this operation
+    /// Length of the topic is invalid
+    InvalidTopicNameLength,
+    /// Message does not support this operation
     InvalidMessageOperation,
-    // A duplicate transaction id may not exist (at least at a service leve)
+    /// A duplicate transaction id may not exist (at least at a service leve)
     DuplicateTransactionId,
+    /// Message is not valid
+    InvalidMessage,
 };

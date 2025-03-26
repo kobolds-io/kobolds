@@ -1,11 +1,12 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const gzip = std.compress.gzip;
+const atomic = std.atomic;
 
-const constants = @import("./constants.zig");
-const utils = @import("./utils.zig");
-const hash = @import("./hash.zig");
-const ProtocolError = @import("./errors.zig").ProtocolError;
+const constants = @import("../constants.zig");
+const utils = @import("../utils.zig");
+const hash = @import("../hash.zig");
+const ProtocolError = @import("../errors.zig").ProtocolError;
 
 pub const MessageType = enum(u8) {
     undefined,
@@ -14,6 +15,11 @@ pub const MessageType = enum(u8) {
     ping,
     pong,
     accept,
+    advertise,
+    unadvertise,
+    publish,
+    subscribe,
+    unsubscribe,
 };
 
 pub const ErrorCode = enum(u8) {
@@ -22,6 +28,7 @@ pub const ErrorCode = enum(u8) {
     err,
     unauthorized,
     timeout,
+    service_not_found,
 };
 
 pub const Compression = enum(u8) {
@@ -43,7 +50,7 @@ pub const Message = struct {
     next: ?*Message,
 
     // how many times this message is referenced
-    ref_count: u32,
+    ref_count: atomic.Value(u32),
 
     // create an uninitialized message container
     pub fn new() Message {
@@ -51,17 +58,22 @@ pub const Message = struct {
             .headers = Headers{ .message_type = .undefined },
             .body_buffer = undefined,
             .next = null,
-            .ref_count = 0,
+            .ref_count = atomic.Value(u32).init(0),
         };
     }
 
+    pub fn refs(self: *Self) u32 {
+        return self.ref_count.load(.seq_cst);
+    }
+
     pub fn ref(self: *Self) void {
-        self.ref_count += 1;
+        _ = self.ref_count.fetchAdd(1, .seq_cst);
     }
 
     pub fn deref(self: *Self) void {
-        assert(self.ref_count != 0);
-        self.ref_count -= 1;
+        const v = self.ref_count.load(.seq_cst);
+        if (v == 0) return;
+        _ = self.ref_count.cmpxchgWeak(v, v - 1, .seq_cst, .seq_cst);
     }
 
     // this needs to be a mut ref to self
@@ -86,39 +98,206 @@ pub const Message = struct {
         self.headers.body_length = @intCast(v.len);
     }
 
-    pub fn setTopic(self: *Self, v: []const u8) ProtocolError!void {
+    pub fn setTopicName(self: *Self, v: []const u8) void {
+        // This is an absolutely tedious way of handling setting fields.
         switch (self.headers.message_type) {
             .request => {
-                if (v.len > constants.message_max_topic_name_size) return ProtocolError.InvalidTopicLength;
+                if (v.len > constants.message_max_topic_name_size) unreachable;
 
-                var req_headers: *Request = self.headers.into(.request).?;
+                var headers: *Request = self.headers.into(.request).?;
 
-                @memcpy(req_headers.topic_name[0..v.len], v);
-                req_headers.topic_name_length = @intCast(v.len);
+                @memcpy(headers.topic_name[0..v.len], v);
+                headers.topic_name_length = @intCast(v.len);
             },
             .reply => {
-                if (v.len > constants.message_max_topic_name_size) return ProtocolError.InvalidTopicLength;
+                if (v.len > constants.message_max_topic_name_size) unreachable;
 
-                var rep_headers: *Reply = self.headers.into(.reply).?;
+                var headers: *Reply = self.headers.into(.reply).?;
 
-                @memcpy(rep_headers.topic_name[0..v.len], v);
-                rep_headers.topic_name_length = @intCast(v.len);
+                @memcpy(headers.topic_name[0..v.len], v);
+                headers.topic_name_length = @intCast(v.len);
             },
-            else => return ProtocolError.InvalidMessageOperation,
+            .advertise => {
+                if (v.len > constants.message_max_topic_name_size) unreachable;
+
+                var headers: *Advertise = self.headers.into(.advertise).?;
+
+                @memcpy(headers.topic_name[0..v.len], v);
+                headers.topic_name_length = @intCast(v.len);
+            },
+            .unadvertise => {
+                if (v.len > constants.message_max_topic_name_size) unreachable;
+
+                var headers: *Unadvertise = self.headers.into(.unadvertise).?;
+
+                @memcpy(headers.topic_name[0..v.len], v);
+                headers.topic_name_length = @intCast(v.len);
+            },
+            .publish => {
+                if (v.len > constants.message_max_topic_name_size) unreachable;
+
+                var headers: *Publish = self.headers.into(.publish).?;
+
+                @memcpy(headers.topic_name[0..v.len], v);
+                headers.topic_name_length = @intCast(v.len);
+            },
+            .subscribe => {
+                if (v.len > constants.message_max_topic_name_size) unreachable;
+
+                var headers: *Subscribe = self.headers.into(.subscribe).?;
+
+                @memcpy(headers.topic_name[0..v.len], v);
+                headers.topic_name_length = @intCast(v.len);
+            },
+            .unsubscribe => {
+                if (v.len > constants.message_max_topic_name_size) unreachable;
+
+                var headers: *Unsubscribe = self.headers.into(.unsubscribe).?;
+
+                @memcpy(headers.topic_name[0..v.len], v);
+                headers.topic_name_length = @intCast(v.len);
+            },
+            else => unreachable,
         }
     }
 
-    pub fn topic(self: *Self) ProtocolError![]const u8 {
+    pub fn topicName(self: *Self) []const u8 {
         switch (self.headers.message_type) {
             .request => {
-                var req_headers: *Request = self.headers.into(.request).?;
-                return req_headers.topic_name[0..@intCast(req_headers.topic_name_length)];
+                var headers: *Request = self.headers.into(.request).?;
+                return headers.topic_name[0..@intCast(headers.topic_name_length)];
             },
             .reply => {
-                var rep_headers: *Reply = self.headers.into(.reply).?;
-                return rep_headers.topic_name[0..@intCast(rep_headers.topic_name_length)];
+                var headers: *Reply = self.headers.into(.reply).?;
+                return headers.topic_name[0..@intCast(headers.topic_name_length)];
             },
-            else => return ProtocolError.InvalidMessageOperation,
+            .advertise => {
+                var headers: *Advertise = self.headers.into(.advertise).?;
+                return headers.topic_name[0..@intCast(headers.topic_name_length)];
+            },
+            .unadvertise => {
+                var headers: *Unadvertise = self.headers.into(.unadvertise).?;
+                return headers.topic_name[0..@intCast(headers.topic_name_length)];
+            },
+            .publish => {
+                var headers: *Publish = self.headers.into(.publish).?;
+                return headers.topic_name[0..@intCast(headers.topic_name_length)];
+            },
+            .subscribe => {
+                var headers: *Subscribe = self.headers.into(.subscribe).?;
+                return headers.topic_name[0..@intCast(headers.topic_name_length)];
+            },
+            .unsubscribe => {
+                var headers: *Unsubscribe = self.headers.into(.unsubscribe).?;
+                return headers.topic_name[0..@intCast(headers.topic_name_length)];
+            },
+            else => unreachable,
+        }
+    }
+
+    pub fn setTransactionId(self: *Self, v: u128) void {
+        // This is an absolutely tedious way of handling setting fields.
+        switch (self.headers.message_type) {
+            .request => {
+                var headers: *Request = self.headers.into(.request).?;
+                headers.transaction_id = v;
+            },
+            .reply => {
+                var headers: *Reply = self.headers.into(.reply).?;
+                headers.transaction_id = v;
+            },
+            .advertise => {
+                var headers: *Advertise = self.headers.into(.advertise).?;
+                headers.transaction_id = v;
+            },
+            .unadvertise => {
+                var headers: *Unadvertise = self.headers.into(.unadvertise).?;
+                headers.transaction_id = v;
+            },
+            .ping => {
+                var headers: *Ping = self.headers.into(.ping).?;
+                headers.transaction_id = v;
+            },
+            .pong => {
+                var headers: *Pong = self.headers.into(.pong).?;
+                headers.transaction_id = v;
+            },
+            .subscribe => {
+                var headers: *Subscribe = self.headers.into(.subscribe).?;
+                headers.transaction_id = v;
+            },
+            .unsubscribe => {
+                var headers: *Unsubscribe = self.headers.into(.unsubscribe).?;
+                headers.transaction_id = v;
+            },
+            else => unreachable,
+        }
+    }
+
+    pub fn transactionId(self: *Self) u128 {
+        switch (self.headers.message_type) {
+            .request => {
+                const headers: *const Request = self.headers.intoConst(.request).?;
+                return headers.transaction_id;
+            },
+            .reply => {
+                const headers: *const Reply = self.headers.intoConst(.reply).?;
+                return headers.transaction_id;
+            },
+            .advertise => {
+                const headers: *const Advertise = self.headers.intoConst(.advertise).?;
+                return headers.transaction_id;
+            },
+            .unadvertise => {
+                const headers: *const Unadvertise = self.headers.intoConst(.unadvertise).?;
+                return headers.transaction_id;
+            },
+            .ping => {
+                const headers: *const Ping = self.headers.intoConst(.ping).?;
+                return headers.transaction_id;
+            },
+            .pong => {
+                const headers: *const Pong = self.headers.intoConst(.pong).?;
+                return headers.transaction_id;
+            },
+            .subscribe => {
+                const headers: *const Subscribe = self.headers.intoConst(.subscribe).?;
+                return headers.transaction_id;
+            },
+            .unsubscribe => {
+                const headers: *const Unsubscribe = self.headers.intoConst(.unsubscribe).?;
+                return headers.transaction_id;
+            },
+            else => unreachable,
+        }
+    }
+
+    pub fn setErrorCode(self: *Self, v: ErrorCode) void {
+        // This is an absolutely tedious way of handling setting fields.
+        switch (self.headers.message_type) {
+            .reply => {
+                var headers: *Reply = self.headers.into(.reply).?;
+                headers.error_code = v;
+            },
+            .pong => {
+                var headers: *Pong = self.headers.into(.pong).?;
+                headers.error_code = v;
+            },
+            else => unreachable,
+        }
+    }
+
+    pub fn errorCode(self: *Self) ErrorCode {
+        switch (self.headers.message_type) {
+            .reply => {
+                const headers: *const Reply = self.headers.intoConst(.reply).?;
+                return headers.error_code;
+            },
+            .pong => {
+                const headers: *const Pong = self.headers.intoConst(.pong).?;
+                return headers.error_code;
+            },
+            else => unreachable,
         }
     }
 
@@ -279,6 +458,26 @@ pub const Message = struct {
                 const headers: *const Accept = self.headers.intoConst(.accept).?;
                 return headers.validate();
             },
+            .advertise => {
+                const headers: *const Advertise = self.headers.intoConst(.advertise).?;
+                return headers.validate();
+            },
+            .unadvertise => {
+                const headers: *const Unadvertise = self.headers.intoConst(.unadvertise).?;
+                return headers.validate();
+            },
+            .publish => {
+                const headers: *const Publish = self.headers.intoConst(.publish).?;
+                return headers.validate();
+            },
+            .subscribe => {
+                const headers: *const Subscribe = self.headers.intoConst(.subscribe).?;
+                return headers.validate();
+            },
+            .unsubscribe => {
+                const headers: *const Unsubscribe = self.headers.intoConst(.unsubscribe).?;
+                return headers.validate();
+            },
             else => "unsupported message type",
         };
     }
@@ -294,9 +493,9 @@ pub const Headers = extern struct {
     message_type: MessageType = .undefined,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [72]u8 = [_]u8{0} ** 72,
+    padding: [8]u8 = [_]u8{0} ** 8,
 
-    reserved: [128]u8 = [_]u8{0} ** 128,
+    reserved: [64]u8 = [_]u8{0} ** 64,
 
     pub fn Type(comptime message_type: MessageType) type {
         return switch (message_type) {
@@ -305,6 +504,11 @@ pub const Headers = extern struct {
             .ping => Ping,
             .pong => Pong,
             .accept => Accept,
+            .advertise => Advertise,
+            .unadvertise => Unadvertise,
+            .publish => Publish,
+            .subscribe => Subscribe,
+            .unsubscribe => Unsubscribe,
             .undefined => unreachable,
         };
     }
@@ -366,13 +570,13 @@ pub const Request = extern struct {
     message_type: MessageType = .request,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [72]u8 = [_]u8{0} ** 72,
+    padding: [8]u8 = [_]u8{0} ** 8,
 
     transaction_id: u128 = 0,
     topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
     topic_name_length: u8 = 0,
 
-    reserved: [47]u8 = [_]u8{0} ** 47,
+    reserved: [15]u8 = [_]u8{0} ** 15,
 
     pub fn validate(self: @This()) ?[]const u8 {
         assert(self.message_type == .request);
@@ -406,14 +610,14 @@ pub const Reply = extern struct {
     message_type: MessageType = .reply,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [72]u8 = [_]u8{0} ** 72,
+    padding: [8]u8 = [_]u8{0} ** 8,
 
     transaction_id: u128 = 0,
     topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
     topic_name_length: u8 = 0,
     error_code: ErrorCode = .ok,
 
-    reserved: [46]u8 = [_]u8{0} ** 46,
+    reserved: [14]u8 = [_]u8{0} ** 14,
 
     pub fn validate(self: @This()) ?[]const u8 {
         assert(self.message_type == .reply);
@@ -450,11 +654,11 @@ pub const Ping = extern struct {
     message_type: MessageType = .ping,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [72]u8 = [_]u8{0} ** 72,
+    padding: [8]u8 = [_]u8{0} ** 8,
 
     transaction_id: u128 = 0,
 
-    reserved: [112]u8 = [_]u8{0} ** 112,
+    reserved: [48]u8 = [_]u8{0} ** 48,
 
     pub fn validate(self: @This()) ?[]const u8 {
         assert(self.message_type == .ping);
@@ -487,12 +691,12 @@ pub const Pong = extern struct {
     message_type: MessageType = .pong,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [72]u8 = [_]u8{0} ** 72,
+    padding: [8]u8 = [_]u8{0} ** 8,
 
     transaction_id: u128 = 0,
     error_code: ErrorCode = .ok,
 
-    reserved: [111]u8 = [_]u8{0} ** 111,
+    reserved: [47]u8 = [_]u8{0} ** 47,
 
     pub fn validate(self: @This()) ?[]const u8 {
         assert(self.message_type == .pong);
@@ -513,8 +717,6 @@ pub const Pong = extern struct {
     }
 };
 
-/// Message used to relay to the connecting client/node how they should communicate
-/// going forward
 pub const Accept = extern struct {
     comptime {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
@@ -528,11 +730,11 @@ pub const Accept = extern struct {
     message_type: MessageType = .accept,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [72]u8 = [_]u8{0} ** 72,
+    padding: [8]u8 = [_]u8{0} ** 8,
 
     accepted_origin_id: u128 = 0, // this will be the ID to be used by the connected
 
-    reserved: [112]u8 = [_]u8{0} ** 112,
+    reserved: [48]u8 = [_]u8{0} ** 48,
 
     pub fn validate(self: @This()) ?[]const u8 {
         assert(self.message_type == .accept);
@@ -549,6 +751,213 @@ pub const Accept = extern struct {
 
         // ensure reserved is empty
         for (self.reserved) |b| if (b != 0) return "invalid reserved";
+        return null;
+    }
+};
+
+pub const Advertise = extern struct {
+    comptime {
+        assert(@sizeOf(@This()) == @sizeOf(Headers));
+    }
+
+    headers_checksum: u128 = 0,
+    body_checksum: u128 = 0,
+    origin_id: u128 = 0, // this will be the node_id
+    body_length: u32 = 0,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .advertise,
+    compression: Compression = .none,
+    compressed: bool = false,
+    padding: [8]u8 = [_]u8{0} ** 8,
+
+    transaction_id: u128 = 0,
+    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
+    topic_name_length: u8 = 0,
+
+    reserved: [15]u8 = [_]u8{0} ** 15,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .advertise);
+
+        // common headers
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure the body of this message is empty
+        if (self.body_length > 0) return "invalid body_length";
+
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
+
+        // ensure this topic_name is valid (no empty topic_names allowed)
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
+        return null;
+    }
+};
+
+pub const Unadvertise = extern struct {
+    comptime {
+        assert(@sizeOf(@This()) == @sizeOf(Headers));
+    }
+
+    headers_checksum: u128 = 0,
+    body_checksum: u128 = 0,
+    origin_id: u128 = 0, // this will be the node_id
+    body_length: u32 = 0,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .unadvertise,
+    compression: Compression = .none,
+    compressed: bool = false,
+    padding: [8]u8 = [_]u8{0} ** 8,
+
+    transaction_id: u128 = 0,
+    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
+    topic_name_length: u8 = 0,
+
+    reserved: [15]u8 = [_]u8{0} ** 15,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .unadvertise);
+
+        // common headers
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure the body of this message is empty
+        if (self.body_length > 0) return "invalid body_length";
+
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
+
+        // ensure this topic_name is valid (no empty topic_names allowed)
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
+        return null;
+    }
+};
+
+pub const Publish = extern struct {
+    comptime {
+        assert(@sizeOf(@This()) == @sizeOf(Headers));
+    }
+
+    headers_checksum: u128 = 0,
+    body_checksum: u128 = 0,
+    origin_id: u128 = 0,
+    body_length: u32 = 0,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .publish,
+    compression: Compression = .none,
+    compressed: bool = false,
+    padding: [8]u8 = [_]u8{0} ** 8,
+
+    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
+    topic_name_length: u8 = 0,
+
+    reserved: [31]u8 = [_]u8{0} ** 31,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .publish);
+
+        // common headers
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure this topic_name is valid (no empty topic_names allowed)
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
+        return null;
+    }
+};
+
+pub const Subscribe = extern struct {
+    comptime {
+        assert(@sizeOf(@This()) == @sizeOf(Headers));
+    }
+
+    headers_checksum: u128 = 0,
+    body_checksum: u128 = 0,
+    origin_id: u128 = 0,
+    body_length: u32 = 0,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .subscribe,
+    compression: Compression = .none,
+    compressed: bool = false,
+    padding: [8]u8 = [_]u8{0} ** 8,
+
+    transaction_id: u128 = 0,
+    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
+    topic_name_length: u8 = 0,
+
+    reserved: [15]u8 = [_]u8{0} ** 15,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .subscribe);
+
+        // common headers
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
+
+        // ensure this topic_name is valid (no empty topic_names allowed)
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
+        return null;
+    }
+};
+
+pub const Unsubscribe = extern struct {
+    comptime {
+        assert(@sizeOf(@This()) == @sizeOf(Headers));
+    }
+
+    headers_checksum: u128 = 0,
+    body_checksum: u128 = 0,
+    origin_id: u128 = 0,
+    body_length: u32 = 0,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .unsubscribe,
+    compression: Compression = .none,
+    compressed: bool = false,
+    padding: [8]u8 = [_]u8{0} ** 8,
+
+    transaction_id: u128 = 0,
+    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
+    topic_name_length: u8 = 0,
+
+    reserved: [15]u8 = [_]u8{0} ** 15,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .unsubscribe);
+
+        // common headers
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
+
+        // ensure this topic_name is valid (no empty topic_names allowed)
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
         return null;
     }
 };

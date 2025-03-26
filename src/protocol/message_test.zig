@@ -1,9 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
-const constants = @import("./constants.zig");
-const utils = @import("./utils.zig");
-const hash = @import("./hash.zig");
+const constants = @import("../constants.zig");
+const utils = @import("../utils.zig");
+const hash = @import("../hash.zig");
 
 const Message = @import("./message.zig").Message;
 const Headers = @import("./message.zig").Headers;
@@ -12,7 +12,7 @@ const Reply = @import("./message.zig").Reply;
 const Ping = @import("./message.zig").Ping;
 const Pong = @import("./message.zig").Pong;
 
-const ProtocolError = @import("./errors.zig").ProtocolError;
+const ProtocolError = @import("../errors.zig").ProtocolError;
 
 test "encoding" {
     const allocator = std.testing.allocator;
@@ -21,11 +21,12 @@ test "encoding" {
     const body = "hello world";
     const topic = "/hello/world";
     var message = Message.new();
-    message.headers.message_type = .reply;
+    message.headers.message_type = .publish;
+    message.headers.origin_id = 332665699182789392398147937282310771713;
     message.setBody(body);
-    try message.setTopic(topic);
+    message.setTopicName(topic);
 
-    const want = [_]u8{ 22, 101, 110, 212, 57, 243, 246, 150, 0, 0, 0, 0, 0, 0, 0, 0, 112, 23, 160, 125, 67, 13, 103, 92, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 47, 104, 101, 108, 108, 111, 47, 119, 111, 114, 108, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100 };
+    const want = [_]u8{ 186, 46, 51, 180, 245, 149, 100, 177, 0, 0, 0, 0, 0, 0, 0, 0, 112, 23, 160, 125, 67, 13, 103, 92, 0, 0, 0, 0, 0, 0, 0, 0, 1, 148, 163, 176, 124, 222, 113, 154, 180, 247, 56, 126, 73, 21, 69, 250, 11, 0, 0, 0, 1, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 47, 104, 101, 108, 108, 111, 47, 119, 111, 114, 108, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100 };
 
     const buf = try allocator.alloc(u8, message.size());
     defer allocator.free(buf);
@@ -41,13 +42,13 @@ test "decoding" {
     const allocator = std.testing.allocator;
 
     const body = "a" ** constants.message_max_body_size;
-    const topic = "/hello/world";
+    const topic_name = "/hello/world";
 
     var original_message = Message.new();
     original_message.headers.message_type = .request;
 
     original_message.setBody(body);
-    try original_message.setTopic(topic);
+    original_message.setTopicName(topic_name);
 
     const encoded_message = try allocator.alloc(u8, original_message.size());
     defer allocator.free(encoded_message);
@@ -61,33 +62,24 @@ test "decoding" {
 
     try std.testing.expectEqual(original_message.headers.message_type, decoded_message.headers.message_type);
     try std.testing.expect(std.mem.eql(u8, original_message.body(), decoded_message.body()));
-    try std.testing.expect(std.mem.eql(u8, try original_message.topic(), try decoded_message.topic()));
+    try std.testing.expect(std.mem.eql(u8, original_message.topicName(), decoded_message.topicName()));
 }
 
 test "topic operations" {
-    const long_invalid_topic = "a" ** (constants.message_max_topic_name_size + 1);
-
     var req_message = Message.new();
     req_message.headers.message_type = .request;
 
-    var topic = try req_message.topic();
+    var topic_name = req_message.topicName();
 
-    try std.testing.expectEqual(0, topic.len);
+    try std.testing.expectEqual(0, topic_name.len);
 
-    // set the topic
-    const new_topic = "/hello/world";
-    try req_message.setTopic(new_topic);
+    // set the topic_name
+    const new_topic_name = "/hello/world";
+    req_message.setTopicName(new_topic_name);
 
-    topic = try req_message.topic();
+    topic_name = req_message.topicName();
 
-    try std.testing.expect(std.mem.eql(u8, new_topic, topic));
-    try std.testing.expectError(ProtocolError.InvalidTopicLength, req_message.setTopic(long_invalid_topic));
-
-    var ping_message = Message.new();
-    ping_message.headers.message_type = .ping;
-
-    try std.testing.expectError(ProtocolError.InvalidMessageOperation, ping_message.setTopic("hello"));
-    try std.testing.expectError(ProtocolError.InvalidMessageOperation, ping_message.topic());
+    try std.testing.expect(std.mem.eql(u8, new_topic_name, topic_name));
 }
 
 test "constructing and casting Headers" {

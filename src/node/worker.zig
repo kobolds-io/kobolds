@@ -1,20 +1,28 @@
 const std = @import("std");
-const posix = std.posix;
+const testing = std.testing;
 const assert = std.debug.assert;
 const log = std.log.scoped(.Worker);
+const posix = std.posix;
 
+// Deps
 const uuid = @import("uuid");
 
 const constants = @import("../constants.zig");
-
-const RingBuffer = @import("../data_structures/ring_buffer.zig").RingBuffer;
-const MessageQueue = @import("../data_structures/message_queue.zig").MessageQueue;
-const Message = @import("../message.zig").Message;
-const Accept = @import("../message.zig").Accept;
-const Connection = @import("../connection.zig").Connection;
-const Bus = @import("./bus.zig").Bus;
-const MessagePool = @import("../message_pool.zig").MessagePool;
+const Broker = @import("./broker.zig").Broker;
 const IO = @import("../io.zig").IO;
+const TopicManager = @import("./topic_manager.zig").TopicManager;
+const Subscriber = @import("./subscriber.zig").Subscriber;
+
+// Protocol
+const Message = @import("../protocol/message.zig").Message;
+const Accept = @import("../protocol/message.zig").Accept;
+const Connection = @import("../protocol/connection.zig").Connection;
+
+// Datastructure
+const Channel = @import("../data_structures/channel.zig").Channel;
+const UnmanagedQueue = @import("../data_structures/unmanaged_queue.zig").UnmanagedQueue;
+const MessageQueue = @import("../data_structures/message_queue.zig").MessageQueue;
+const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
 
 const WorkerState = enum {
     running,
@@ -22,127 +30,108 @@ const WorkerState = enum {
     closed,
 };
 
+const WorkerConfig = struct {
+    node_id: uuid.Uuid,
+    id: u32,
+};
+
 pub const Worker = struct {
     const Self = @This();
 
-    node_id: uuid.Uuid,
     allocator: std.mem.Allocator,
-    bus: *Bus,
-    message_pool: *MessagePool,
-    id: u32,
-    io: IO,
-    state: WorkerState,
-    connections: std.AutoHashMap(uuid.Uuid, *Connection),
+    broker: *Broker,
+    config: WorkerConfig,
     connections_mutex: std.Thread.Mutex,
-    inbox: MessageQueue,
-    inbox_mutex: std.Thread.Mutex,
+    connections: std.AutoHashMap(uuid.Uuid, *Connection),
+    message_pool: *MessagePool,
+    io: *IO,
+    state: WorkerState,
+    pending_messages: MessageQueue,
+    topic_manager: *TopicManager,
+    subscribers: std.AutoHashMap(uuid.Uuid, *Subscriber),
 
     pub fn init(
-        node_id: uuid.Uuid,
-        id: u32,
         allocator: std.mem.Allocator,
-        bus: *Bus,
+        broker: *Broker,
         message_pool: *MessagePool,
+        topic_manager: *TopicManager,
+        config: WorkerConfig,
     ) !Self {
-        var io = try IO.init(8, 0);
+        const io = try allocator.create(IO);
+        errdefer allocator.destroy(io);
+
+        io.* = try IO.init(constants.io_uring_entries, 0);
         errdefer io.deinit();
 
         return Self{
-            .node_id = node_id,
             .allocator = allocator,
-            .id = id,
-            .io = io,
+            .broker = broker,
+            .config = config,
             .connections_mutex = std.Thread.Mutex{},
-            .state = .closed,
             .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
-            .inbox = MessageQueue.new(constants.message_queue_capacity_default),
-            .inbox_mutex = std.Thread.Mutex{},
-            .bus = bus,
             .message_pool = message_pool,
+            .pending_messages = MessageQueue.new(),
+            .io = io,
+            .state = .closed,
+            .topic_manager = topic_manager,
+            .subscribers = std.AutoHashMap(uuid.Uuid, *Subscriber).init(allocator),
         };
     }
 
     pub fn deinit(self: *Self) void {
+        // TODO: loop over and close all connections
         var connections_iter = self.connections.valueIterator();
-        while (connections_iter.next()) |conn_ptr| {
-            var conn = conn_ptr.*;
+        while (connections_iter.next()) |connection_ptr| {
+            const connection = connection_ptr.*;
 
-            // the close function shuold have been called prior to the deinit
-            assert(conn.state == .closed);
-
-            // deinit the connection
-            conn.deinit();
-
-            // Destroy this connection
-            self.allocator.destroy(conn);
+            connection.deinit();
+            self.allocator.destroy(connection);
         }
 
-        self.inbox_mutex.lock();
-        defer self.inbox_mutex.unlock();
+        self.pending_messages.reset();
 
-        while (self.inbox.dequeue()) |message| {
-            message.deref();
-        }
-
+        // deinit
         self.connections.deinit();
         self.io.deinit();
+
+        // dealloc
+        self.allocator.destroy(self.io);
+        // self.allocator.destroy(self.aggregated_topic_messages);
     }
 
-    pub fn tick(self: *Self) !void {
-        if (self.connections.count() == 0) return;
-
-        if (self.connections_mutex.tryLock()) {
-            defer self.connections_mutex.unlock();
-            var conn_iter = self.connections.iterator();
-            while (conn_iter.next()) |entry| {
-                const conn = entry.value_ptr.*;
-
-                // remove this connection if it is already closed
-                if (conn.state == .closed) {
-                    conn.deinit();
-                    self.allocator.destroy(conn);
-                    _ = self.connections.remove(entry.key_ptr.*);
-                    continue;
-                }
-
-                // send or recv messages
-                try conn.tick();
-
-                if (conn.inbox.count > 0) {
-                    if (conn.inbox.count + self.inbox.count < self.inbox.capacity) {
-                        self.inbox_mutex.lock();
-                        defer self.inbox_mutex.unlock();
-
-                        // take all the messages in the inbox
-                        self.inbox.concatenate(conn.inbox);
-
-                        // clear the inbox completely
-                        conn.inbox.clear();
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn run(self: *Self) void {
+    pub fn run(self: *Self, ready_chan: *Channel(anyerror!bool)) void {
         assert(self.state != .running);
 
+        log.info("worker {} running", .{self.config.id});
+
         self.state = .running;
-        log.info("worker {} running", .{self.id});
-        defer log.debug("worker shutting down {}. state: {any}", .{ self.id, self.state });
+        ready_chan.send(true);
 
         while (true) {
             switch (self.state) {
                 .running => {
-                    self.tick() catch |err| {
-                        log.err("worker.tick err {any}", .{err});
-                        unreachable;
-                    };
+                    // loop over all connections and gather their messages
+                    var connections_iter = self.connections.iterator();
+                    while (connections_iter.next()) |entry| {
+                        const conn = entry.value_ptr.*;
+
+                        self.gatherPendingMessages(conn) catch unreachable;
+                        // try self.distribute(conn);
+
+                        conn.tick() catch unreachable;
+
+                        if (conn.state == .closed) {
+                            _ = self.removeConnection(conn);
+                            continue;
+                        }
+                    }
+
+                    self.processPendingMessages();
+                    // self.escalatePendingMessages();
+
+                    self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
                 },
                 .close => {
-                    self.connections_mutex.lock();
-                    defer self.connections_mutex.unlock();
-
                     // check if every connection is closed
                     var all_connections_closed = true;
 
@@ -153,82 +142,163 @@ pub const Worker = struct {
                             .closed => continue,
                             .close => {
                                 all_connections_closed = false;
-                                continue;
                             },
-                            .ready => {
+                            else => {
                                 conn.state = .close;
                                 all_connections_closed = false;
-                                continue;
                             },
                         }
 
-                        try conn.tick();
+                        conn.tick() catch |err| {
+                            log.err("worker conn tick err {any}", .{err});
+                            unreachable;
+                        };
                     }
 
                     if (all_connections_closed) {
                         self.state = .closed;
-                        return;
+                        log.debug("closed all connections", .{});
                     }
                 },
-                .closed => return, // do nothing and exit this loop
+                .closed => return,
             }
-
-            self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
         }
     }
 
     pub fn close(self: *Self) void {
-        assert(self.state == .running);
-
-        self.state = .close;
-
-        // give this worker `n` ms to closed before we are going to just timeout
-        const closed_deadline = std.time.milliTimestamp() + 1_000;
-
-        // block until the worker fully closes
-        // while (self.state != .closed) {
-        while (self.state != .closed and std.time.milliTimestamp() < closed_deadline) {
-            std.time.sleep(1 * std.time.ns_per_ms);
-            // log.debug("waiting worker.id {}", .{self.id});
-        }
-
         if (self.state == .closed) return;
+        if (self.state == .running) self.state = .close;
 
-        log.warn("worker did not properly close all id: {}. deadline exceeded", .{self.id});
+        // wait for the connections to all be closed
+        var i: usize = 0;
+        while (self.state != .closed) : (i += 1) {
+            log.debug("stopping worker attempt - {}", .{i});
+
+            std.time.sleep(1 * std.time.ns_per_ms);
+        }
     }
 
-    pub fn addConnection(
-        self: *Self,
-        conn_id: uuid.Uuid,
-        socket: posix.socket_t,
-        inbox: *MessageQueue,
-        outbox: *RingBuffer(*Message),
-    ) !void {
-        self.connections_mutex.lock();
-        defer self.connections_mutex.unlock();
+    fn gatherPendingMessages(self: *Self, conn: *Connection) !void {
+        // check to see if there are messages
+        if (conn.inbox.count == 0) return;
 
-        // create the actual connection
-        const conn = self.allocator.create(Connection) catch unreachable;
-        errdefer self.allocator.destroy(conn);
+        self.pending_messages.concatenate(&conn.inbox);
+        conn.inbox.clear();
 
-        conn.* = Connection.init(
-            conn_id,
-            &self.io,
-            socket,
-            inbox,
-            outbox,
-            self.allocator,
-            self.message_pool,
-        );
-        errdefer conn.deinit();
+        assert(conn.inbox.count == 0);
+    }
 
-        // add a ref to this connection
-        self.connections.put(conn_id, conn) catch unreachable;
+    fn processPendingMessages(self: *Self) void {
+        // Topic messages is used to aggregate messages for each topic in this batch of pending messages.
+        // Since each message is destined for a single topic, we can use a message queue to link them together like
+        // a chain and not have to do any special reallocations.
+        var topic_messages = std.StringHashMap(*MessageQueue).init(self.allocator);
+        defer topic_messages.deinit();
 
+        while (self.pending_messages.dequeue()) |message| {
+            defer {
+                if (message.refs() == 0) self.message_pool.destroy(message);
+            }
+
+            const msg_type = message.headers.message_type;
+
+            switch (msg_type) {
+                .ping => {
+                    defer self.broker.processed_messages_count += 1;
+
+                    // Modify message in-place to avoid extra allocation
+                    message.headers.message_type = .pong;
+                    message.setTransactionId(message.transactionId());
+                    message.setErrorCode(.ok);
+
+                    if (self.connections.get(message.headers.origin_id)) |conn| {
+                        message.ref();
+                        if (conn.outbox.enqueue(message)) |_| {
+                            // Success, continue
+                        } else |err| {
+                            log.err("Failed to enqueue message to outbox: {}", .{err});
+                            message.deref(); // Undo reference if enqueue fails
+                        }
+                    } else {
+                        log.err("Unable to handle ping message, connection not found", .{});
+                    }
+                },
+                .publish => {
+                    defer self.broker.processed_messages_count += 1;
+                    defer message.deref();
+
+                    // const topic_name = message.topicName();
+                    //
+                    // if (topic_messages.get(topic_name)) |entry| {
+                    //     entry.enqueue(message);
+                    // } else {
+                    //     var q = MessageQueue.new();
+                    //     q.enqueue(message);
+                    //     topic_messages.put(topic_name, &q) catch unreachable;
+                    // }
+                },
+                // .subscribe, .unsubscribe => {
+                // },
+                else => {},
+            }
+        }
+
+        // var topic_messages_iter = topic_messages.iterator();
+        // while (topic_messages_iter.next()) |entry| {
+        //     const topic_name = entry.key_ptr.*;
+        //     const queue = entry.value_ptr.*;
+        //     // log.debug("topic_name: {s}, # of messages {}", .{ topic_name, queue.count });
+        //     self.topic_manager.enqueueTopicMessages(topic_name, queue) catch unreachable;
+        //
+        //     // while (queue.dequeue()) |m| {
+        //     //     m.deref();
+        //     //     if (m.refs() == 0) self.message_pool.destroy(m);
+        //     // }
+        // }
+    }
+
+    fn escalatePendingMessages(self: *Self) void {
+        if (self.pending_messages.count == 0) return;
+
+        // lock the pending messages queue on the broker so no other worker clobbers it.
+        // This entire function should be close to instantaneous because we are just moving pointers around
+
+        // self.broker.pending_messages_mutex.lock();
+        // defer self.broker.pending_messages_mutex.unlock();
+
+        // put the gathered messages on the broker
+        self.broker.pending_messages.concatenate(&self.pending_messages);
+        self.pending_messages.reset();
+    }
+
+    pub fn addConnection(self: *Self, socket: posix.socket_t) !void {
+        // we are just gonna try to close this socket if anything blows up
+        errdefer posix.close(socket);
+
+        // initialize the connection
+        const connection = try self.allocator.create(Connection);
+        errdefer self.allocator.destroy(connection);
+
+        const conn_id = uuid.v7.new();
+
+        connection.* = try Connection.init(conn_id, .node, self.io, socket, self.allocator, self.message_pool);
+        errdefer connection.deinit();
+
+        connection.state = .connecting;
+
+        {
+            self.connections_mutex.lock();
+            defer self.connections_mutex.unlock();
+
+            try self.connections.put(conn_id, connection);
+        }
+        errdefer _ = self.connections.remove(conn_id);
+
+        // construct and accept message
         // add an accept message to this connection's inbox immediately
         const accept_message = self.message_pool.create() catch |err| {
             log.err("unable to create an accept message for connection {any}", .{err});
-            conn.state = .close;
+            connection.state = .close;
             return;
         };
 
@@ -238,12 +308,47 @@ pub const Worker = struct {
 
         var accept_headers: *Accept = accept_message.headers.into(.accept).?;
         accept_headers.accepted_origin_id = conn_id;
-        accept_headers.origin_id = self.node_id;
+        accept_headers.origin_id = self.config.node_id;
 
-        log.debug("accept message ref_count {}", .{accept_message.ref_count});
+        connection.state = .connected;
 
-        conn.outbox.enqueue(accept_message) catch unreachable;
+        try connection.outbox.enqueue(accept_message);
 
-        log.info("accepted a connection {}", .{conn.origin_id});
+        log.info("worker: {} added connection {}", .{ self.config.id, conn_id });
+    }
+
+    pub fn removeConnection(self: *Self, conn: *Connection) bool {
+        defer log.info("worker: {} removed connection {}", .{ self.config.id, conn.origin_id });
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        conn.deinit();
+        return self.connections.remove(conn.origin_id);
+
+        // const removed_from_connection_messages = self.connection_messages.remove(conn.origin_id);
+        // const removed_from_connections = self.connections.remove(conn.origin_id);
+        //
+        // return removed_from_connection_messages and removed_from_connections;
     }
 };
+
+test "init/deinit" {
+    const allocator = testing.allocator;
+
+    var message_pool = try MessagePool.init(allocator, 100);
+    defer message_pool.deinit();
+
+    var topic_manager = TopicManager.init(allocator, &message_pool);
+    defer topic_manager.deinit();
+
+    var broker = try Broker.init(allocator, &message_pool, &topic_manager, .{});
+    defer broker.deinit();
+
+    const config = WorkerConfig{
+        .id = 0,
+        .node_id = 1,
+    };
+
+    var worker = try Worker.init(allocator, &broker, &message_pool, &topic_manager, config);
+    defer worker.deinit();
+}

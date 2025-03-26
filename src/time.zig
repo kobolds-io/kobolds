@@ -95,9 +95,8 @@ pub const Time = struct {
         //
         // For more detail and why CLOCK_MONOTONIC_RAW is even worse than CLOCK_MONOTONIC, see
         // https://github.com/ziglang/zig/pull/933#discussion_r656021295.
-        var ts: posix.timespec = undefined;
-        posix.clock_gettime(posix.CLOCK.BOOTTIME, &ts) catch @panic("CLOCK_BOOTTIME required");
-        return @as(u64, @intCast(ts.tv_sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.tv_nsec));
+        const ts = posix.clock_gettime(posix.CLOCK.BOOTTIME) catch @panic("CLOCK_BOOTTIME required");
+        return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
     }
 
     /// A timestamp to measure real (i.e. wall clock) time, meaningful across systems, and reboots.

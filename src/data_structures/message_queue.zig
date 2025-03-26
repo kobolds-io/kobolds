@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const testing = std.testing;
-const Message = @import("../message.zig").Message;
+const Message = @import("../protocol/message.zig").Message;
 const constants = @import("../constants.zig");
 
 pub const QueueError = error{
@@ -19,21 +19,14 @@ pub const MessageQueue = struct {
 
     /// this is used internally to track the size of the queue, don't modify outside of queue
     count: u32,
-    capacity: u32,
 
-    pub fn new(max_size: ?u32) Self {
-        var capacity_ = constants.message_queue_capacity_default;
-        if (max_size) |n| {
-            assert(n <= constants.message_queue_capacity_max);
-            capacity_ = n;
-        }
+    pub fn new() Self {
 
         // ensure that the
         return Self{
             .head = null,
             .tail = null,
             .count = 0,
-            .capacity = capacity_,
         };
     }
 
@@ -53,30 +46,12 @@ pub const MessageQueue = struct {
         return false;
     }
 
-    /// drops all references and safely resets the queue.
-    pub fn reset(self: *Self) void {
-        if (self.isEmpty()) return;
-
-        var current = self.head;
-        while (current) |message| {
-            const tmp = message.next;
-            self.head = tmp;
-            message.next = null;
-            self.count -= 1;
-            current = tmp;
-        }
-
-        assert(self.head == null);
-        assert(self.count == 0);
-        self.tail = null;
+    pub fn available(self: *Self) u32 {
+        return self.capacity - self.count;
     }
 
-    pub fn prepend(self: *Self, message: *Message) QueueError!void {
+    pub fn prepend(self: *Self, message: *Message) void {
         assert(message.next == null);
-
-        if (self.count == self.capacity) {
-            return QueueError.QueueFull;
-        }
 
         defer self.count += 1;
 
@@ -94,13 +69,9 @@ pub const MessageQueue = struct {
         return;
     }
 
-    pub fn enqueue(self: *Self, message: *Message) QueueError!void {
+    pub fn enqueue(self: *Self, message: *Message) void {
         // ensure that the new item is fresh and not referencing anything
         assert(message.next == null);
-
-        if (self.count == self.capacity) {
-            return QueueError.QueueFull;
-        }
 
         // always increment the count
         defer self.count += 1;
@@ -119,32 +90,24 @@ pub const MessageQueue = struct {
     }
 
     /// Enqueue many messages at a time. This is faster than calling enqueue one at a time
-    pub fn enqueueMany(self: *Self, messages: []const *Message) QueueError!void {
-        // do nothing if the incoming messages is actually empty
+    pub fn enqueueMany(self: *Self, messages: []const *Message) void {
         if (messages.len == 0) return;
 
-        // check if adding these messages would overflow the count
-        if (self.count + messages.len > self.capacity) return QueueError.QueueFull;
-
-        // we are just going to loop over each message and assign next to the next message
-        var current: *Message = undefined;
-        for (0..messages.len) |i| {
-            current = messages[i];
-            if (i + 1 < messages.len) {
-                current.next = messages[i + 1];
-            }
+        // Link each message to the next one
+        for (0..messages.len - 1) |i| {
+            messages[i].next = messages[i + 1];
         }
+        messages[messages.len - 1].next = null; // Null-terminate the last message
 
-        // handle the case where the head is empty
-        if (self.isEmpty()) {
+        // If the queue is not empty, append the new batch to the existing tail
+        if (self.tail) |tail_node| {
+            tail_node.next = messages[0];
+        } else {
             self.head = messages[0];
         }
 
-        // increase the count by the enqueue messages count
-        self.count += @intCast(messages.len);
-
-        // set the tail to the last message
         self.tail = messages[messages.len - 1];
+        self.count += @intCast(messages.len);
     }
 
     /// Remove the first item from the queue
@@ -172,9 +135,26 @@ pub const MessageQueue = struct {
         return result;
     }
 
-    /// This function completely clears the queue. This does not perform any safety checks
+    /// safely drops all references and safely resets the queue. Best used when deinitializing the queue
+    pub fn reset(self: *Self) void {
+        if (self.isEmpty()) return;
+
+        var current = self.head;
+        while (current) |message| {
+            const tmp = message.next;
+            self.head = tmp;
+            message.next = null;
+            self.count -= 1;
+            current = tmp;
+        }
+
+        assert(self.head == null);
+        assert(self.count == 0);
+        self.tail = null;
+    }
+
+    /// unsafely clears the queue. This does not perform any safety checks.
     pub fn clear(self: *Self) void {
-        // there is nothing to do
         if (self.isEmpty()) return;
 
         self.head = null;
@@ -187,9 +167,6 @@ pub const MessageQueue = struct {
     pub fn concatenate(self: *Self, other: *MessageQueue) void {
         // there is nothing to do
         if (other.isEmpty()) return;
-
-        // ensure that the new messages will fit into this queue
-        assert(self.count + other.count <= self.capacity);
 
         if (self.isEmpty()) {
             self.head = other.head;
@@ -207,7 +184,6 @@ pub const MessageQueue = struct {
 
         assert(self.head != null);
         assert(self.tail != null);
-        assert(self.count <= self.capacity);
     }
 
     /// Dequeue many items at a time, this is just as fast as calling dequeue individually
@@ -283,28 +259,25 @@ test "enqueue/dequeue" {
     var m1 = Message.new();
     var m2 = Message.new();
     var m3 = Message.new();
-    var m4 = Message.new();
 
-    var queue = MessageQueue.new(3);
-    try queue.enqueue(&m1);
+    var queue = MessageQueue.new();
+    queue.enqueue(&m1);
 
     try std.testing.expectEqual(1, queue.count);
     try std.testing.expectEqual(queue.head, &m1);
 
-    try queue.enqueue(&m2);
+    queue.enqueue(&m2);
 
     try std.testing.expectEqual(2, queue.count);
     try std.testing.expectEqual(queue.head, &m1);
     try std.testing.expectEqual(queue.head.?.next.?, &m2);
     try std.testing.expectEqual(queue.tail, &m2);
 
-    try queue.enqueue(&m3);
+    queue.enqueue(&m3);
 
     try std.testing.expectEqual(3, queue.count);
     try std.testing.expectEqual(queue.head, &m1);
     try std.testing.expectEqual(queue.tail, &m3);
-
-    try std.testing.expectError(QueueError.QueueFull, queue.enqueue(&m4));
 
     const qm1 = queue.dequeue() orelse unreachable;
 
@@ -332,49 +305,42 @@ test "prepend" {
     var m1 = Message.new();
     var m2 = Message.new();
     var m3 = Message.new();
-    var m4 = Message.new();
 
-    var queue = MessageQueue.new(3);
-    try queue.prepend(&m1);
+    var queue = MessageQueue.new();
+    queue.prepend(&m1);
 
     try std.testing.expectEqual(1, queue.count);
     try std.testing.expectEqual(queue.head, &m1);
     try std.testing.expectEqual(queue.tail, &m1);
 
-    try queue.prepend(&m2);
+    queue.prepend(&m2);
 
     try std.testing.expectEqual(2, queue.count);
     try std.testing.expectEqual(queue.head, &m2);
     try std.testing.expectEqual(queue.head.?.next.?, &m1);
     try std.testing.expectEqual(queue.tail, &m1);
 
-    try queue.prepend(&m3);
+    queue.prepend(&m3);
 
     try std.testing.expectEqual(3, queue.count);
     try std.testing.expectEqual(queue.head, &m3);
     try std.testing.expectEqual(queue.tail, &m1);
-
-    try std.testing.expectError(QueueError.QueueFull, queue.enqueue(&m4));
 }
 
 test "enqueueMany/dequeueMany" {
     var m1 = Message.new();
     var m2 = Message.new();
     var m3 = Message.new();
-    var m4 = Message.new();
 
     const messages1 = [_]*Message{ &m1, &m2, &m3 };
 
-    var queue = MessageQueue.new(3);
-    try queue.enqueueMany(&messages1);
+    var queue = MessageQueue.new();
+    queue.enqueueMany(&messages1);
 
     try std.testing.expectEqual(3, queue.count);
     try std.testing.expectEqual(queue.head, &m1);
     try std.testing.expectEqual(m2.next, &m3);
     try std.testing.expectEqual(queue.tail, &m3);
-
-    const messages2 = [_]*Message{&m4};
-    try std.testing.expectError(QueueError.QueueFull, queue.enqueueMany(&messages2));
 
     try std.testing.expectEqual(3, queue.count);
 
@@ -398,11 +364,11 @@ test "remove" {
 
     const messages1 = [_]*Message{ &m1, &m2, &m3 };
 
-    var queue = MessageQueue.new(3);
+    var queue = MessageQueue.new();
 
     try std.testing.expectError(QueueError.QueueEmpty, queue.remove(&m1));
 
-    try queue.enqueueMany(&messages1);
+    queue.enqueueMany(&messages1);
 
     try std.testing.expectError(QueueError.NotFound, queue.remove(&m4));
 
@@ -444,7 +410,7 @@ test "remove" {
     try std.testing.expectEqual(null, m2.next);
     try std.testing.expectEqual(null, m3.next);
 
-    try queue.enqueueMany(&messages1);
+    queue.enqueueMany(&messages1);
 
     try queue.remove(&m3);
 
@@ -464,8 +430,8 @@ test "reset" {
 
     const messages1 = [_]*Message{ &m1, &m2, &m3 };
 
-    var queue = MessageQueue.new(3);
-    try queue.enqueueMany(&messages1);
+    var queue = MessageQueue.new();
+    queue.enqueueMany(&messages1);
 
     try std.testing.expectEqual(3, queue.count);
     try std.testing.expectEqual(queue.head, &m1);

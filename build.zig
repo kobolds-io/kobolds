@@ -89,25 +89,25 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
 
-    const lib_cicd_tests = b.addTest(.{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .test_runner = b.path("src/cicd_test_runner.zig"),
-    });
+    // const lib_cicd_tests = b.addTest(.{
+    //     .root_source_file = b.path("src/root.zig"),
+    //     .target = target,
+    //     .optimize = optimize,
+    //     .test_runner = b.path("src/cicd_test_runner.zig"),
+    // });
 
-    const run_lib_cicd_tests = b.addRunArtifact(lib_cicd_tests);
-    const exe_cicd_tests = b.addTest(.{
-        .root_source_file = b.path("src/test.zig"),
-        .target = target,
-        .optimize = optimize,
-        .test_runner = b.path("src/cicd_test_runner.zig"),
-    });
+    // const run_lib_cicd_tests = b.addRunArtifact(lib_cicd_tests);
+    // const exe_cicd_tests = b.addTest(.{
+    //     .root_source_file = b.path("src/test.zig"),
+    //     .target = target,
+    //     .optimize = optimize,
+    //     .test_runner = b.path("src/cicd_test_runner.zig"),
+    // });
 
-    const run_exe_cicd_tests = b.addRunArtifact(exe_cicd_tests);
-    const cicd_test_step = b.step("test-ci", "Run unit tests with more verbose output");
-    cicd_test_step.dependOn(&run_lib_cicd_tests.step);
-    cicd_test_step.dependOn(&run_exe_cicd_tests.step);
+    // const run_exe_cicd_tests = b.addRunArtifact(exe_cicd_tests);
+    // const cicd_test_step = b.step("test-ci", "Run unit tests with more verbose output");
+    // cicd_test_step.dependOn(&run_lib_cicd_tests.step);
+    // cicd_test_step.dependOn(&run_exe_cicd_tests.step);
 
     const bench_lib = b.addTest(.{
         .name = "bench",
@@ -130,8 +130,8 @@ pub fn build(b: *std.Build) void {
     lib.root_module.addImport("uuid", uuid_module);
     exe_unit_tests.root_module.addImport("uuid", uuid_module);
     lib_unit_tests.root_module.addImport("uuid", uuid_module);
-    exe_cicd_tests.root_module.addImport("uuid", uuid_module);
-    lib_cicd_tests.root_module.addImport("uuid", uuid_module);
+    // exe_cicd_tests.root_module.addImport("uuid", uuid_module);
+    // lib_cicd_tests.root_module.addImport("uuid", uuid_module);
 
     // zig-cli
     const zig_cli_dep = b.dependency("zig-cli", .{ .target = target, .optimize = optimize });
@@ -141,8 +141,8 @@ pub fn build(b: *std.Build) void {
     lib.root_module.addImport("zig-cli", zig_cli_module);
     exe_unit_tests.root_module.addImport("zig-cli", zig_cli_module);
     lib_unit_tests.root_module.addImport("zig-cli", zig_cli_module);
-    exe_cicd_tests.root_module.addImport("zig-cli", zig_cli_module);
-    lib_cicd_tests.root_module.addImport("zig-cli", zig_cli_module);
+    // exe_cicd_tests.root_module.addImport("zig-cli", zig_cli_module);
+    // lib_cicd_tests.root_module.addImport("zig-cli", zig_cli_module);
 
     // zbench
     const zbench_dep = b.dependency(

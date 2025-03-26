@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-const Message = @import("../message.zig").Message;
+const Message = @import("../protocol/message.zig").Message;
 
 pub fn RingBuffer(comptime T: type) type {
     return struct {
@@ -37,6 +37,10 @@ pub fn RingBuffer(comptime T: type) type {
             self.allocator.free(self.buffer);
         }
 
+        pub fn available(self: *Self) u32 {
+            return self.capacity - self.count;
+        }
+
         pub fn enqueue(self: *Self, value: T) !void {
             if (self.isFull()) {
                 return error.BufferFull;
@@ -62,12 +66,74 @@ pub fn RingBuffer(comptime T: type) type {
             return value;
         }
 
+        /// Enqueue multiple items into the ring buffer.
+        /// Returns the number of items actually enqueued.
+        pub fn enqueueMany(self: *Self, values: []const T) u32 {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            var added_count: u32 = 0;
+            for (values) |value| {
+                if (self.isFull()) break;
+
+                self.buffer[self.tail] = value;
+                self.tail = (self.tail + 1) % self.capacity;
+                self.count += 1;
+                added_count += 1;
+            }
+
+            return added_count;
+        }
+
+        /// Dequeue multiple items from the ring buffer.
+        /// Returns the number of items actually dequeued.
+        pub fn dequeueMany(self: *Self, out: []T) u32 {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            var removed_count: u32 = 0;
+            for (out) |*slot| {
+                if (self.isEmpty()) break;
+
+                slot.* = self.buffer[self.head];
+                self.head = (self.head + 1) % self.capacity;
+                self.count -= 1;
+                removed_count += 1;
+            }
+
+            return removed_count;
+        }
+
+        pub fn concatenate(self: *Self, other: *Self) !void {
+
+            // TODO:
+            //  1. check that self.available() >= other.count;
+
+            if (self.available() >= other.count) {
+                // add every value from other to self.
+
+            } else {
+                // TODO:
+                //  2. figure out how many items could be added at a time
+            }
+        }
+
         pub fn isEmpty(self: *Self) bool {
             return self.count == 0;
         }
 
         pub fn isFull(self: *Self) bool {
             return self.count == self.capacity;
+        }
+
+        /// unsafely reset the ring buffer to simply drop all items within
+        pub fn reset(self: *Self) void {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            self.head = 0;
+            self.tail = 0;
+            self.count = 0;
         }
     };
 }

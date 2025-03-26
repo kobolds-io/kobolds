@@ -1,213 +1,316 @@
 const std = @import("std");
-const net = std.net;
 const posix = std.posix;
+const testing = std.testing;
 const assert = std.debug.assert;
 const log = std.log.scoped(.Node);
 
 const uuid = @import("uuid");
-
 const constants = @import("../constants.zig");
-const Message = @import("../message.zig").Message;
-const Accept = @import("../message.zig").Accept;
-const Ping = @import("../message.zig").Ping;
-const Pong = @import("../message.zig").Pong;
-const Request = @import("../message.zig").Request;
-const Reply = @import("../message.zig").Reply;
 
-const MessagePool = @import("../message_pool.zig").MessagePool;
-const MessageQueue = @import("../data_structures/message_queue.zig").MessageQueue;
-const Bus = @import("./bus.zig").Bus;
-
-const Connection = @import("../connection.zig").Connection;
-const ProtocolError = @import("../errors.zig").ProtocolError;
+const Acceptor = @import("./acceptor.zig").Acceptor;
+const Broker = @import("./broker.zig").Broker;
+const Worker = @import("./worker.zig").Worker;
 const IO = @import("../io.zig").IO;
+
+const TopicManager = @import("./topic_manager.zig").TopicManager;
+const Message = @import("../protocol/message.zig").Message;
+
+// Datastructures
+const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
+const Channel = @import("../data_structures/channel.zig").Channel;
 
 /// static configuration used to configure the node
 pub const NodeConfig = struct {
-    /// the host the node is bound to
     host: []const u8 = "127.0.0.1",
-    /// tcp connections are accepted on this port
-    port: u16 = 4000,
-
-    /// number of worker threads, default is 1 worker per cpu core
-    worker_thread_count: usize = 1,
+    port: u16 = 8000,
+    worker_threads: u32 = 1,
+    message_pool_capacity: u32 = constants.message_pool_max_capacity,
 };
 
-/// A node is the central building block for communicating between nodes
-/// on either the same or different hosts.
+const NodeState = enum {
+    running,
+    close,
+    closed,
+};
+
 pub const Node = struct {
     const Self = @This();
-    /// id of the node
-    id: uuid.Uuid,
 
     allocator: std.mem.Allocator,
-
-    running: bool,
-
-    /// configuration file used by the node
     config: NodeConfig,
-
-    /// socket used to accept new connections to the node
-    listener_socket: posix.socket_t,
-
-    /// shared reference to IO
+    id: uuid.Uuid,
     io: *IO,
-
-    bus: *Bus,
-
-    /// Reference to the global message pool
     message_pool: *MessagePool,
-
-    /// Trackers to accept new connections
-    accept_submitted: bool,
-    accept_completion: *IO.Completion,
-
-    /// Queue of message pointers that still need to be processed
-    unproccessed_queue: MessageQueue,
-
-    /// Queue of message pointers have been processed
-    proccessed_queue: MessageQueue,
-
-    /// Number of messages processed by the node
-    processed_messages_count: u128,
+    tcp_acceptor: *Acceptor,
+    broker: *Broker,
+    workers: *std.AutoHashMap(u32, *Worker),
+    topic_manager: *TopicManager,
+    state: NodeState,
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
-        const accept_completion = try allocator.create(IO.Completion);
-        errdefer allocator.destroy(accept_completion);
+        const node_id = uuid.v7.new();
 
-        const cpuCount = try std.Thread.getCpuCount();
+        const message_pool = try allocator.create(MessagePool);
+        errdefer allocator.destroy(message_pool);
 
-        // TODO: there should be a validate method on the config to ensure that all the fields
-        // are actually valid and not hot garb
-        assert(config.worker_thread_count >= 1);
-        assert(config.worker_thread_count <= cpuCount);
+        message_pool.* = try MessagePool.init(allocator, config.message_pool_capacity);
+        errdefer message_pool.deinit();
+
+        const tcp_acceptor = try allocator.create(Acceptor);
+        errdefer allocator.destroy(tcp_acceptor);
+
+        tcp_acceptor.* = try Acceptor.init(allocator, .{ .host = config.host, .port = config.port });
+        errdefer tcp_acceptor.deinit();
+
+        const io = try allocator.create(IO);
+        errdefer allocator.destroy(io);
+
+        io.* = try IO.init(constants.io_uring_entries, 0);
+        errdefer io.deinit();
+
+        const topic_manager = try allocator.create(TopicManager);
+        errdefer allocator.destroy(topic_manager);
+
+        topic_manager.* = TopicManager.init(allocator, message_pool);
+        errdefer topic_manager.deinit();
+
+        const broker = try allocator.create(Broker);
+        errdefer allocator.destroy(broker);
+
+        broker.* = try Broker.init(allocator, message_pool, topic_manager, .{});
+        errdefer broker.deinit();
+
+        const workers = try allocator.create(std.AutoHashMap(u32, *Worker));
+        errdefer allocator.destroy(workers);
+
+        workers.* = std.AutoHashMap(u32, *Worker).init(allocator);
+        errdefer workers.deinit();
+
+        for (0..config.worker_threads) |i| {
+            // initialize a new worker
+            const worker = try allocator.create(Worker);
+            errdefer allocator.destroy(worker);
+
+            worker.* = try Worker.init(allocator, broker, message_pool, topic_manager, .{
+                .node_id = node_id,
+                .id = @intCast(i),
+            });
+            errdefer workers.deinit();
+
+            try workers.put(worker.config.id, worker);
+            errdefer _ = workers.remove(worker.config.id);
+        }
 
         return Self{
-            .id = uuid.v7.new(),
             .allocator = allocator,
-            .running = false,
+            .broker = broker,
             .config = config,
-            .listener_socket = undefined,
-            .io = undefined,
-            .bus = undefined,
-            .message_pool = undefined,
-            .unproccessed_queue = MessageQueue.new(constants.message_queue_capacity_max),
-            .proccessed_queue = MessageQueue.new(constants.message_queue_capacity_max),
-            .processed_messages_count = 0,
-            .accept_submitted = false,
-            .accept_completion = accept_completion,
+            .id = node_id,
+            .io = io,
+            .message_pool = message_pool,
+            .tcp_acceptor = tcp_acceptor,
+            .state = .closed,
+            .workers = workers,
+            .topic_manager = topic_manager,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.allocator.destroy(self.accept_completion);
+        var workers_iter = self.workers.valueIterator();
+        while (workers_iter.next()) |worker_ptr| {
+            const worker = worker_ptr.*;
+
+            worker.deinit();
+            self.allocator.destroy(worker);
+        }
+
+        self.broker.deinit();
+        self.message_pool.deinit();
+        self.tcp_acceptor.deinit();
+        self.io.deinit();
+        self.workers.deinit();
+        self.topic_manager.deinit();
+
+        // destroy
+        self.allocator.destroy(self.workers);
+        self.allocator.destroy(self.broker);
+        self.allocator.destroy(self.message_pool);
+        self.allocator.destroy(self.tcp_acceptor);
+        self.allocator.destroy(self.io);
+        self.allocator.destroy(self.topic_manager);
     }
 
     pub fn run(self: *Self) !void {
-        if (self.running) @panic("already running");
-        self.running = true;
-        defer self.running = false;
+        assert(self.state == .closed);
+        self.state = .running;
 
-        var bus_gpa = std.heap.GeneralPurposeAllocator(.{}){};
-        defer _ = bus_gpa.deinit();
-        const bus_allocator = bus_gpa.allocator();
+        // have the tcp_acceptor start listening for new connections
+        try self.tcp_acceptor.listen();
+        defer self.tcp_acceptor.close();
 
-        var bus = try Bus.init(
-            self.id,
-            self.config.worker_thread_count,
-            bus_allocator,
-        );
-        defer bus.deinit();
+        // spawn all worker threads based on config
+        var workers_iter = self.workers.valueIterator();
+        while (workers_iter.next()) |worker_ptr| {
+            const worker = worker_ptr.*;
+            var ready_chan = Channel(anyerror!bool).init();
 
-        // initialize the listener socket
-        const address = try std.net.Address.parseIp(self.config.host, self.config.port);
-        const socket_type: u32 = posix.SOCK.STREAM;
-        const protocol = posix.IPPROTO.TCP;
-        const listener_socket = try posix.socket(address.any.family, socket_type, protocol);
-        // ensure the socket gets closed
-        defer posix.close(listener_socket);
+            const thread = try std.Thread.spawn(.{}, Worker.run, .{ worker, &ready_chan });
+            thread.detach();
 
-        // add options to listener socket
-        try posix.setsockopt(listener_socket, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-        try posix.bind(listener_socket, &address.any, address.getOsSockLen());
-        try posix.listen(listener_socket, 128);
-        log.info("listening on {s}:{d}", .{ self.config.host, self.config.port });
+            const res = ready_chan.receive();
+            _ = try res;
+        }
 
-        // NOTE: set everything that is required for running!
-
-        var io = try IO.init(constants.io_uring_entries, 0);
-        defer io.deinit();
-
-        self.io = &io;
-        self.bus = &bus;
-        self.listener_socket = listener_socket;
-
+        var start: u64 = 0;
         var timer = try std.time.Timer.start();
         defer timer.reset();
-        var start: u64 = 0;
-        var printed = false;
+        var printed: bool = false;
+        var printed_at: u64 = 0;
+        var messages_processed_count_since_last_print: u128 = 0;
 
+        // FIX: This is a spinlock and very no bueno because we end up idling at 100% CPU. Need to figure out a better way to loop when there is new work.
+        //  1. a Possible solution is to add a channel that all the workers use to notify that there is new work. I think
+        //      that this could be tricky on the whole timing front though.
         while (true) {
-            if (start == 0 and self.bus.processed_messages_count > 0) {
-                timer.reset();
-                start = timer.read();
-            }
-
-            if (self.bus.processed_messages_count > 0) {
-                const now = timer.read();
-                const elapsed_seconds = (now - start) / std.time.ns_per_s;
-
-                if (elapsed_seconds % 5 == 0) {
-                    if (!printed) {
-                        log.debug("processed {} messages in {}s", .{ self.bus.processed_messages_count, elapsed_seconds });
-                        printed = true;
+            switch (self.state) {
+                .running => {
+                    // check if there are new sockets to add to the collection!
+                    if (start == 0 and self.broker.processed_messages_count > 0) {
+                        timer.reset();
+                        start = timer.read();
                     }
-                } else {
-                    printed = false;
-                }
+
+                    if (self.broker.processed_messages_count > 0) {
+                        const now = timer.read();
+                        const elapsed_seconds = (now - start) / std.time.ns_per_s;
+                        const time_since_last_print = (now - printed_at) / std.time.ns_per_s;
+
+                        if (time_since_last_print >= 1) {
+                            if (!printed) {
+                                const processed_messages_count = self.broker.processed_messages_count;
+                                const free_messages = self.broker.message_pool.available();
+
+                                std.debug.print("duration {}s, processed messages: {}, processed delta {}, free messages {}\n", .{
+                                    elapsed_seconds,
+                                    processed_messages_count,
+                                    processed_messages_count - messages_processed_count_since_last_print,
+                                    free_messages,
+                                });
+
+                                messages_processed_count_since_last_print = processed_messages_count;
+
+                                printed = true;
+                                printed_at = now;
+                            }
+                        } else {
+                            printed = false;
+                        }
+                    }
+
+                    try self.maybeAddConnection();
+                    // try self.topic_manager.tick();
+
+                    try self.broker.tick();
+
+                    // std.time.sleep(1 * std.time.ns_per_ms);
+                    // NOTE: This is dumb, since there are no IO operations happening on this
+                    // thread. They only happen on the TCP Acceptor and workers. This should
+                    // instead be simpler.
+                    try self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms);
+                },
+                .close => {
+                    workers_iter = self.workers.valueIterator();
+                    while (workers_iter.next()) |worker_ptr| {
+                        const worker = worker_ptr.*;
+                        worker.close();
+                    }
+                    // once all the workers are closed, we can just close the node
+                    self.state = .closed;
+                },
+                .closed => return,
             }
 
-            try self.tick();
-            try self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms);
+            // try and accept new TCP connections
+            // try broker.tick();
+            // check for new socket connections
+            // try self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms);
         }
     }
 
-    fn tick(self: *Self) !void {
-        if (!self.accept_submitted) {
-            self.io.accept(*Node, self, Node.onAccept, self.accept_completion, self.listener_socket);
-            self.accept_submitted = true;
-        }
+    pub fn close(self: *Self) void {
+        if (self.state == .closed) return;
+        if (self.state == .running) self.state = .close;
 
-        try self.bus.tick();
+        // wait for the node to stop
+        var i: usize = 0;
+        while (self.state != .closed) : (i += 1) {
+            log.debug("close node attempt - {}", .{i});
+
+            std.time.sleep(1 * std.time.ns_per_ms);
+        }
     }
 
-    // Callback functions
-    pub fn onAccept(self: *Self, comp: *IO.Completion, res: IO.AcceptError!posix.socket_t) void {
-        _ = comp;
+    fn maybeAddConnection(self: *Self) !void {
+        // check if there are new sockets on the tcp_acceptor
+        if (self.tcp_acceptor.sockets.items.len > 0) {
+            self.tcp_acceptor.mutex.lock();
+            defer self.tcp_acceptor.mutex.unlock();
 
-        // FIX: Should handle the case where we are unable to accept the socket
-        const socket = res catch |err| {
-            log.err("could not accept connection {any}", .{err});
-            unreachable;
-        };
+            while (self.tcp_acceptor.sockets.pop()) |socket| {
+                try self.addConnection(socket);
+            }
+        }
+    }
 
-        self.accept_submitted = false;
+    fn addConnection(self: *Self, socket: posix.socket_t) !void {
+        // we are just gonna try to close this socket if anything blows up
+        errdefer posix.close(socket);
 
-        self.bus.addConnection(socket) catch unreachable;
+        // find the worker with the least number of connections
+        var worker_iter = self.workers.valueIterator();
+        var worker_with_min_connections: ?*Worker = null;
+        var min_connections: u32 = 0;
+
+        while (worker_iter.next()) |worker_ptr| {
+            const worker = worker_ptr.*;
+            if (worker_with_min_connections == null) {
+                worker_with_min_connections = worker;
+                min_connections = worker.connections.count();
+                continue;
+            }
+
+            if (worker.connections.count() < min_connections) {
+                worker_with_min_connections = worker;
+                min_connections = worker.connections.count();
+            }
+        }
+
+        if (worker_with_min_connections == null) unreachable;
+        const worker = worker_with_min_connections.?;
+
+        try worker.addConnection(socket);
     }
 };
 
-test "node does node things" {
-    // const allocator = std.testing.allocator;
-    //
-    // var io = try IO.init(8, 0);
-    // defer io.deinit();
-    //
-    // var message_bus = try MessageBus.init(allocator, &io);
-    // defer message_bus.deinit();
-    //
-    // var node = try Node.init(allocator, .{}, &io, &message_bus);
-    // defer node.deinit();
-    //
-    // try node.tick();
+test "init/deinit" {
+    const allocator = testing.allocator;
+
+    var node = try Node.init(allocator, .{
+        .port = 9753,
+        .host = "127.0.0.1",
+        .worker_threads = 1,
+        .message_pool_capacity = 10,
+    });
+    defer node.deinit();
+
+    const closeNode = struct {
+        fn close(n: *Node) !void {
+            std.time.sleep(5 * std.time.ms_per_s);
+            n.close();
+        }
+    }.close;
+
+    const thread = try std.Thread.spawn(.{}, closeNode, .{&node});
+    try node.run();
+    thread.join();
 }
