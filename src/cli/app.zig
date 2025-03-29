@@ -268,19 +268,15 @@ pub fn nodePing() !void {
     try client.start();
     defer client.stop();
 
+    const conn = try client.connect();
+    defer client.disconnect(conn);
+
+    // create a timer for the round trip calculation
     var timer = try std.time.Timer.start();
     defer timer.reset();
     const start = timer.read();
 
-    const conn = try client.connect();
-    defer client.disconnect(conn);
-
     try client.ping(conn, .{});
-    // for (0..50_000) |_| {
-    //     client.publish(conn, "hello", "world", .{}) catch break;
-    // }
-    //
-    // while (conn.outbox.count > 0) {}
     log.err("ping round trip took: {}ms", .{
         (timer.read() - start) / std.time.ns_per_ms,
     });

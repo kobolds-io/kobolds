@@ -41,8 +41,8 @@
             .hash = "12207f6a93a8f73155d1af391980124feb6bab344931e11f62e42e6ac825c8d59ff1",
         },
         .zbench = .{
-            .url = "https://github.com/hendriknielaender/zBench/archive/v0.9.2.tar.gz",
-            .hash = "1220776728be0ff572a3ff108ac334f373a8efd3ce252027adb967e6796f50d4a5e0",
+            .url = "https://github.com/hendriknielaender/zBench/archive/v0.9.3.tar.gz",
+            .hash = "122054a78e249bb9e6a7f13b5f13f304c97715eb03394e89f12fa763ee6f8a9a4d35",
         },
         .@"zig-cli" = .{
             .url = "git+https://github.com/sam701/zig-cli#7dcc9fa4dbfe77673c97a0be6b814f208373f54c",

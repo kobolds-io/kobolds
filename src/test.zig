@@ -16,12 +16,15 @@ comptime {
     _ = @import("./node/broker.zig");
     _ = @import("./node/node.zig");
     _ = @import("./node/service.zig");
-    _ = @import("./node/topic_manager.zig");
-    _ = @import("./node/topic.zig");
     _ = @import("./node/subscriber.zig");
     _ = @import("./node/topic_2.zig");
+    _ = @import("./node/topic_manager.zig");
+    _ = @import("./node/topic.zig");
     _ = @import("./node/worker.zig");
     _ = @import("./protocol/message_test.zig");
     _ = @import("./protocol/parser_test.zig");
+    _ = @import("./pubsub/pubsub.zig");
+    _ = @import("./pubsub/pubsub2.zig");
+    _ = @import("./pubsub/pubsub3.zig");
     _ = @import("./utils.zig");
 }

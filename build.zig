@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const version = std.SemanticVersion{ .major = 0, .minor = 0, .patch = 0 };
+
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
@@ -15,141 +17,78 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addStaticLibrary(.{
-        .name = "kobolds",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    // This is shamelessly taken from the `zbench` library's `build.zig` file. see [here](https://github.com/hendriknielaender/zBench/blob/b69a438f5a1a96d4dd0ea69e1dbcb73a209f76cd/build.zig)
+    setupExecutable(b, target, optimize);
 
-    // This declares intent for the library to be installed into the standard
-    // location when the user invokes the "install" step (the default step when
-    // running `zig build`).
-    b.installArtifact(lib);
+    setupTests(b, target, optimize);
 
-    const exe = b.addExecutable(.{
+    setupBenchmarks(b, target, optimize);
+}
+
+fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
+    const kobolds_exe = b.addExecutable(.{
         .name = "kobolds",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .version = version,
     });
 
-    // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
-    b.installArtifact(exe);
-
-    // This *creates* a Run step in the build graph, to be executed when another
-    // step is evaluated that depends on it. The next line below will establish
-    // such a dependency.
-    const run_cmd = b.addRunArtifact(exe);
-
-    // By making the run step depend on the install step, it will be run from the
-    // installation directory rather than directly from within the cache directory.
-    // This is not necessary, however, if the application depends on other installed
-    // files, this ensures they will be present and in the expected location.
-    run_cmd.step.dependOn(b.getInstallStep());
-
-    // This allows the user to pass arguments to the application in the build
-    // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
-
-    // This creates a build step. It will be visible in the `zig build --help` menu,
-    // and can be selected like this: `zig build run`
-    // This will evaluate the `run` step rather than the default, which is "install".
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
-
-    // Creates a step for unit testing. This only builds the test executable
-    // but does not run it.
-    const lib_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/root.zig"),
+    const zig_cli_dep = b.dependency("zig-cli", .{
         .target = target,
         .optimize = optimize,
     });
+    const zig_cli_mod = zig_cli_dep.module("zig-cli");
 
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+    const uuid_dep = b.dependency("uuid", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const uuid_mod = uuid_dep.module("uuid");
 
-    const exe_unit_tests = b.addTest(.{
+    kobolds_exe.root_module.addImport("zig-cli", zig_cli_mod);
+    kobolds_exe.root_module.addImport("uuid", uuid_mod);
+
+    b.installArtifact(kobolds_exe);
+}
+
+fn setupTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
+    const lib_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_lib_unit_tests.step);
-    test_step.dependOn(&run_exe_unit_tests.step);
-
-    // const lib_cicd_tests = b.addTest(.{
-    //     .root_source_file = b.path("src/root.zig"),
-    //     .target = target,
-    //     .optimize = optimize,
-    //     .test_runner = b.path("src/cicd_test_runner.zig"),
-    // });
-
-    // const run_lib_cicd_tests = b.addRunArtifact(lib_cicd_tests);
-    // const exe_cicd_tests = b.addTest(.{
-    //     .root_source_file = b.path("src/test.zig"),
-    //     .target = target,
-    //     .optimize = optimize,
-    //     .test_runner = b.path("src/cicd_test_runner.zig"),
-    // });
-
-    // const run_exe_cicd_tests = b.addRunArtifact(exe_cicd_tests);
-    // const cicd_test_step = b.step("test-ci", "Run unit tests with more verbose output");
-    // cicd_test_step.dependOn(&run_lib_cicd_tests.step);
-    // cicd_test_step.dependOn(&run_exe_cicd_tests.step);
-
-    const bench_lib = b.addTest(.{
-        .name = "bench",
-        .root_source_file = b.path("src/bench.zig"),
+    const uuid_dep = b.dependency("uuid", .{
         .target = target,
         .optimize = optimize,
+    });
+    const uuid_mod = uuid_dep.module("uuid");
 
-        // .test_runner = b.path("src/cicd_test_runner.zig"),
+    lib_unit_tests.root_module.addImport("uuid", uuid_mod);
+
+    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+    const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&run_lib_unit_tests.step);
+}
+
+fn setupBenchmarks(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
+    const bench_lib = b.addTest(.{
+        .name = "bench",
+        .root_source_file = b.path("./src/bench.zig"),
+        .target = target,
+        .optimize = optimize,
     });
 
+    const zbench_dep = b.dependency("zbench", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zbench_mod = zbench_dep.module("zbench");
+
+    bench_lib.root_module.addImport("zbench", zbench_mod);
+
     const run_bench_tests = b.addRunArtifact(bench_lib);
-    const bench_test_step = b.step("bench", "Run benchmark tests with more verbose output");
+    const bench_test_step = b.step("bench", "Run benchmark tests");
     bench_test_step.dependOn(&run_bench_tests.step);
-
-    // uuid
-    const uuid_dep = b.dependency("uuid", .{ .target = target, .optimize = optimize });
-    const uuid_module = uuid_dep.module("uuid");
-
-    exe.root_module.addImport("uuid", uuid_module);
-    lib.root_module.addImport("uuid", uuid_module);
-    exe_unit_tests.root_module.addImport("uuid", uuid_module);
-    lib_unit_tests.root_module.addImport("uuid", uuid_module);
-    // exe_cicd_tests.root_module.addImport("uuid", uuid_module);
-    // lib_cicd_tests.root_module.addImport("uuid", uuid_module);
-
-    // zig-cli
-    const zig_cli_dep = b.dependency("zig-cli", .{ .target = target, .optimize = optimize });
-    const zig_cli_module = zig_cli_dep.module("zig-cli");
-
-    exe.root_module.addImport("zig-cli", zig_cli_module);
-    lib.root_module.addImport("zig-cli", zig_cli_module);
-    exe_unit_tests.root_module.addImport("zig-cli", zig_cli_module);
-    lib_unit_tests.root_module.addImport("zig-cli", zig_cli_module);
-    // exe_cicd_tests.root_module.addImport("zig-cli", zig_cli_module);
-    // lib_cicd_tests.root_module.addImport("zig-cli", zig_cli_module);
-
-    // zbench
-    const zbench_dep = b.dependency(
-        "zbench",
-        .{ .target = target, .optimize = optimize },
-    );
-    const zbench_module = zbench_dep.module("zbench");
-
-    bench_lib.root_module.addImport("zbench", zbench_module);
 }
