@@ -50,6 +50,14 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     kobolds_exe.root_module.addImport("uuid", uuid_mod);
 
     b.installArtifact(kobolds_exe);
+
+    const run_kobolds_exe = b.addRunArtifact(kobolds_exe);
+    const run_step = b.step("run", "Run kobolds");
+    run_step.dependOn(&run_kobolds_exe.step);
+
+    if (b.args) |args| {
+        run_kobolds_exe.addArgs(args);
+    }
 }
 
 fn setupTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
