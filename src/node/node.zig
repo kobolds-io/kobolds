@@ -8,23 +8,23 @@ const uuid = @import("uuid");
 const constants = @import("../constants.zig");
 
 const Acceptor = @import("./acceptor.zig").Acceptor;
-const Broker = @import("./broker.zig").Broker;
 const Worker = @import("./worker.zig").Worker;
 const IO = @import("../io.zig").IO;
+const TopicManager = @import("../pubsub/topic_manager.zig").TopicManager;
 
-const TopicManager = @import("./topic_manager.zig").TopicManager;
 const Message = @import("../protocol/message.zig").Message;
 
 // Datastructures
-const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
 const Channel = @import("../data_structures/channel.zig").Channel;
+const MessageQueue = @import("../data_structures/message_queue.zig").MessageQueue;
+const RingBuffer = @import("stdx").RingBuffer;
 
 /// static configuration used to configure the node
 pub const NodeConfig = struct {
     host: []const u8 = "127.0.0.1",
     port: u16 = 8000,
     worker_threads: u32 = 1,
-    message_pool_capacity: u32 = constants.message_pool_max_capacity,
+    worker_message_pool_capacity: u32 = constants.default_worker_message_pool_capacity,
 };
 
 const NodeState = enum {
@@ -40,27 +40,25 @@ pub const Node = struct {
     config: NodeConfig,
     id: uuid.Uuid,
     io: *IO,
-    message_pool: *MessagePool,
-    tcp_acceptor: *Acceptor,
-    broker: *Broker,
-    workers: *std.AutoHashMap(u32, *Worker),
-    topic_manager: *TopicManager,
+    mutex: std.Thread.Mutex,
     state: NodeState,
+    tcp_acceptor: *Acceptor,
+    workers: *std.AutoHashMap(u32, *Worker),
+    processed_messages_count: u128,
+    topic_manager: *TopicManager,
 
-    pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
-        const node_id = uuid.v7.new();
-
-        const message_pool = try allocator.create(MessagePool);
-        errdefer allocator.destroy(message_pool);
-
-        message_pool.* = try MessagePool.init(allocator, config.message_pool_capacity);
-        errdefer message_pool.deinit();
-
+    pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !*Self {
         const tcp_acceptor = try allocator.create(Acceptor);
         errdefer allocator.destroy(tcp_acceptor);
 
         tcp_acceptor.* = try Acceptor.init(allocator, .{ .host = config.host, .port = config.port });
         errdefer tcp_acceptor.deinit();
+
+        const topic_manager = try allocator.create(TopicManager);
+        errdefer allocator.destroy(topic_manager);
+
+        topic_manager.* = TopicManager.init(allocator);
+        errdefer topic_manager.deinit();
 
         const io = try allocator.create(IO);
         errdefer allocator.destroy(io);
@@ -68,32 +66,37 @@ pub const Node = struct {
         io.* = try IO.init(constants.io_uring_entries, 0);
         errdefer io.deinit();
 
-        const topic_manager = try allocator.create(TopicManager);
-        errdefer allocator.destroy(topic_manager);
-
-        topic_manager.* = TopicManager.init(allocator, message_pool);
-        errdefer topic_manager.deinit();
-
-        const broker = try allocator.create(Broker);
-        errdefer allocator.destroy(broker);
-
-        broker.* = try Broker.init(allocator, message_pool, topic_manager, .{});
-        errdefer broker.deinit();
-
         const workers = try allocator.create(std.AutoHashMap(u32, *Worker));
         errdefer allocator.destroy(workers);
 
         workers.* = std.AutoHashMap(u32, *Worker).init(allocator);
         errdefer workers.deinit();
 
+        const node = try allocator.create(Node);
+        errdefer allocator.destroy(node);
+
+        node.* = Self{
+            .allocator = allocator,
+            .config = config,
+            .id = uuid.v7.new(),
+            .io = io,
+            .mutex = std.Thread.Mutex{},
+            .state = .closed,
+            .tcp_acceptor = tcp_acceptor,
+            .workers = workers,
+            .processed_messages_count = 0,
+            .topic_manager = topic_manager,
+        };
+
         for (0..config.worker_threads) |i| {
             // initialize a new worker
             const worker = try allocator.create(Worker);
             errdefer allocator.destroy(worker);
 
-            worker.* = try Worker.init(allocator, broker, message_pool, topic_manager, .{
-                .node_id = node_id,
+            worker.* = try Worker.init(allocator, node, .{
+                .node_id = node.id,
                 .id = @intCast(i),
+                .message_pool_capacity = config.worker_message_pool_capacity,
             });
             errdefer workers.deinit();
 
@@ -101,18 +104,7 @@ pub const Node = struct {
             errdefer _ = workers.remove(worker.config.id);
         }
 
-        return Self{
-            .allocator = allocator,
-            .broker = broker,
-            .config = config,
-            .id = node_id,
-            .io = io,
-            .message_pool = message_pool,
-            .tcp_acceptor = tcp_acceptor,
-            .state = .closed,
-            .workers = workers,
-            .topic_manager = topic_manager,
-        };
+        return node;
     }
 
     pub fn deinit(self: *Self) void {
@@ -124,8 +116,6 @@ pub const Node = struct {
             self.allocator.destroy(worker);
         }
 
-        self.broker.deinit();
-        self.message_pool.deinit();
         self.tcp_acceptor.deinit();
         self.io.deinit();
         self.workers.deinit();
@@ -133,11 +123,10 @@ pub const Node = struct {
 
         // destroy
         self.allocator.destroy(self.workers);
-        self.allocator.destroy(self.broker);
-        self.allocator.destroy(self.message_pool);
         self.allocator.destroy(self.tcp_acceptor);
         self.allocator.destroy(self.io);
         self.allocator.destroy(self.topic_manager);
+        self.allocator.destroy(self);
     }
 
     pub fn run(self: *Self) !void {
@@ -175,26 +164,24 @@ pub const Node = struct {
             switch (self.state) {
                 .running => {
                     // check if there are new sockets to add to the collection!
-                    if (start == 0 and self.broker.processed_messages_count > 0) {
+                    if (start == 0 and self.processed_messages_count > 0) {
                         timer.reset();
                         start = timer.read();
                     }
 
-                    if (self.broker.processed_messages_count > 0) {
+                    if (self.processed_messages_count > 0) {
                         const now = timer.read();
                         const elapsed_seconds = (now - start) / std.time.ns_per_s;
                         const time_since_last_print = (now - printed_at) / std.time.ns_per_s;
 
                         if (time_since_last_print >= 1) {
                             if (!printed) {
-                                const processed_messages_count = self.broker.processed_messages_count;
-                                const free_messages = self.broker.message_pool.available();
+                                const processed_messages_count = self.processed_messages_count;
 
-                                std.debug.print("duration {}s, processed messages: {}, processed delta {}, free messages {}\n", .{
+                                log.err("duration {}s, processed messages: {}, processed delta {}\n", .{
                                     elapsed_seconds,
                                     processed_messages_count,
                                     processed_messages_count - messages_processed_count_since_last_print,
-                                    free_messages,
                                 });
 
                                 messages_processed_count_since_last_print = processed_messages_count;
@@ -207,15 +194,7 @@ pub const Node = struct {
                         }
                     }
 
-                    try self.maybeAddConnection();
-                    // try self.topic_manager.tick();
-
-                    try self.broker.tick();
-
-                    // std.time.sleep(1 * std.time.ns_per_ms);
-                    // NOTE: This is dumb, since there are no IO operations happening on this
-                    // thread. They only happen on the TCP Acceptor and workers. This should
-                    // instead be simpler.
+                    try self.tick();
                     try self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms);
                 },
                 .close => {
@@ -229,11 +208,6 @@ pub const Node = struct {
                 },
                 .closed => return,
             }
-
-            // try and accept new TCP connections
-            // try broker.tick();
-            // check for new socket connections
-            // try self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms);
         }
     }
 
@@ -248,6 +222,10 @@ pub const Node = struct {
 
             std.time.sleep(1 * std.time.ns_per_ms);
         }
+    }
+
+    pub fn tick(self: *Self) !void {
+        try self.maybeAddConnection();
     }
 
     fn maybeAddConnection(self: *Self) !void {
@@ -299,7 +277,7 @@ test "init/deinit" {
         .port = 9753,
         .host = "127.0.0.1",
         .worker_threads = 1,
-        .message_pool_capacity = 10,
+        .worker_message_pool_capacity = 100,
     });
     defer node.deinit();
 
@@ -310,7 +288,7 @@ test "init/deinit" {
         }
     }.close;
 
-    const thread = try std.Thread.spawn(.{}, closeNode, .{&node});
+    const thread = try std.Thread.spawn(.{}, closeNode, .{node});
     try node.run();
     thread.join();
 }

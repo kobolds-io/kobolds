@@ -11,6 +11,7 @@ const Request = @import("./message.zig").Request;
 const Reply = @import("./message.zig").Reply;
 const Ping = @import("./message.zig").Ping;
 const Pong = @import("./message.zig").Pong;
+const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
 
 const ProtocolError = @import("../errors.zig").ProtocolError;
 
@@ -194,4 +195,27 @@ test "headers validation" {
     pong_headers.error_code = .ok;
 
     try std.testing.expectEqual(null, pong_headers.validate());
+}
+
+test "refs and derefs" {
+    const allocator = testing.allocator;
+
+    var message_pool = try MessagePool.init(allocator, 100);
+    defer message_pool.deinit();
+
+    const message_1 = try Message.create(&message_pool);
+    const message_2 = try Message.create(&message_pool);
+
+    try testing.expectEqual(2, message_pool.count());
+
+    try testing.expectEqual(1, message_1.refs());
+    try testing.expectEqual(1, message_2.refs());
+
+    message_1.deref();
+
+    try testing.expectEqual(1, message_pool.count());
+
+    message_2.deref();
+
+    try testing.expectEqual(0, message_pool.count());
 }

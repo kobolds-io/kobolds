@@ -161,24 +161,28 @@ test "RingBuffer benchmarks" {
         "enqueue {} items",
         .{constants.benchmark_max_queue_data_list},
     );
+    defer allocator.free(ring_buffer_enqueue_title);
 
     const ring_buffer_enqueueMany_title = try std.fmt.allocPrint(
         allocator,
         "enqueueMany {} items",
         .{constants.benchmark_max_queue_data_list},
     );
+    defer allocator.free(ring_buffer_enqueueMany_title);
 
     const ring_buffer_dequeue_title = try std.fmt.allocPrint(
         allocator,
         "dequeue {} items",
         .{constants.benchmark_max_queue_data_list},
     );
+    defer allocator.free(ring_buffer_dequeue_title);
 
     const ring_buffer_dequeueMany_title = try std.fmt.allocPrint(
         allocator,
         "dequeueMany {} items",
         .{constants.benchmark_max_queue_data_list},
     );
+    defer allocator.free(ring_buffer_dequeueMany_title);
 
     // register all the benchmark tests
     try bench.addParam(

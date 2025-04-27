@@ -1,6 +1,9 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const assert = std.debug.assert;
+const builtin = @import("builtin");
+
+const constants = @import("./constants.zig");
+const hash = @import("./hash.zig");
 
 pub fn u128ToBytes(value: u128) [16]u8 {
     return [_]u8{
@@ -50,6 +53,22 @@ pub fn u16ToBytes(value: u16) [2]u8 {
         @intCast((value >> 8) & 0xff),
         @intCast(value & 0xff),
     };
+}
+
+pub fn generateKey(topic_name: []const u8, id: u128) u128 {
+    var buf: [constants.message_max_topic_name_size + @sizeOf(u128)]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    const fba_allocator = fba.allocator();
+
+    // a failure here would be unrecoverable
+    var list = std.ArrayList(u8).initCapacity(fba_allocator, buf.len) catch unreachable;
+
+    list.appendSliceAssumeCapacity(topic_name);
+    list.appendSliceAssumeCapacity(&u128ToBytes(id));
+    defer list.deinit();
+
+    // we are just going to use the same checksum hasher as we do for messages.
+    return hash.checksum(list.items);
 }
 
 // TODO: There should be a simple function to convert any multibyte type to little/big endian

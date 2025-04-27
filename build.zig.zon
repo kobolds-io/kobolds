@@ -40,6 +40,10 @@
             .url = "https://github.com/r4gus/uuid-zig/archive/refs/tags/0.3.0.tar.gz",
             .hash = "12207f6a93a8f73155d1af391980124feb6bab344931e11f62e42e6ac825c8d59ff1",
         },
+        .stdx = .{
+            .url = "https://github.com/kobolds-io/stdx/archive/refs/tags/v0.0.2.tar.gz",
+            .hash = "stdx-0.0.2-nyLNAQrfAABlq4y4DXa5Y_exfKnhRiS_-YRz-0Fbv9L2",
+        },
         .zbench = .{
             .url = "https://github.com/hendriknielaender/zBench/archive/v0.9.3.tar.gz",
             .hash = "122054a78e249bb9e6a7f13b5f13f304c97715eb03394e89f12fa763ee6f8a9a4d35",

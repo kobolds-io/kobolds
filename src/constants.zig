@@ -35,4 +35,10 @@ pub const io_uring_entries: u16 = 256;
 pub const verify: bool = true;
 
 /// Maximum size of the message pool
-pub const message_pool_max_capacity: u32 = 100_000;
+pub const default_worker_message_pool_capacity: u32 = 10_000;
+
+pub const connection_outbox_capacity: u32 = 5_000;
+pub const connection_inbox_capacity: u32 = 5_000;
+
+pub const publisher_max_queue_capacity: u32 = 1_000;
+pub const subscriber_max_queue_capacity: u32 = 5_000;

@@ -5,9 +5,10 @@ pub fn EventEmitter(comptime Event: type, comptime Data: type) type {
     return struct {
         const Self = @This();
 
-        pub const ListenerCallback = *const fn (event: Event, data: Data) void;
+        pub const ListenerCallback = *const fn (event: Event, context: ?*anyopaque, data: Data) void;
 
         pub const Listener = struct {
+            context: ?*anyopaque,
             callback: ListenerCallback,
         };
 
@@ -36,12 +37,12 @@ pub fn EventEmitter(comptime Event: type, comptime Data: type) type {
             self.listeners.deinit();
         }
 
-        pub fn addEventListener(self: *Self, event: Event, callback: ListenerCallback) !void {
+        pub fn addEventListener(self: *Self, event: Event, context: ?*anyopaque, callback: ListenerCallback) !void {
             self.mutex.lock();
             defer self.mutex.unlock();
 
             if (self.listeners.get(event)) |listeners_list| {
-                try listeners_list.append(.{ .callback = callback });
+                try listeners_list.append(.{ .context = context, .callback = callback });
             } else {
                 // create a new list
                 const listener_list = try self.allocator.create(std.ArrayList(Listener));
@@ -50,7 +51,7 @@ pub fn EventEmitter(comptime Event: type, comptime Data: type) type {
                 listener_list.* = try std.ArrayList(Listener).initCapacity(self.allocator, 1);
                 errdefer listener_list.deinit();
 
-                listener_list.appendAssumeCapacity(.{ .callback = callback });
+                listener_list.appendAssumeCapacity(.{ .context = context, .callback = callback });
 
                 try self.listeners.put(event, listener_list);
             }
@@ -78,7 +79,7 @@ pub fn EventEmitter(comptime Event: type, comptime Data: type) type {
 
             if (self.listeners.get(event)) |listener_list| {
                 for (listener_list.items) |listener| {
-                    listener.callback(event, data);
+                    listener.callback(event, listener.context, data);
                 }
             }
         }
@@ -98,29 +99,32 @@ test "emits events to all listeners" {
     defer ee.deinit();
 
     const callback1 = struct {
-        pub fn callback(event: TestEvent, data: u32) void {
+        pub fn callback(event: TestEvent, context: ?*anyopaque, data: u32) void {
             _ = event;
+            _ = context;
             test_number += data;
         }
     }.callback;
 
     const callback2 = struct {
-        pub fn callback(event: TestEvent, data: u32) void {
+        pub fn callback(event: TestEvent, context: ?*anyopaque, data: u32) void {
             _ = event;
+            _ = context;
             test_number += data;
         }
     }.callback;
 
     const callback3 = struct {
-        pub fn callback(event: TestEvent, data: u32) void {
+        pub fn callback(event: TestEvent, context: ?*anyopaque, data: u32) void {
             _ = event;
+            _ = context;
             test_number += data;
         }
     }.callback;
 
-    try ee.addEventListener(.open, callback1);
-    try ee.addEventListener(.open, callback2);
-    try ee.addEventListener(.open, callback3);
+    try ee.addEventListener(.open, null, callback1);
+    try ee.addEventListener(.open, null, callback2);
+    try ee.addEventListener(.open, null, callback3);
 
     ee.emit(.open, 1);
 
@@ -170,22 +174,25 @@ test "emits events over threads" {
     const allocator = testing.allocator;
 
     const callback1 = struct {
-        pub fn callback(event: TestEvent, data: u32) void {
+        pub fn callback(event: TestEvent, context: ?*anyopaque, data: u32) void {
             _ = event;
+            _ = context;
             test_number_2 += data;
         }
     }.callback;
 
     const callback2 = struct {
-        pub fn callback(event: TestEvent, data: u32) void {
+        pub fn callback(event: TestEvent, context: ?*anyopaque, data: u32) void {
             _ = event;
+            _ = context;
             test_number_2 += data;
         }
     }.callback;
 
     const callback3 = struct {
-        pub fn callback(event: TestEvent, data: u32) void {
+        pub fn callback(event: TestEvent, context: ?*anyopaque, data: u32) void {
             _ = event;
+            _ = context;
             test_number_2 += data;
         }
     }.callback;
@@ -193,9 +200,9 @@ test "emits events over threads" {
     var t = TestThreadEventEmitter.init(allocator);
     defer t.deinit();
 
-    try t.ee.addEventListener(.open, callback1);
-    try t.ee.addEventListener(.open, callback2);
-    try t.ee.addEventListener(.open, callback3);
+    try t.ee.addEventListener(.open, null, callback1);
+    try t.ee.addEventListener(.open, null, callback2);
+    try t.ee.addEventListener(.open, null, callback3);
 
     const th = try std.Thread.spawn(.{}, TestThreadEventEmitter.run, .{&t});
 

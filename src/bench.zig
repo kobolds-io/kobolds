@@ -10,6 +10,7 @@ test "prints system info" {
 
 comptime {
     _ = @import("./benchmarks/message.zig");
+    _ = @import("./benchmarks/message_queue.zig");
     _ = @import("./benchmarks/parser.zig");
     _ = @import("./benchmarks/ring_buffer.zig");
 }

@@ -8,10 +8,20 @@ const posix = std.posix;
 const uuid = @import("uuid");
 
 const constants = @import("../constants.zig");
-const Broker = @import("./broker.zig").Broker;
+const utils = @import("../utils.zig");
+const hash = @import("../hash.zig");
+
+const RingBuffer = @import("stdx").RingBuffer;
+// const MemoryPool = @import("stdx").MemoryPool;
+
+const Node = @import("./node.zig").Node;
 const IO = @import("../io.zig").IO;
-const TopicManager = @import("./topic_manager.zig").TopicManager;
-const Subscriber = @import("./subscriber.zig").Subscriber;
+
+// Pubsub
+const Publisher = @import("../pubsub/publisher.zig").Publisher;
+const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
+const Topic = @import("../pubsub/topic.zig").Topic;
+const TopicManager = @import("../pubsub/topic_manager.zig").TopicManager;
 
 // Protocol
 const Message = @import("../protocol/message.zig").Message;
@@ -33,28 +43,28 @@ const WorkerState = enum {
 const WorkerConfig = struct {
     node_id: uuid.Uuid,
     id: u32,
+    message_pool_capacity: u32 = constants.default_worker_message_pool_capacity,
 };
 
 pub const Worker = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
-    broker: *Broker,
     config: WorkerConfig,
     connections_mutex: std.Thread.Mutex,
     connections: std.AutoHashMap(uuid.Uuid, *Connection),
-    message_pool: *MessagePool,
     io: *IO,
-    state: WorkerState,
+    message_pool: *MessagePool,
+    node: *Node,
     pending_messages: MessageQueue,
-    topic_manager: *TopicManager,
-    subscribers: std.AutoHashMap(uuid.Uuid, *Subscriber),
+    state: WorkerState,
+    publishers: std.AutoHashMap(uuid.Uuid, *Publisher),
+    subscribers: std.AutoHashMap(u128, *Subscriber),
+    mutex: std.Thread.Mutex,
 
     pub fn init(
         allocator: std.mem.Allocator,
-        broker: *Broker,
-        message_pool: *MessagePool,
-        topic_manager: *TopicManager,
+        node: *Node,
         config: WorkerConfig,
     ) !Self {
         const io = try allocator.create(IO);
@@ -63,18 +73,25 @@ pub const Worker = struct {
         io.* = try IO.init(constants.io_uring_entries, 0);
         errdefer io.deinit();
 
+        const message_pool = try allocator.create(MessagePool);
+        errdefer allocator.destroy(message_pool);
+
+        message_pool.* = try MessagePool.init(allocator, config.message_pool_capacity);
+        errdefer message_pool.deinit();
+
         return Self{
             .allocator = allocator,
-            .broker = broker,
             .config = config,
             .connections_mutex = std.Thread.Mutex{},
             .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
-            .message_pool = message_pool,
-            .pending_messages = MessageQueue.new(),
             .io = io,
+            .message_pool = message_pool,
+            .node = node,
+            .pending_messages = MessageQueue.new(),
             .state = .closed,
-            .topic_manager = topic_manager,
-            .subscribers = std.AutoHashMap(uuid.Uuid, *Subscriber).init(allocator),
+            .publishers = std.AutoHashMap(uuid.Uuid, *Publisher).init(allocator),
+            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
+            .mutex = std.Thread.Mutex{},
         };
     }
 
@@ -88,15 +105,34 @@ pub const Worker = struct {
             self.allocator.destroy(connection);
         }
 
+        var subscribers_iter = self.subscribers.valueIterator();
+        while (subscribers_iter.next()) |subscriber_ptr| {
+            const subscriber = subscriber_ptr.*;
+
+            subscriber.deinit();
+            self.allocator.destroy(subscriber);
+        }
+
+        var publishers_iter = self.publishers.valueIterator();
+        while (publishers_iter.next()) |publisher_ptr| {
+            const publisher = publisher_ptr.*;
+
+            publisher.deinit();
+            self.allocator.destroy(publisher);
+        }
+
         self.pending_messages.reset();
 
         // deinit
         self.connections.deinit();
         self.io.deinit();
+        self.message_pool.deinit();
+        self.subscribers.deinit();
+        self.publishers.deinit();
 
         // dealloc
         self.allocator.destroy(self.io);
-        // self.allocator.destroy(self.aggregated_topic_messages);
+        self.allocator.destroy(self.message_pool);
     }
 
     pub fn run(self: *Self, ready_chan: *Channel(anyerror!bool)) void {
@@ -110,52 +146,12 @@ pub const Worker = struct {
         while (true) {
             switch (self.state) {
                 .running => {
-                    // loop over all connections and gather their messages
-                    var connections_iter = self.connections.iterator();
-                    while (connections_iter.next()) |entry| {
-                        const conn = entry.value_ptr.*;
-
-                        self.gatherPendingMessages(conn) catch unreachable;
-                        // try self.distribute(conn);
-
-                        conn.tick() catch unreachable;
-
-                        if (conn.state == .closed) {
-                            _ = self.removeConnection(conn);
-                            continue;
-                        }
-                    }
-
-                    self.processPendingMessages();
-                    // self.escalatePendingMessages();
-
+                    self.tick() catch unreachable;
                     self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
                 },
                 .close => {
-                    // check if every connection is closed
-                    var all_connections_closed = true;
-
-                    var conn_iter = self.connections.valueIterator();
-                    while (conn_iter.next()) |conn_ptr| {
-                        var conn = conn_ptr.*;
-                        switch (conn.state) {
-                            .closed => continue,
-                            .close => {
-                                all_connections_closed = false;
-                            },
-                            else => {
-                                conn.state = .close;
-                                all_connections_closed = false;
-                            },
-                        }
-
-                        conn.tick() catch |err| {
-                            log.err("worker conn tick err {any}", .{err});
-                            unreachable;
-                        };
-                    }
-
-                    if (all_connections_closed) {
+                    // if not all the connections are closed, we will simply try again on the next tick
+                    if (self.closeAllConnections()) {
                         self.state = .closed;
                         log.debug("closed all connections", .{});
                     }
@@ -163,6 +159,29 @@ pub const Worker = struct {
                 .closed => return,
             }
         }
+    }
+
+    pub fn tick(self: *Self) !void {
+        // loop over all connections and gather their messages
+        var connections_iter = self.connections.iterator();
+        while (connections_iter.next()) |entry| {
+            const conn = entry.value_ptr.*;
+
+            try self.gather(conn);
+            // try self.distribute(conn);
+
+            conn.tick() catch |err| {
+                log.err("could not tick connection error: {any}", .{err});
+                continue;
+            };
+
+            if (conn.state == .closed) {
+                try self.cleanupConnection(conn);
+                continue;
+            }
+        }
+
+        try self.process();
     }
 
     pub fn close(self: *Self) void {
@@ -178,97 +197,200 @@ pub const Worker = struct {
         }
     }
 
-    fn gatherPendingMessages(self: *Self, conn: *Connection) !void {
+    fn closeAllConnections(self: *Self) bool {
+        // check if every connection is closed
+        var all_connections_closed = true;
+
+        var conn_iter = self.connections.valueIterator();
+        while (conn_iter.next()) |conn_ptr| {
+            var conn = conn_ptr.*;
+            switch (conn.state) {
+                .closed => continue,
+                .close => {
+                    all_connections_closed = false;
+                },
+                else => {
+                    conn.state = .close;
+                    all_connections_closed = false;
+                },
+            }
+
+            conn.tick() catch |err| {
+                log.err("worker conn tick err {any}", .{err});
+                unreachable;
+            };
+        }
+
+        return all_connections_closed;
+    }
+
+    fn gather(self: *Self, conn: *Connection) !void {
         // check to see if there are messages
         if (conn.inbox.count == 0) return;
 
-        self.pending_messages.concatenate(&conn.inbox);
-        conn.inbox.clear();
+        while (conn.inbox.dequeue()) |message| {
+            defer self.node.processed_messages_count += 1;
+
+            switch (message.headers.message_type) {
+                .ping => {
+                    // Since this is a `ping` we don't need to do any extra work to figure out how to respond
+                    message.headers.message_type = .pong;
+                    message.headers.origin_id = self.node.id;
+                    message.setTransactionId(message.transactionId());
+                    message.setErrorCode(.ok);
+
+                    assert(message.refs() == 1);
+
+                    if (conn.outbox.enqueue(message)) |_| {} else |err| {
+                        log.err("Failed to enqueue message to outbox: {}", .{err});
+                        message.deref(); // Undo reference if enqueue fails
+                    }
+                },
+                .publish => {
+                    // log.debug("received publish messaged", .{});
+                    const publisher_key = utils.generateKey(message.topicName(), conn.origin_id);
+
+                    if (self.publishers.get(publisher_key)) |publisher| {
+                        publisher.queue.enqueue(message) catch {
+                            @panic("could not enqueue published message");
+                        };
+                    } else {
+                        // Create a new publisher since there is not one that exists
+                        const topic_manager = self.node.topic_manager;
+                        var topic: *Topic = undefined;
+
+                        if (topic_manager.get(message.topicName())) |t| {
+                            topic = t;
+                        } else {
+                            topic = topic_manager.create(message.topicName()) catch |err| switch (err) {
+                                // BUG: Someone has created this topic during this tick. Should handle this better.
+                                // I think that adding the message back into the queue and just retry it. This runs
+                                // the risk of getting into an unhandledable loop
+                                error.TopicExists => topic_manager.get(message.topicName()).?,
+                                else => unreachable,
+                            };
+                        }
+
+                        const publisher = try self.allocator.create(Publisher);
+                        errdefer self.allocator.destroy(publisher);
+
+                        publisher.* = try Publisher.init(self.allocator, conn.origin_id, topic);
+                        errdefer publisher.deinit();
+
+                        assert(publisher_key == publisher.key);
+
+                        try self.publishers.put(publisher.key, publisher);
+                        errdefer _ = self.publishers.remove(publisher.key);
+
+                        publisher.queue.enqueue(message) catch {
+                            @panic("could not enqueue published message");
+                        };
+                    }
+                },
+                .subscribe => {
+                    defer message.deref();
+                    log.debug("subscribe message received!", .{});
+
+                    const subscriber_key = utils.generateKey(message.topicName(), conn.origin_id);
+
+                    // check if this connection is already subscribed to this topic
+                    if (self.subscribers.contains(subscriber_key)) {
+                        // this is not allowed
+                        const reply = try Message.create(self.message_pool);
+                        errdefer reply.deref();
+
+                        reply.headers.message_type = .reply;
+                        reply.setTopicName(message.topicName());
+                        reply.setTransactionId(message.transactionId());
+                        reply.setErrorCode(.bad_request); // TODO: this should be a better error
+
+                        try conn.outbox.enqueue(reply);
+                        return;
+                    }
+
+                    const topic_manager = self.node.topic_manager;
+                    var topic: *Topic = undefined;
+
+                    if (topic_manager.get(message.topicName())) |t| {
+                        topic = t;
+                    } else {
+                        topic = topic_manager.create(message.topicName()) catch |err| switch (err) {
+                            // BUG: Someone has created this topic during this tick. Should handle this better.
+                            // I think that adding the message back into the queue and just retry it. This runs
+                            // the risk of getting into an unhandledable loop
+                            error.TopicExists => topic_manager.get(message.topicName()).?,
+                            else => unreachable,
+                        };
+                    }
+
+                    const subscriber = try self.allocator.create(Subscriber);
+                    errdefer self.allocator.destroy(subscriber);
+
+                    subscriber.* = try Subscriber.init(self.allocator, conn.origin_id, topic);
+                    errdefer subscriber.deinit();
+
+                    try self.subscribers.put(subscriber_key, subscriber);
+
+                    try subscriber.subscribe();
+                    errdefer subscriber.unsubscribe();
+
+                    // Reply to the subscribe request
+                    const reply = try Message.create(self.message_pool);
+                    errdefer reply.deref();
+
+                    reply.headers.message_type = .reply;
+                    reply.setTopicName(message.topicName());
+                    reply.setTransactionId(message.transactionId());
+                    reply.setErrorCode(.ok);
+
+                    try conn.outbox.enqueue(reply);
+                },
+                .unsubscribe => {
+                    defer message.deref();
+                    log.debug("unsubscribe message received!", .{});
+
+                    const subscriber_key = utils.generateKey(message.topicName(), conn.origin_id);
+
+                    self.mutex.lock();
+                    defer self.mutex.unlock();
+
+                    if (self.subscribers.get(subscriber_key)) |subscriber| {
+                        subscriber.unsubscribe();
+
+                        _ = self.subscribers.remove(subscriber_key);
+                    }
+                },
+                else => message.deref(),
+            }
+        }
 
         assert(conn.inbox.count == 0);
     }
 
-    fn processPendingMessages(self: *Self) void {
-        // Topic messages is used to aggregate messages for each topic in this batch of pending messages.
-        // Since each message is destined for a single topic, we can use a message queue to link them together like
-        // a chain and not have to do any special reallocations.
-        var topic_messages = std.StringHashMap(*MessageQueue).init(self.allocator);
-        defer topic_messages.deinit();
+    fn process(self: *Self) !void {
+        var publishers_iter = self.publishers.valueIterator();
+        while (publishers_iter.next()) |entry| {
+            const publisher = entry.*;
+            if (publisher.queue.count == 0) continue;
 
-        while (self.pending_messages.dequeue()) |message| {
-            defer {
-                if (message.refs() == 0) self.message_pool.destroy(message);
-            }
-
-            const msg_type = message.headers.message_type;
-
-            switch (msg_type) {
-                .ping => {
-                    defer self.broker.processed_messages_count += 1;
-
-                    // Modify message in-place to avoid extra allocation
-                    message.headers.message_type = .pong;
-                    message.setTransactionId(message.transactionId());
-                    message.setErrorCode(.ok);
-
-                    if (self.connections.get(message.headers.origin_id)) |conn| {
-                        message.ref();
-                        if (conn.outbox.enqueue(message)) |_| {
-                            // Success, continue
-                        } else |err| {
-                            log.err("Failed to enqueue message to outbox: {}", .{err});
-                            message.deref(); // Undo reference if enqueue fails
-                        }
-                    } else {
-                        log.err("Unable to handle ping message, connection not found", .{});
-                    }
-                },
-                .publish => {
-                    defer self.broker.processed_messages_count += 1;
-                    defer message.deref();
-
-                    // const topic_name = message.topicName();
-                    //
-                    // if (topic_messages.get(topic_name)) |entry| {
-                    //     entry.enqueue(message);
-                    // } else {
-                    //     var q = MessageQueue.new();
-                    //     q.enqueue(message);
-                    //     topic_messages.put(topic_name, &q) catch unreachable;
-                    // }
-                },
-                // .subscribe, .unsubscribe => {
-                // },
-                else => {},
+            while (publisher.queue.dequeue()) |message| {
+                try publisher.publish(message);
             }
         }
 
-        // var topic_messages_iter = topic_messages.iterator();
-        // while (topic_messages_iter.next()) |entry| {
-        //     const topic_name = entry.key_ptr.*;
-        //     const queue = entry.value_ptr.*;
-        //     // log.debug("topic_name: {s}, # of messages {}", .{ topic_name, queue.count });
-        //     self.topic_manager.enqueueTopicMessages(topic_name, queue) catch unreachable;
-        //
-        //     // while (queue.dequeue()) |m| {
-        //     //     m.deref();
-        //     //     if (m.refs() == 0) self.message_pool.destroy(m);
-        //     // }
-        // }
-    }
+        var subscribers_iter = self.subscribers.valueIterator();
+        while (subscribers_iter.next()) |entry| {
+            const subscriber = entry.*;
+            if (subscriber.queue.count == 0) continue;
 
-    fn escalatePendingMessages(self: *Self) void {
-        if (self.pending_messages.count == 0) return;
-
-        // lock the pending messages queue on the broker so no other worker clobbers it.
-        // This entire function should be close to instantaneous because we are just moving pointers around
-
-        // self.broker.pending_messages_mutex.lock();
-        // defer self.broker.pending_messages_mutex.unlock();
-
-        // put the gathered messages on the broker
-        self.broker.pending_messages.concatenate(&self.pending_messages);
-        self.pending_messages.reset();
+            if (self.connections.get(subscriber.conn_id)) |conn| {
+                // FIX: this should be WAYYYY more robust as this could fail
+                try conn.outbox.concatenate(subscriber.queue);
+            } else {
+                // this subscriber is bad???
+                @panic("subscriber isn't tied to connection");
+            }
+        }
     }
 
     pub fn addConnection(self: *Self, socket: posix.socket_t) !void {
@@ -296,13 +418,12 @@ pub const Worker = struct {
 
         // construct and accept message
         // add an accept message to this connection's inbox immediately
-        const accept_message = self.message_pool.create() catch |err| {
+        const accept_message = Message.create(self.message_pool) catch |err| {
             log.err("unable to create an accept message for connection {any}", .{err});
             connection.state = .close;
             return;
         };
 
-        accept_message.* = Message.new();
         accept_message.headers.message_type = .accept;
         accept_message.ref();
 
@@ -317,18 +438,57 @@ pub const Worker = struct {
         log.info("worker: {} added connection {}", .{ self.config.id, conn_id });
     }
 
-    pub fn removeConnection(self: *Self, conn: *Connection) bool {
+    fn removeConnection(self: *Self, conn: *Connection) bool {
         defer log.info("worker: {} removed connection {}", .{ self.config.id, conn.origin_id });
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
         conn.deinit();
         return self.connections.remove(conn.origin_id);
+    }
 
-        // const removed_from_connection_messages = self.connection_messages.remove(conn.origin_id);
-        // const removed_from_connections = self.connections.remove(conn.origin_id);
-        //
-        // return removed_from_connection_messages and removed_from_connections;
+    fn cleanupConnection(self: *Self, conn: *Connection) !void {
+        // Clean up publishers and subscribers associated with this connection
+        var conn_publisher_keys = std.ArrayList(u128).init(self.allocator);
+        defer conn_publisher_keys.deinit();
+
+        var publishers_iter = self.publishers.iterator();
+        while (publishers_iter.next()) |publisher_entry| {
+            const publisher_key = publisher_entry.key_ptr.*;
+            const publisher = publisher_entry.value_ptr.*;
+
+            if (publisher.conn_id == conn.origin_id) {
+                publisher.deinit();
+                self.allocator.destroy(publisher);
+                try conn_publisher_keys.append(publisher_key);
+            }
+        }
+
+        for (conn_publisher_keys.items) |publisher_key| {
+            _ = self.publishers.remove(publisher_key);
+        }
+
+        var conn_subscriber_keys = std.ArrayList(u128).init(self.allocator);
+        defer conn_subscriber_keys.deinit();
+
+        var subscribers_iter = self.subscribers.iterator();
+        while (subscribers_iter.next()) |subscriber_entry| {
+            const subscriber_key = subscriber_entry.key_ptr.*;
+            const subscriber = subscriber_entry.value_ptr.*;
+
+            if (subscriber.conn_id == conn.origin_id) {
+                subscriber.unsubscribe();
+                subscriber.deinit();
+                self.allocator.destroy(subscriber);
+                try conn_subscriber_keys.append(subscriber_key);
+            }
+        }
+
+        for (conn_subscriber_keys.items) |subscriber_key| {
+            _ = self.subscribers.remove(subscriber_key);
+        }
+
+        _ = self.removeConnection(conn);
     }
 };
 
@@ -338,17 +498,14 @@ test "init/deinit" {
     var message_pool = try MessagePool.init(allocator, 100);
     defer message_pool.deinit();
 
-    var topic_manager = TopicManager.init(allocator, &message_pool);
-    defer topic_manager.deinit();
-
-    var broker = try Broker.init(allocator, &message_pool, &topic_manager, .{});
-    defer broker.deinit();
+    var node = try Node.init(allocator, .{});
+    defer node.deinit();
 
     const config = WorkerConfig{
         .id = 0,
         .node_id = 1,
     };
 
-    var worker = try Worker.init(allocator, &broker, &message_pool, &topic_manager, config);
+    var worker = try Worker.init(allocator, node, config);
     defer worker.deinit();
 }

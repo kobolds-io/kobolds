@@ -7,6 +7,7 @@ const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 const hash = @import("../hash.zig");
 const ProtocolError = @import("../errors.zig").ProtocolError;
+const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
 
 pub const MessageType = enum(u8) {
     undefined,
@@ -29,6 +30,7 @@ pub const ErrorCode = enum(u8) {
     unauthorized,
     timeout,
     service_not_found,
+    bad_request,
 };
 
 pub const Compression = enum(u8) {
@@ -46,20 +48,34 @@ pub const Message = struct {
     headers: Headers,
     body_buffer: [constants.message_max_body_size]u8,
 
+    message_pool: ?*MessagePool = null,
+
     // A reference to the next message to be processed
     next: ?*Message,
 
     // how many times this message is referenced
     ref_count: atomic.Value(u32),
 
-    // create an uninitialized message container
+    // create an uninitialized Message
     pub fn new() Message {
         return Message{
             .headers = Headers{ .message_type = .undefined },
             .body_buffer = undefined,
             .next = null,
             .ref_count = atomic.Value(u32).init(0),
+            .message_pool = null,
         };
+    }
+
+    pub fn create(message_pool: *MessagePool) !*Message {
+        const message = try message_pool.create();
+        errdefer message_pool.destroy(message);
+
+        message.* = Message.new();
+        message.message_pool = message_pool;
+        message.ref();
+
+        return message;
     }
 
     pub fn refs(self: *Self) u32 {
@@ -71,9 +87,11 @@ pub const Message = struct {
     }
 
     pub fn deref(self: *Self) void {
-        const v = self.ref_count.load(.seq_cst);
-        if (v == 0) return;
-        _ = self.ref_count.cmpxchgWeak(v, v - 1, .seq_cst, .seq_cst);
+        if (self.ref_count.fetchSub(1, .seq_cst) == 1) {
+            if (self.message_pool) |message_pool| {
+                message_pool.destroy(self);
+            }
+        }
     }
 
     // this needs to be a mut ref to self

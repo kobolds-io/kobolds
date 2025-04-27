@@ -23,10 +23,16 @@ const IO = @import("../io.zig").IO;
 const Channel = @import("../data_structures/channel.zig").Channel;
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
-const MessageQueue = @import("../data_structures/message_queue.zig").MessageQueue;
+const RingBuffer = @import("stdx").RingBuffer;
+// const MessageQueue = @import("../data_structures/message_queue.zig").MessageQueue;
+
+const TopicManager = @import("../pubsub/topic_manager.zig").TopicManager;
+const Topic = @import("../pubsub/topic.zig").Topic;
+const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
 
 const PingOptions = struct {};
 const PublishOptions = struct {};
+const SubscribeOptions = struct {};
 
 pub const ClientConfig = struct {
     /// the host the node is bound to
@@ -61,8 +67,10 @@ pub const Client = struct {
     state: ClientState,
     uninitialized_connections_mutex: std.Thread.Mutex,
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
-    unprocessed_messages_queue: *MessageQueue,
+    unprocessed_messages_queue: *RingBuffer(*Message),
     transactions: std.AutoHashMap(uuid.Uuid, *Channel(anyerror!*Message)),
+    topic_manager: *TopicManager,
+    subscribers: std.AutoHashMap(u128, *Subscriber),
     mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, config: ClientConfig) !Self {
@@ -72,10 +80,11 @@ pub const Client = struct {
         io.* = try IO.init(constants.io_uring_entries, 0);
         errdefer io.deinit();
 
-        const unprocessed_messages_queue = try allocator.create(MessageQueue);
+        const unprocessed_messages_queue = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(unprocessed_messages_queue);
 
-        unprocessed_messages_queue.* = MessageQueue.new();
+        unprocessed_messages_queue.* = try RingBuffer(*Message).init(allocator, config.message_pool_capacity);
+        errdefer unprocessed_messages_queue.deinit();
 
         const connection_messages = try allocator.create(ConnectionMessages);
         errdefer allocator.destroy(connection_messages);
@@ -88,6 +97,12 @@ pub const Client = struct {
 
         message_pool.* = try MessagePool.init(allocator, config.message_pool_capacity);
         errdefer message_pool.deinit();
+
+        const topic_manager = try allocator.create(TopicManager);
+        errdefer allocator.destroy(topic_manager);
+
+        topic_manager.* = TopicManager.init(allocator);
+        errdefer topic_manager.deinit();
 
         return Self{
             .allocator = allocator,
@@ -102,6 +117,8 @@ pub const Client = struct {
             .unprocessed_messages_queue = unprocessed_messages_queue,
             .transactions = std.AutoHashMap(uuid.Uuid, *Channel(anyerror!*Message)).init(allocator),
             .mutex = std.Thread.Mutex{},
+            .topic_manager = topic_manager,
+            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
         };
     }
 
@@ -122,10 +139,14 @@ pub const Client = struct {
         }
         self.connections.deinit();
 
+        self.unprocessed_messages_queue.deinit();
         self.transactions.deinit();
         self.connection_messages.deinit();
         self.message_pool.deinit();
+        self.topic_manager.deinit();
+        self.subscribers.deinit();
 
+        self.allocator.destroy(self.topic_manager);
         self.allocator.destroy(self.unprocessed_messages_queue);
         self.allocator.destroy(self.connection_messages);
         self.allocator.destroy(self.message_pool);
@@ -172,50 +193,8 @@ pub const Client = struct {
                     };
                 },
                 .close => {
-                    // check if every connection is closed
-                    var all_connections_closed = true;
-
-                    var uninitialized_connections_iter = self.uninitialized_connections.valueIterator();
-                    while (uninitialized_connections_iter.next()) |conn_ptr| {
-                        var conn = conn_ptr.*;
-                        switch (conn.state) {
-                            .closed => continue,
-                            .close => {
-                                all_connections_closed = false;
-                            },
-                            else => {
-                                conn.state = .close;
-                                all_connections_closed = false;
-                            },
-                        }
-
-                        conn.tick() catch |err| {
-                            log.err("client tick err {any}", .{err});
-                            unreachable;
-                        };
-                    }
-
-                    var conn_iter = self.connections.valueIterator();
-                    while (conn_iter.next()) |conn_ptr| {
-                        var conn = conn_ptr.*;
-                        switch (conn.state) {
-                            .closed => continue,
-                            .close => {
-                                all_connections_closed = false;
-                            },
-                            else => {
-                                conn.state = .close;
-                                all_connections_closed = false;
-                            },
-                        }
-
-                        conn.tick() catch |err| {
-                            log.err("client tick err {any}", .{err});
-                            unreachable;
-                        };
-                    }
-
-                    if (all_connections_closed) {
+                    // if not all the connections are closed, we will simply try again on the next tick
+                    if (self.closeAllConnections()) {
                         self.state = .closed;
                         log.debug("closed all connections", .{});
                     }
@@ -238,7 +217,55 @@ pub const Client = struct {
         }
     }
 
-    pub fn tick(self: *Self) !void {
+    fn closeAllConnections(self: *Self) bool {
+
+        // check if every connection is closed
+        var all_connections_closed = true;
+
+        var uninitialized_connections_iter = self.uninitialized_connections.valueIterator();
+        while (uninitialized_connections_iter.next()) |conn_ptr| {
+            var conn = conn_ptr.*;
+            switch (conn.state) {
+                .closed => continue,
+                .close => {
+                    all_connections_closed = false;
+                },
+                else => {
+                    conn.state = .close;
+                    all_connections_closed = false;
+                },
+            }
+
+            conn.tick() catch |err| {
+                log.err("client tick err {any}", .{err});
+                unreachable;
+            };
+        }
+
+        var conn_iter = self.connections.valueIterator();
+        while (conn_iter.next()) |conn_ptr| {
+            var conn = conn_ptr.*;
+            switch (conn.state) {
+                .closed => continue,
+                .close => {
+                    all_connections_closed = false;
+                },
+                else => {
+                    conn.state = .close;
+                    all_connections_closed = false;
+                },
+            }
+
+            conn.tick() catch |err| {
+                log.err("client tick err {any}", .{err});
+                unreachable;
+            };
+        }
+
+        return all_connections_closed;
+    }
+
+    fn tick(self: *Self) !void {
         var uninitialized_connections_iter = self.uninitialized_connections.iterator();
         while (uninitialized_connections_iter.next()) |entry| {
             const conn = entry.value_ptr.*;
@@ -261,6 +288,8 @@ pub const Client = struct {
         while (connections_iter.next()) |conn_ptr| {
             const conn = conn_ptr.*;
 
+            // log.debug("conn id {}, conn.outbox.count {}", .{ conn.origin_id, conn.outbox.count });
+
             try conn.tick();
 
             // aggregate all messages from the connection to the client inbox
@@ -269,16 +298,11 @@ pub const Client = struct {
         }
 
         while (self.unprocessed_messages_queue.dequeue()) |message| {
-            try self.handleMessage(message);
-
-            // log.debug("message type {any}", .{message.headers.message_type});
-            // log.debug("message ref_count {}", .{message.ref_count.load(.seq_cst)});
-
-            if (message.refs() == 0) self.message_pool.destroy(message);
+            try self.process(message);
         }
     }
 
-    pub fn handleMessage(self: *Self, message: *Message) !void {
+    fn process(self: *Self, message: *Message) !void {
         defer message.deref();
         switch (message.headers.message_type) {
             .pong => {
@@ -292,8 +316,24 @@ pub const Client = struct {
                     log.err("missing transaction {}", .{message.transactionId()});
                 }
             },
-            .publish => {},
+            .publish => {
+                // log.debug("received published message {any}", .{message});
+
+                if (self.topic_manager.get(message.topicName())) |topic| {
+                    try topic.publish(message);
+                }
+            },
             .accept => {},
+            .reply => {
+                log.debug("received reply message", .{});
+                message.ref();
+                const transaction_id = message.transactionId();
+                if (self.transactions.get(transaction_id)) |chan| {
+                    chan.send(message);
+                }
+
+                defer _ = self.transactions.remove(transaction_id);
+            },
             else => |t| {
                 log.err("received unhandled message type {any}", .{t});
 
@@ -349,21 +389,164 @@ pub const Client = struct {
 
     pub fn ping(self: *Self, conn: *Connection, options: PingOptions) !void {
         _ = options;
-        const req = try self.message_pool.create();
-        errdefer self.message_pool.destroy(req);
 
-        req.* = Message.new();
+        const req = try Message.create(self.message_pool);
+        errdefer req.deref();
+
+        const transaction_id = uuid.v7.new();
+
         req.headers.message_type = .ping;
         req.headers.origin_id = conn.origin_id;
-        req.setTransactionId(uuid.v7.new());
-        req.ref();
-        errdefer req.deref();
+        req.setTransactionId(transaction_id);
 
         // validate the message
         if (req.validate()) |err_msg| {
             log.err("invalid message {s}", .{err_msg});
             return ProtocolError.InvalidMessage;
         }
+
+        var chan = Channel(anyerror!*Message).init();
+
+        {
+            // lock the client
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            // register transaction
+            try self.transactions.put(transaction_id, &chan);
+
+            try conn.outbox.enqueue(req);
+        }
+
+        const tx = chan.receive();
+        const rep = try tx;
+        _ = rep;
+    }
+
+    pub fn publish(
+        self: *Self,
+        conn: *Connection,
+        topic_name: []const u8,
+        body: []const u8,
+        options: PublishOptions,
+    ) !void {
+        _ = options;
+
+        const publish_message = try Message.create(self.message_pool);
+        errdefer publish_message.deref();
+
+        publish_message.headers.message_type = .publish;
+        publish_message.headers.origin_id = conn.origin_id;
+        publish_message.setTopicName(topic_name);
+        publish_message.setBody(body);
+
+        try conn.outbox.enqueue(publish_message);
+    }
+
+    pub fn subscribe(
+        self: *Self,
+        conn: *Connection,
+        topic_name: []const u8,
+        callback: Subscriber.SubscriptionCallback,
+        options: SubscribeOptions,
+    ) !*Subscriber {
+        _ = options;
+
+        const subscribe_req = try Message.create(self.message_pool);
+        errdefer subscribe_req.deref();
+
+        const transaction_id = uuid.v7.new();
+
+        subscribe_req.headers.message_type = .subscribe;
+        subscribe_req.headers.origin_id = conn.origin_id;
+        subscribe_req.setTopicName(topic_name);
+        subscribe_req.setTransactionId(transaction_id);
+
+        // validate the message
+        if (subscribe_req.validate()) |err_msg| {
+            log.err("invalid message {s}", .{err_msg});
+            return ProtocolError.InvalidMessage;
+        }
+
+        const subscribe_rep = try self.request(conn, subscribe_req);
+
+        if (subscribe_rep.errorCode() != .ok) {
+            return error.UnableToSubscribe;
+        }
+
+        const topic_manager = self.topic_manager;
+        var topic: *Topic = undefined;
+
+        if (topic_manager.get(topic_name)) |t| {
+            topic = t;
+        } else {
+            topic = topic_manager.create(topic_name) catch |err| switch (err) {
+                // BUG: Someone has created this topic during this tick. Should handle this better.
+                // I think that adding the message back into the queue and just retry it. This runs
+                // the risk of getting into an unhandledable loop
+                error.TopicExists => topic_manager.get(topic_name).?,
+                else => unreachable,
+            };
+        }
+
+        const subscriber = try self.allocator.create(Subscriber);
+        errdefer self.allocator.destroy(subscriber);
+
+        subscriber.* = try Subscriber.init(self.allocator, conn.origin_id, topic);
+        errdefer subscriber.deinit();
+
+        // Override the default callback of the subscriber
+        subscriber.callback = callback;
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        try self.subscribers.put(subscriber.key, subscriber);
+        errdefer _ = self.subscribers.remove(subscriber.key);
+
+        try subscriber.subscribe();
+        errdefer subscriber.unsubscribe();
+
+        return subscriber;
+    }
+
+    pub fn unsubscribe(self: *Self, subscriber: *Subscriber) !void {
+        const unsubscribe_req = try Message.create(self.message_pool);
+        errdefer unsubscribe_req.deref();
+
+        const transaction_id = uuid.v7.new();
+
+        unsubscribe_req.headers.message_type = .unsubscribe;
+        unsubscribe_req.headers.origin_id = subscriber.conn_id;
+        unsubscribe_req.setTopicName(subscriber.topic.topic_name);
+        unsubscribe_req.setTransactionId(transaction_id);
+
+        // validate the message
+        if (unsubscribe_req.validate()) |err_msg| {
+            log.err("invalid message {s}", .{err_msg});
+            return ProtocolError.InvalidMessage;
+        }
+
+        const conn = self.connections.get(subscriber.conn_id).?;
+
+        const unsubscribe_rep = try self.request(conn, unsubscribe_req);
+
+        if (unsubscribe_rep.errorCode() != .ok) {
+            return error.UnableToUnsubscribe;
+        }
+
+        subscriber.unsubscribe();
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        _ = self.subscribers.remove(subscriber.key);
+
+        subscriber.deinit();
+        self.allocator.destroy(subscriber);
+    }
+
+    fn request(self: *Self, conn: *Connection, req: *Message) !*Message {
+        assert(req.transactionId() != 0);
 
         var chan = Channel(anyerror!*Message).init();
 
@@ -380,70 +563,17 @@ pub const Client = struct {
 
         const tx = chan.receive();
         const rep = try tx;
-        _ = rep;
 
-        // log.debug("got rep.headers {any}", .{rep.headers});
-
-        // rep.deref();
-        // if (rep.ref_count.load(.seq_cst) == 0) self.message_pool.release(rep);
-
-        // log.debug("message pool free messages {}", .{self.message_pool.available()});
-    }
-
-    pub fn publish(self: *Self, conn: *Connection, topic_name: []const u8, body: []const u8, options: PublishOptions) !void {
-        _ = options;
-
-        const publish_message = try self.message_pool.create();
-        errdefer self.message_pool.destroy(publish_message);
-
-        publish_message.* = Message.new();
-
-        publish_message.ref();
-        errdefer publish_message.deref();
-
-        publish_message.headers.message_type = .publish;
-        publish_message.headers.origin_id = conn.origin_id;
-        publish_message.setTopicName(topic_name);
-        publish_message.setBody(body);
-
-        try conn.outbox.enqueue(publish_message);
+        return rep;
     }
 
     pub fn gather(self: *Self, conn: *Connection) !void {
-        self.unprocessed_messages_queue.concatenate(&conn.inbox);
-        conn.inbox.reset();
+        try self.unprocessed_messages_queue.concatenate(conn.inbox);
     }
 
     pub fn distribute(self: *Self, conn: *Connection) !void {
         _ = self;
         _ = conn;
-        // self.mutex.lock();
-        // defer self.mutex.unlock();
-        //
-        // // NOTE: This entry is eventually cleaned up when a connection closes. This avoids
-        // // reallocations for not only updating the connection_messages map but also intializing
-        // // the messages list
-        // if (self.connection_messages.map.get(conn.origin_id)) |messages_list| {
-        //     if (messages_list.items.len == 0) return;
-        //     const available = conn.outbox.capacity - conn.outbox.count;
-        //
-        //     if (available == 0) return;
-        //
-        //     var added: u32 = 0;
-        //
-        //     for (0..available) |i| {
-        //         if (i >= messages_list.items.len) break;
-        //
-        //         // FIX: we should handle the case here because we might send
-        //         // duplicate messages to the client
-        //         try conn.outbox.enqueue(messages_list.items[i]);
-        //         added += 1;
-        //     }
-        //
-        //     // take however many messages were added and remove them from the list
-        //     std.mem.copyForwards(*Message, messages_list.items, messages_list.items[added..]);
-        //     messages_list.items.len -= added;
-        // }
     }
 };
 

@@ -8,6 +8,8 @@ const constants = @import("../constants.zig");
 const Mailbox = @import("../data_structures/mailbox.zig").Mailbox;
 const Message = @import("../protocol/message.zig").Message;
 const Channel = @import("../data_structures/channel.zig").Channel;
+const Topic = @import("../pubsub/topic.zig").Topic;
+const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
 
 const Node = @import("../node/node.zig").Node;
 const NodeConfig = @import("../node/node.zig").NodeConfig;
@@ -21,7 +23,7 @@ var node_config = NodeConfig{
     .host = "127.0.0.1",
     .port = 8000,
     .worker_threads = 24,
-    .message_pool_capacity = 10_000,
+    .worker_message_pool_capacity = constants.default_worker_message_pool_capacity,
 };
 
 var client_config = ClientConfig{
@@ -93,6 +95,11 @@ pub fn run() !void {
                 .help = "worker threads to be spawned",
                 .value_ref = app_runner.mkRef(&node_config.worker_threads),
             },
+            .{
+                .long_name = "worker-message-pool-capacity",
+                .help = "number of messages in each worker pool's capacity",
+                .value_ref = app_runner.mkRef(&node_config.worker_message_pool_capacity),
+            },
         },
 
         .target = .{ .action = .{ .exec = nodeListen } },
@@ -114,6 +121,42 @@ pub fn run() !void {
             },
         },
         .target = .{ .action = .{ .exec = nodePing } },
+    };
+
+    const node_subscribe_command = cli.Command{
+        .name = "subscribe",
+        .description = cli.Description{ .one_line = "subscribe to a topic" },
+        .options = &.{
+            .{
+                .long_name = "host",
+                .help = "host to listen on",
+                .value_ref = app_runner.mkRef(&client_config.host),
+            },
+            .{
+                .long_name = "port",
+                .help = "port to bind to",
+                .value_ref = app_runner.mkRef(&client_config.port),
+            },
+        },
+        .target = .{ .action = .{ .exec = nodeSubscribe } },
+    };
+
+    const node_publish_command = cli.Command{
+        .name = "publish",
+        .description = cli.Description{ .one_line = "publish to a topic" },
+        .options = &.{
+            .{
+                .long_name = "host",
+                .help = "host to listen on",
+                .value_ref = app_runner.mkRef(&client_config.host),
+            },
+            .{
+                .long_name = "port",
+                .help = "port to bind to",
+                .value_ref = app_runner.mkRef(&client_config.port),
+            },
+        },
+        .target = .{ .action = .{ .exec = nodePublish } },
     };
 
     const node_bench_command = cli.Command{
@@ -208,6 +251,8 @@ pub fn run() !void {
                 node_request_command,
                 node_bench_command,
                 node_reply_command,
+                node_publish_command,
+                node_subscribe_command,
             },
         },
     };
@@ -316,80 +361,7 @@ pub fn nodeReply() !void {
     // }
 }
 
-pub fn nodeRequest() !void {
-    // log.debug("request config {any}", .{reply_config});
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // const allocator = gpa.allocator();
-    // defer _ = gpa.deinit();
-    //
-    // var client = try Client.init(allocator, client_config);
-    // defer client.deinit();
-    //
-    // // spin up the client worker thread
-    // try client.run();
-    // defer client.close();
-    //
-    // const connect_deadline_ms: i64 = 1000;
-    // const conn = try client.connect(connect_deadline_ms);
-    // _ = conn; // NOTE: i'm actually not to sure if I want to give users access to the connection
-    //
-    // const req = try allocator.create(Message);
-    // defer allocator.destroy(req);
-    //
-    // req.* = Message.new();
-    // req.headers.message_type = .request;
-    // req.setTopicName("/my/topic");
-    // req.setBody("hello world!");
-    //
-    // var iter_timer = try std.time.Timer.start();
-    // defer iter_timer.reset();
-    //
-    // var timer = try std.time.Timer.start();
-    // defer timer.reset();
-    // const total_start = timer.read();
-    //
-    // var channels = std.ArrayList(*Channel(*Message)).init(allocator);
-    // defer channels.deinit();
-    //
-    // for (0..10) |i| {
-    //     const start = iter_timer.read();
-    //
-    //     defer iter_timer.reset();
-    //     defer {
-    //         const end = iter_timer.read();
-    //         log.debug("{} took {}ms", .{ i, (end - start) / std.time.ns_per_ms });
-    //     }
-    //
-    //     const chan = try client.requestAsync(req);
-    //     try channels.append(chan);
-    //
-    //     // defer allocator.destroy(reply);
-    //
-    //     // log.debug("{s}", .{reply.body()});
-    // }
-    //
-    // for (channels.items) |chan| {
-    //     _ = chan.receive();
-    // }
-    //
-    // log.debug("took total {}ms", .{(timer.read() - total_start) / std.time.ns_per_ms});
-    //
-    // // try registerSigintHandler();
-    // // while (!sigint_received) {
-    // //     std.time.sleep(1 * std.time.ns_per_ms);
-    // // }
-
-    // TODO:
-    //  1. create allocator
-    //  2. create client
-    //      ensure client deinit
-    //  3. start worker thread
-    //      ensure worker thread is stopped
-    //  4. connect
-    //      ensure disconnect
-    //  5. send batch
-
-}
+pub fn nodeRequest() !void {}
 
 pub fn nodeBench() !void {
     // creating a client to communicate with the node
@@ -441,14 +413,80 @@ pub fn nodeBench() !void {
             };
         }
     }
+}
 
-    // std.time.sleep(1_000_000_000);
-    // try client.publish(conn, "/hello", "test body");
-    // try client.request(conn, req, rep);
-    // try client.reply(conn, topic_name, handler);
-    // try client.advertise(conn, "/hello", reply_handler);
-    // try client.subscribe(conn, "/hello", subscribe_handler);
+pub fn nodePublish() !void {
+    // creating a client to communicate with the node
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
+    var client = try Client.init(allocator, client_config);
+    defer client.deinit();
+
+    // run the background client thread
+    try client.start();
+    defer client.stop();
+
+    const conn = try client.connect();
+    defer client.disconnect(conn);
+
+    // const body = "hello from the publisher";
+    const body = "a" ** constants.message_max_body_size;
+    const topic_name = "/test";
+
+    registerSigintHandler();
+
+    while (!sigint_received) {
+        client.publish(conn, topic_name, body, .{}) catch |err| {
+            log.err("error {any}", .{err});
+            std.time.sleep(1 * std.time.ns_per_ms);
+            continue;
+        };
+
+        std.time.sleep(1 * std.time.ns_per_ms);
+    }
+}
+
+pub fn nodeSubscribe() !void {
+    // creating a client to communicate with the node
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+
+    var client = try Client.init(allocator, client_config);
+    defer client.deinit();
+
+    // run the background client thread
+    try client.start();
+    defer client.stop();
+
+    const conn = try client.connect();
+    defer client.disconnect(conn);
+
+    const topic_name = "/test";
+
+    const callback = struct {
+        pub fn callback(event: Topic.TopicEvent, context: ?*anyopaque, message: *Message) void {
+            _ = event;
+            // _ = context;
+            const subscriber: *Subscriber = @ptrCast(@alignCast(context));
+            subscriber.messages_received += 1;
+            if (subscriber.messages_received % 1000 == 0) {
+                log.debug("subscriber.messages_received {}", .{subscriber.messages_received});
+            }
+            message.deref();
+        }
+    }.callback;
+
+    registerSigintHandler();
+
+    const subscriber = try client.subscribe(conn, topic_name, callback, .{});
+    defer client.unsubscribe(subscriber) catch unreachable;
+
+    while (!sigint_received) {
+        std.time.sleep(1 * std.time.ns_per_ms);
+    }
 }
 
 pub fn version() !void {
@@ -459,7 +497,7 @@ pub fn noop() !void {}
 
 var sigint_received: bool = false;
 
-fn registerSigintHandler() !void {
+fn registerSigintHandler() void {
     // This function will be called when SIGINT is received
     const onSigint = struct {
         fn onSigint(_: i32) callconv(.C) void {
@@ -474,5 +512,5 @@ fn registerSigintHandler() !void {
         .handler = .{ .handler = onSigint },
     };
 
-    try posix.sigaction(posix.SIG.INT, &sa, null);
+    posix.sigaction(posix.SIG.INT, &sa, null);
 }

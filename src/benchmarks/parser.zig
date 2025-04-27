@@ -56,38 +56,42 @@ test "Parser benchmarks" {
         "parse {} bytes",
         .{bytes_1.len},
     );
+    defer parser_messages_allocator.free(parser_parse_1_title);
 
     const parser_parse_2_title = try std.fmt.allocPrint(
         parser_messages_allocator,
         "parse {} bytes",
         .{bytes_2.len},
     );
+    defer parser_messages_allocator.free(parser_parse_2_title);
 
     const parser_parse_3_title = try std.fmt.allocPrint(
         parser_messages_allocator,
         "parse {} bytes",
         .{bytes_3.len},
     );
+    defer parser_messages_allocator.free(parser_parse_3_title);
 
+    // create a single encoded message with no body
     var message_2 = Message.new();
     message_2.headers.message_type = .ping;
     message_2.setTransactionId(1);
 
-    const encoded_message_2 = try parser_messages_allocator.alloc(u8, message_2.size());
-    message_2.encode(encoded_message_2);
-
-    const bytes_4 = encoded_message_2;
+    const bytes_4 = try parser_messages_allocator.alloc(u8, message_2.size());
+    defer parser_messages_allocator.free(bytes_4);
+    message_2.encode(bytes_4);
 
     const parser_parse_4_title = try std.fmt.allocPrint(
         parser_messages_allocator,
         "parse {} bytes",
         .{bytes_4.len},
     );
+    defer parser_messages_allocator.free(parser_parse_4_title);
 
+    try bench.addParam(parser_parse_4_title, &ParserBenchmark.new(&parser_messages, &parser, bytes_4), .{});
     try bench.addParam(parser_parse_1_title, &ParserBenchmark.new(&parser_messages, &parser, &bytes_1), .{});
     try bench.addParam(parser_parse_2_title, &ParserBenchmark.new(&parser_messages, &parser, &bytes_2), .{});
     try bench.addParam(parser_parse_3_title, &ParserBenchmark.new(&parser_messages, &parser, &bytes_3), .{});
-    try bench.addParam(parser_parse_4_title, &ParserBenchmark.new(&parser_messages, &parser, bytes_4), .{});
 
     const stderr = std.io.getStdErr().writer();
     try stderr.writeAll("\n");

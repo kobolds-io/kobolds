@@ -22,6 +22,8 @@ pub fn build(b: *std.Build) void {
 
     setupTests(b, target, optimize);
 
+    setupCICDTests(b, target, optimize);
+
     setupBenchmarks(b, target, optimize);
 }
 
@@ -33,6 +35,12 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
         .optimize = optimize,
         .version = version,
     });
+
+    const stdx_dep = b.dependency("stdx", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const stdx_mod = stdx_dep.module("stdx");
 
     const zig_cli_dep = b.dependency("zig-cli", .{
         .target = target,
@@ -48,6 +56,7 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
 
     kobolds_exe.root_module.addImport("zig-cli", zig_cli_mod);
     kobolds_exe.root_module.addImport("uuid", uuid_mod);
+    kobolds_exe.root_module.addImport("stdx", stdx_mod);
 
     b.installArtifact(kobolds_exe);
 
@@ -61,7 +70,7 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
 }
 
 fn setupTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
-    const lib_unit_tests = b.addTest(.{
+    const kobolds_unit_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
@@ -73,11 +82,48 @@ fn setupTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bui
     });
     const uuid_mod = uuid_dep.module("uuid");
 
-    lib_unit_tests.root_module.addImport("uuid", uuid_mod);
+    const stdx_dep = b.dependency("stdx", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const stdx_mod = stdx_dep.module("stdx");
 
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+    kobolds_unit_tests.root_module.addImport("uuid", uuid_mod);
+    kobolds_unit_tests.root_module.addImport("stdx", stdx_mod);
+
+    const run_unit_tests = b.addRunArtifact(kobolds_unit_tests);
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_lib_unit_tests.step);
+
+    test_step.dependOn(&run_unit_tests.step);
+}
+
+fn setupCICDTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
+    const kobolds_unit_tests = b.addTest(.{
+        .root_source_file = b.path("src/test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .test_runner = .{ .path = b.path("src/cicd_test_runner.zig"), .mode = .simple },
+    });
+
+    const uuid_dep = b.dependency("uuid", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const uuid_mod = uuid_dep.module("uuid");
+
+    const stdx_dep = b.dependency("stdx", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const stdx_mod = stdx_dep.module("stdx");
+
+    kobolds_unit_tests.root_module.addImport("uuid", uuid_mod);
+    kobolds_unit_tests.root_module.addImport("stdx", stdx_mod);
+
+    const run_unit_tests = b.addRunArtifact(kobolds_unit_tests);
+    const test_step = b.step("cicd:test", "Run unit tests");
+
+    test_step.dependOn(&run_unit_tests.step);
 }
 
 fn setupBenchmarks(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
@@ -94,7 +140,14 @@ fn setupBenchmarks(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     const zbench_mod = zbench_dep.module("zbench");
 
+    const stdx_dep = b.dependency("stdx", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const stdx_mod = stdx_dep.module("stdx");
+
     bench_lib.root_module.addImport("zbench", zbench_mod);
+    bench_lib.root_module.addImport("stdx", stdx_mod);
 
     const run_bench_tests = b.addRunArtifact(bench_lib);
     const bench_test_step = b.step("bench", "Run benchmark tests");

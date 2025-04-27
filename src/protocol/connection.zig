@@ -16,9 +16,9 @@ const IO = @import("../io.zig").IO;
 const ProtocolError = @import("../errors.zig").ProtocolError;
 
 // data structures
+const RingBuffer = @import("stdx").RingBuffer;
 const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
 const MessageQueue = @import("../data_structures/message_queue.zig").MessageQueue;
-const RingBuffer = @import("../data_structures/ring_buffer.zig").RingBuffer;
 
 const ConnectionState = enum {
     close,
@@ -41,7 +41,7 @@ pub const Connection = struct {
     connect_completion: *IO.Completion,
     connection_type: ConnectionType,
     connect_submitted: bool,
-    inbox: MessageQueue,
+    inbox: *RingBuffer(*Message),
     io: *IO,
     message_pool: *MessagePool,
     messages_recv: u128,
@@ -87,10 +87,16 @@ pub const Connection = struct {
         const send_buffer = try allocator.alloc(u8, constants.connection_send_buffer_size);
         errdefer allocator.free(send_buffer);
 
+        const inbox = try allocator.create(RingBuffer(*Message));
+        errdefer allocator.destroy(inbox);
+
+        inbox.* = try RingBuffer(*Message).init(allocator, constants.connection_inbox_capacity);
+        errdefer inbox.deinit();
+
         const outbox = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(outbox);
 
-        outbox.* = try RingBuffer(*Message).init(allocator, 1_000);
+        outbox.* = try RingBuffer(*Message).init(allocator, constants.connection_outbox_capacity);
         errdefer outbox.deinit();
 
         return Connection{
@@ -102,7 +108,7 @@ pub const Connection = struct {
             .connect_completion = connect_completion,
             .connection_type = connection_type,
             .connect_submitted = false,
-            .inbox = MessageQueue.new(),
+            .inbox = inbox,
             .io = io,
             .message_pool = message_pool,
             .messages_recv = 0,
@@ -127,15 +133,13 @@ pub const Connection = struct {
     pub fn deinit(self: *Connection) void {
         while (self.outbox.dequeue()) |message| {
             message.deref();
-            if (message.refs() == 0) self.message_pool.destroy(message);
         }
 
         while (self.inbox.dequeue()) |message| {
             message.deref();
-            if (message.refs() == 0) self.message_pool.destroy(message);
         }
 
-        self.inbox.reset();
+        self.inbox.deinit();
         self.outbox.deinit();
         self.parsed_messages.deinit();
         self.parser.deinit();
@@ -144,6 +148,7 @@ pub const Connection = struct {
         self.allocator.destroy(self.send_completion);
         self.allocator.destroy(self.close_completion);
         self.allocator.destroy(self.connect_completion);
+        self.allocator.destroy(self.inbox);
         self.allocator.destroy(self.outbox);
 
         self.allocator.free(self.recv_buffer);
@@ -219,10 +224,7 @@ pub const Connection = struct {
 
                 var i: usize = 0;
                 while (self.outbox.dequeue()) |message| : (i += 1) {
-                    defer {
-                        message.deref();
-                        if (message.refs() == 0) self.message_pool.destroy(message);
-                    }
+                    defer message.deref();
 
                     const message_size = message.size();
 
@@ -335,13 +337,21 @@ pub const Connection = struct {
             }
 
             message_ptr.* = message;
+            message_ptr.message_pool = self.message_pool;
             message_ptr.ref();
 
             // this is kind of redundent because the message_pool should be handling this
             assert(message_ptr.refs() == 1);
         }
 
-        self.inbox.enqueueMany(message_ptrs);
+        const n = self.inbox.enqueueMany(message_ptrs);
+        if (n < message_ptrs.len) {
+            log.err("could not enqueue all message ptrs. dropping {} messages", .{message_ptrs[n..].len});
+            for (message_ptrs[n..]) |ptr| {
+                self.message_pool.destroy(ptr);
+            }
+        }
+
         self.parsed_messages.items.len = 0;
     }
 

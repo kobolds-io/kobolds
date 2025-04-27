@@ -7,6 +7,7 @@ const constants = @import("../constants.zig");
 
 const Message = @import("../protocol/message.zig").Message;
 const MessageQueue = @import("./message_queue.zig").MessageQueue;
+const RingBuffer = @import("stdx").RingBuffer;
 
 /// The Pool acts like a global allocator with a fixed number of pointers availble for use.
 /// Each allocated pointer will be valid throughout the lifespan of the Pool but will be
@@ -16,16 +17,16 @@ pub const MessagePool = struct {
 
     assigned_map: std.AutoHashMap(*Message, bool),
     capacity: u32,
-    free_list: MessageQueue,
+    free_list: RingBuffer(*Message),
     messages: std.ArrayList(Message),
-
     mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, capacity: u32) !Self {
-        assert(capacity <= constants.message_pool_max_capacity);
         assert(capacity > 0);
 
-        var free_queue = MessageQueue.new();
+        var free_queue = try RingBuffer(*Message).init(allocator, capacity);
+        errdefer free_queue.deinit();
+
         var messages = try std.ArrayList(Message).initCapacity(allocator, capacity);
         errdefer messages.deinit();
 
@@ -35,7 +36,7 @@ pub const MessagePool = struct {
         }
 
         for (messages.items) |*message| {
-            free_queue.enqueue(message);
+            free_queue.enqueue(message) catch @panic("unable to enqueue item");
         }
 
         // ensure that the free queue is fully stocked with free messages
@@ -51,7 +52,7 @@ pub const MessagePool = struct {
     }
 
     pub fn deinit(self: *MessagePool) void {
-        self.free_list.reset();
+        self.free_list.deinit();
         self.assigned_map.deinit();
         self.messages.deinit();
     }
@@ -71,6 +72,11 @@ pub const MessagePool = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
+        return self.unsafeCreate();
+    }
+
+    /// Doesn't lock the message pool when creating pointer
+    pub fn unsafeCreate(self: *MessagePool) !*Message {
         if (self.available() == 0) return error.OutOfMemory;
 
         if (self.free_list.dequeue()) |message_ptr| {
@@ -84,6 +90,11 @@ pub const MessagePool = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
+        return self.unsafeCreateN(allocator, n);
+    }
+
+    /// Doesn't lock the message pool when creating pointers
+    pub fn unsafeCreateN(self: *MessagePool, allocator: std.mem.Allocator, n: u32) ![]*Message {
         if (self.available() < n) return error.OutOfMemory;
 
         var list = try std.ArrayList(*Message).initCapacity(allocator, n);
@@ -99,36 +110,15 @@ pub const MessagePool = struct {
         return list.toOwnedSlice();
     }
 
-    // pub fn createN(self: *MessagePool, allocator: std.mem.Allocator, n: u32) ![]*Message {
-    //     self.mutex.lock();
-    //     defer self.mutex.unlock();
-    //
-    //     if (self.available() < n) return error.OutOfMemory;
-    //
-    //     var list = try allocator.alloc(*Message, n);
-    //     errdefer allocator.free(list);
-    //
-    //     var count_n: u32 = 0;
-    //     while (count_n < n) {
-    //         if (self.free_list.dequeue()) |message_ptr| {
-    //             list[count_n] = message_ptr;
-    //             try self.assigned_map.put(message_ptr, true);
-    //             count_n += 1;
-    //         } else break;
-    //     }
-    //
-    //     if (count_n < n) {
-    //         allocator.free(list);
-    //         return error.OutOfMemory;
-    //     }
-    //
-    //     return list[0..count_n];
-    // }
-
     pub fn destroy(self: *MessagePool, message_ptr: *Message) void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
+        self.unsafeDestroy(message_ptr);
+    }
+
+    /// Doesn't lock the message pool when destroying pointers
+    pub fn unsafeDestroy(self: *MessagePool, message_ptr: *Message) void {
         assert(message_ptr.refs() == 0);
 
         // free the ptr from the assinged queue and give it back to the unassigned queue
@@ -141,8 +131,10 @@ pub const MessagePool = struct {
             unreachable;
         }
 
-        message_ptr.next = null;
-        self.free_list.enqueue(message_ptr);
+        self.free_list.enqueue(message_ptr) catch |err| {
+            log.err("error enqueueuing message_ptr {any}", .{err});
+            @panic("unable to enqueue destroyed message");
+        };
     }
 };
 
