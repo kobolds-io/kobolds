@@ -402,8 +402,12 @@ pub const Message = struct {
         var headers_buf: [@sizeOf(Headers)]u8 = undefined;
         const headers_checksum_payload = self.headers.toChecksumPayload(&headers_buf);
 
+        // std.debug.print("headers_buf {any}\n", .{headers_buf});
+
         self.headers.headers_checksum = hash.checksum(headers_checksum_payload);
         self.headers.body_checksum = hash.checksum(self.body());
+
+        // TODO: Headers should have an `asBytes()` func to consistently output the same bytes across languages.
 
         @memcpy(buf[0..@sizeOf(Headers)], std.mem.asBytes(&self.headers));
         @memcpy(buf[@sizeOf(Headers)..self.size()], self.body());

@@ -219,3 +219,27 @@ test "refs and derefs" {
 
     try testing.expectEqual(0, message_pool.count());
 }
+
+test "rust encoding/zig encoding" {
+    // const allocator = testing.allocator;
+    // const rust_encoding: []const u8 = &[_]u8{ 236, 94, 32, 136, 7, 64, 225, 165, 144, 176, 80, 86, 53, 49, 231, 158, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100, 33 };
+    //
+    // // this live as long as the scope of this function
+    // const body = "hello world!";
+    // var message = Message.new();
+    // message.headers.message_type = .ping;
+    // message.headers.origin_id = 0;
+    // message.setBody(body);
+    //
+    // const encoded_message = try allocator.alloc(u8, message.size());
+    // defer allocator.free(encoded_message);
+    //
+    // message.encode(encoded_message);
+    //
+    // std.debug.print("message {any}", .{message});
+    // std.debug.print("\nrust_encoding {any}\n", .{rust_encoding});
+    // std.debug.print("zig encoding  {any}\n", .{encoded_message});
+    //
+    // try testing.expectEqual(rust_encoding.len, encoded_message.len);
+    // try testing.expect(std.mem.eql(u8, rust_encoding, encoded_message));
+}
