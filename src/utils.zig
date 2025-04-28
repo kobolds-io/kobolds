@@ -6,53 +6,27 @@ const constants = @import("./constants.zig");
 const hash = @import("./hash.zig");
 
 pub fn u128ToBytes(value: u128) [16]u8 {
-    return [_]u8{
-        @intCast(value >> 120 & 0xff),
-        @intCast(value >> 112 & 0xff),
-        @intCast(value >> 104 & 0xff),
-        @intCast(value >> 96 & 0xff),
-        @intCast(value >> 88 & 0xff),
-        @intCast(value >> 80 & 0xff),
-        @intCast(value >> 72 & 0xff),
-        @intCast(value >> 64 & 0xff),
-        @intCast(value >> 56 & 0xff),
-        @intCast(value >> 48 & 0xff),
-        @intCast(value >> 40 & 0xff),
-        @intCast(value >> 32 & 0xff),
-        @intCast(value >> 24 & 0xff),
-        @intCast(value >> 16 & 0xff),
-        @intCast(value >> 8 & 0xff),
-        @intCast(value & 0xff),
-    };
+    var buf: [16]u8 = undefined;
+    std.mem.writeInt(u128, &buf, value, .big);
+    return buf;
 }
 
 pub fn u64ToBytes(value: u64) [8]u8 {
-    return [_]u8{
-        @intCast(value >> 56 & 0xff),
-        @intCast(value >> 48 & 0xff),
-        @intCast(value >> 40 & 0xff),
-        @intCast(value >> 32 & 0xff),
-        @intCast(value >> 24 & 0xff),
-        @intCast(value >> 16 & 0xff),
-        @intCast(value >> 8 & 0xff),
-        @intCast(value & 0xff),
-    };
+    var buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &buf, value, .big);
+    return buf;
 }
 
 pub fn u32ToBytes(value: u32) [4]u8 {
-    return [_]u8{
-        @intCast((value >> 24) & 0xff),
-        @intCast((value >> 16) & 0xff),
-        @intCast((value >> 8) & 0xff),
-        @intCast(value & 0xFF),
-    };
+    var buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &buf, value, .big);
+    return buf;
 }
 
 pub fn u16ToBytes(value: u16) [2]u8 {
-    return [_]u8{
-        @intCast((value >> 8) & 0xff),
-        @intCast(value & 0xff),
-    };
+    var buf: [2]u8 = undefined;
+    std.mem.writeInt(u16, &buf, value, .big);
+    return buf;
 }
 
 pub fn generateKey(topic_name: []const u8, id: u128) u128 {
