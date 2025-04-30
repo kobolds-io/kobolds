@@ -6,7 +6,6 @@ const log = std.log.scoped(.MessagePool);
 const constants = @import("../constants.zig");
 
 const Message = @import("../protocol/message.zig").Message;
-const MessageQueue = @import("./message_queue.zig").MessageQueue;
 const RingBuffer = @import("stdx").RingBuffer;
 
 /// The Pool acts like a global allocator with a fixed number of pointers availble for use.

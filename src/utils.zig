@@ -29,6 +29,22 @@ pub fn u16ToBytes(value: u16) [2]u8 {
     return buf;
 }
 
+pub fn bytesToU128(bytes: *const [16]u8) u128 {
+    return std.mem.readInt(u128, bytes, .big);
+}
+
+pub fn bytesToU64(bytes: *const [8]u8) u64 {
+    return std.mem.readInt(u64, bytes, .big);
+}
+
+pub fn bytesToU32(bytes: *const [4]u8) u32 {
+    return std.mem.readInt(u32, bytes, .big);
+}
+
+pub fn bytesToU16(bytes: *const [2]u8) u16 {
+    return std.mem.readInt(u16, bytes, .big);
+}
+
 pub fn generateKey(topic_name: []const u8, id: u128) u128 {
     var buf: [constants.message_max_topic_name_size + @sizeOf(u128)]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buf);
@@ -42,18 +58,28 @@ pub fn generateKey(topic_name: []const u8, id: u128) u128 {
     defer list.deinit();
 
     // we are just going to use the same checksum hasher as we do for messages.
-    return hash.checksum(list.items);
+    return hash.xxHash64Checksum(list.items);
 }
 
-// TODO: There should be a simple function to convert any multibyte type to little/big endian
-// pub const ByteOrder = enum {
-//     big,
-//     little,
-// };
-// pub fn asBytes(value_type: type, value: anytype, endianess: Endianess) [@sizeOf(value_type)]u8 {
-//
-//
-// }
+pub fn generateUniqueId(salt: u128) u64 {
+    const ns_timestamp = std.time.nanoTimestamp();
+
+    var buf: [@sizeOf(i128) + @sizeOf(u128)]u8 = undefined;
+    // create a fixed buffer allocator to write the values that should be checksummed
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    const fba_allocator = fba.allocator();
+
+    var list = std.ArrayList(u8).initCapacity(
+        fba_allocator,
+        @sizeOf(i128) + @sizeOf(u128),
+    ) catch unreachable;
+
+    // this excludes header_checksum & body_checksum
+    list.appendSliceAssumeCapacity(&u128ToBytes(@intCast(ns_timestamp)));
+    list.appendSliceAssumeCapacity(&u128ToBytes(salt));
+
+    return hash.xxHash64Checksum(list.items);
+}
 
 // std.SemanticVersion requires there be no extra characters after the
 // major/minor/patch numbers. But when we try to parse `uname

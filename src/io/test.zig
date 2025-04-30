@@ -743,7 +743,7 @@ test "pipe data over socket" {
 }
 
 test "cancel_all" {
-    const checksum = hash.checksum;
+    const checksum = hash.xxHash64Checksum;
     const allocator = std.testing.allocator;
     const file_path = "test_cancel_all";
     const read_count = 8;

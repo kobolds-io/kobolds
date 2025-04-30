@@ -16,7 +16,6 @@ const Message = @import("../protocol/message.zig").Message;
 
 // Datastructures
 const Channel = @import("../data_structures/channel.zig").Channel;
-const MessageQueue = @import("../data_structures/message_queue.zig").MessageQueue;
 const RingBuffer = @import("stdx").RingBuffer;
 
 /// static configuration used to configure the node

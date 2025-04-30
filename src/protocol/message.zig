@@ -402,14 +402,13 @@ pub const Message = struct {
         var headers_buf: [@sizeOf(Headers)]u8 = undefined;
         const headers_checksum_payload = self.headers.toChecksumPayload(&headers_buf);
 
-        // std.debug.print("headers_buf {any}\n", .{headers_buf});
+        self.headers.headers_checksum = hash.xxHash64Checksum(headers_checksum_payload);
+        self.headers.body_checksum = hash.xxHash64Checksum(self.body());
 
-        self.headers.headers_checksum = hash.checksum(headers_checksum_payload);
-        self.headers.body_checksum = hash.checksum(self.body());
+        // Reuse the headers buf
+        const headers_bytes = self.headers.asBytes(&headers_buf);
 
-        // TODO: Headers should have an `asBytes()` func to consistently output the same bytes across languages.
-
-        @memcpy(buf[0..@sizeOf(Headers)], std.mem.asBytes(&self.headers));
+        @memcpy(buf[0..@sizeOf(Headers)], headers_bytes);
         @memcpy(buf[@sizeOf(Headers)..self.size()], self.body());
     }
 
@@ -419,19 +418,17 @@ pub const Message = struct {
         if (data.len < @sizeOf(Headers)) return ProtocolError.NotEnoughData;
 
         // try to parse the headers out of the buffer
-        var headers: Headers = undefined;
-        @memcpy(std.mem.asBytes(&headers), data[0..@sizeOf(Headers)]);
-
-        self.headers = headers;
-
-        // create a buffer that can hold the entirety of the headers payload
-        var headers_buf: [@sizeOf(Headers)]u8 = undefined;
+        self.headers = Headers.fromBytes(data[0..@sizeOf(Headers)]);
 
         // create a payload that is used to calculate the checksum of the headers
+        // create a buffer that can hold the entirety of the headers payload
+        var headers_buf: [@sizeOf(Headers)]u8 = undefined;
         const headers_checksum_payload = self.headers.toChecksumPayload(&headers_buf);
 
-        // compare the header_checksum received from the data against a recomputed checksum based on the values provided
-        if (!hash.verify(self.headers.headers_checksum, headers_checksum_payload)) {
+        // compare the header_checksum received from the data against
+        // a recomputed checksum based on the values provided
+        if (!hash.xxHash64Verify(self.headers.headers_checksum, headers_checksum_payload)) {
+            // std.debug.print("expected: {} , got checksum {}", .{ self.headers.headers_checksum, hash.xxHash64Checksum(headers_checksum_payload) });
             return ProtocolError.InvalidHeadersChecksum;
         }
 
@@ -448,7 +445,7 @@ pub const Message = struct {
         const body_bytes = data[@sizeOf(Headers)..self.size()];
 
         // verify the body checksum to ensure the body is valid
-        if (!hash.verify(self.headers.body_checksum, body_bytes)) {
+        if (!hash.xxHash64Verify(self.headers.body_checksum, body_bytes)) {
             return ProtocolError.InvalidBodyChecksum;
         }
 
@@ -507,17 +504,20 @@ pub const Message = struct {
 
 pub const Headers = extern struct {
     const Self = @This();
-    headers_checksum: u128 = 0,
-    body_checksum: u128 = 0,
+    pub const padding_len: comptime_int = 24;
+    pub const reserved_len: comptime_int = 64;
+
     origin_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .undefined,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [8]u8 = [_]u8{0} ** 8,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
-    reserved: [64]u8 = [_]u8{0} ** 64,
+    reserved: [Headers.reserved_len]u8 = [_]u8{0} ** Headers.reserved_len,
 
     pub fn Type(comptime message_type: MessageType) type {
         return switch (message_type) {
@@ -545,21 +545,82 @@ pub const Headers = extern struct {
         return std.mem.bytesAsValue(Type(message_type), std.mem.asBytes(self));
     }
 
+    pub fn asBytes(self: Headers, buf: *[@sizeOf(Headers)]u8) []const u8 {
+        return self.serialize(buf, self.headers_checksum, self.body_checksum);
+    }
+
+    // we assume the same byte layout as `asBytes`
+    pub fn fromBytes(bytes: []const u8) Headers {
+        assert(bytes.len == @sizeOf(Headers));
+
+        var i: usize = 0;
+
+        const headers_checksum = utils.bytesToU64(bytes[i..][0..8]);
+        i += 8;
+
+        const body_checksum = utils.bytesToU64(bytes[i..][0..8]);
+        i += 8;
+
+        const origin_id = utils.bytesToU128(bytes[i..][0..16]);
+        i += 16;
+
+        const body_length = utils.bytesToU32(bytes[i..][0..4]);
+        i += 4;
+
+        const protocol_version: ProtocolVersion = @enumFromInt(bytes[i]);
+        i += 1;
+
+        const message_type: MessageType = @enumFromInt(bytes[i]);
+        i += 1;
+
+        const compression: Compression = @enumFromInt(bytes[i]);
+        i += 1;
+
+        const compressed = bytes[i] != 0;
+        i += 1;
+
+        var padding: [Headers.padding_len]u8 = undefined;
+        @memcpy(&padding, bytes[i..][0..Headers.padding_len]);
+        i += Headers.padding_len;
+
+        var reserved: [Headers.reserved_len]u8 = undefined;
+        @memcpy(&reserved, bytes[i..][0..Headers.reserved_len]);
+        i += Headers.reserved_len;
+
+        return Headers{
+            .headers_checksum = headers_checksum,
+            .body_checksum = body_checksum,
+            .origin_id = origin_id,
+            .body_length = body_length,
+            .protocol_version = protocol_version,
+            .message_type = message_type,
+            .compression = compression,
+            .compressed = compressed,
+            .padding = padding,
+            .reserved = reserved,
+        };
+    }
+
     fn toChecksumPayload(self: Headers, buf: *[@sizeOf(Headers)]u8) []const u8 {
-        // the buffer passed into this function should be at least of size [@sizeOf(Header)]u8
-        // this could be more efficient in size by removing the 2 checksum bytes sets
-        // from this buffer but that seems like more work than it's worth
+        return self.serialize(buf, 0, 0);
+    }
+
+    fn serialize(
+        self: Headers,
+        buf: *[@sizeOf(Headers)]u8,
+        headers_checksum: u64,
+        body_checksum: u64,
+    ) []const u8 {
+        // Ensure the buffer is large enough
         assert(buf.len >= @sizeOf(Headers));
 
-        // create a fixed buffer allocator to write the values that should be checksummed
         var fba = std.heap.FixedBufferAllocator.init(buf);
         const fba_allocator = fba.allocator();
 
         var list = std.ArrayList(u8).initCapacity(fba_allocator, @sizeOf(Headers)) catch unreachable;
 
-        // this excludes header_checksum & body_checksum
-        list.appendSliceAssumeCapacity(&utils.u128ToBytes(0)); // headers_checksum
-        list.appendSliceAssumeCapacity(&utils.u128ToBytes(0)); // body_checksum
+        list.appendSliceAssumeCapacity(&utils.u64ToBytes(headers_checksum));
+        list.appendSliceAssumeCapacity(&utils.u64ToBytes(body_checksum));
         list.appendSliceAssumeCapacity(&utils.u128ToBytes(self.origin_id));
         list.appendSliceAssumeCapacity(&utils.u32ToBytes(self.body_length));
         list.appendAssumeCapacity(@intFromEnum(self.protocol_version));
@@ -584,15 +645,15 @@ pub const Request = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u128 = 0,
-    body_checksum: u128 = 0,
     origin_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .request,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [8]u8 = [_]u8{0} ** 8,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
     transaction_id: u128 = 0,
     topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
@@ -624,15 +685,15 @@ pub const Reply = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u128 = 0,
-    body_checksum: u128 = 0,
     origin_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .reply,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [8]u8 = [_]u8{0} ** 8,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
     transaction_id: u128 = 0,
     topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
@@ -668,15 +729,15 @@ pub const Ping = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u128 = 0,
-    body_checksum: u128 = 0,
     origin_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .ping,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [8]u8 = [_]u8{0} ** 8,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
     transaction_id: u128 = 0,
 
@@ -705,15 +766,15 @@ pub const Pong = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u128 = 0,
-    body_checksum: u128 = 0,
     origin_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .pong,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [8]u8 = [_]u8{0} ** 8,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
     transaction_id: u128 = 0,
     error_code: ErrorCode = .ok,
@@ -744,15 +805,15 @@ pub const Accept = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u128 = 0,
-    body_checksum: u128 = 0,
-    origin_id: u128 = 0, // this will be the node_id
+    origin_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .accept,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [8]u8 = [_]u8{0} ** 8,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
     accepted_origin_id: u128 = 0, // this will be the ID to be used by the connected
 
@@ -782,15 +843,15 @@ pub const Advertise = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u128 = 0,
-    body_checksum: u128 = 0,
-    origin_id: u128 = 0, // this will be the node_id
+    origin_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .advertise,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [8]u8 = [_]u8{0} ** 8,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
     transaction_id: u128 = 0,
     topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
@@ -826,15 +887,15 @@ pub const Unadvertise = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u128 = 0,
-    body_checksum: u128 = 0,
-    origin_id: u128 = 0, // this will be the node_id
+    origin_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .unadvertise,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [8]u8 = [_]u8{0} ** 8,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
     transaction_id: u128 = 0,
     topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
@@ -870,15 +931,15 @@ pub const Publish = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u128 = 0,
-    body_checksum: u128 = 0,
     origin_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .publish,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [8]u8 = [_]u8{0} ** 8,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
     topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
     topic_name_length: u8 = 0,
@@ -907,15 +968,15 @@ pub const Subscribe = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u128 = 0,
-    body_checksum: u128 = 0,
     origin_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .subscribe,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [8]u8 = [_]u8{0} ** 8,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
     transaction_id: u128 = 0,
     topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
@@ -948,15 +1009,15 @@ pub const Unsubscribe = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    headers_checksum: u128 = 0,
-    body_checksum: u128 = 0,
     origin_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
     body_length: u32 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .unsubscribe,
     compression: Compression = .none,
     compressed: bool = false,
-    padding: [8]u8 = [_]u8{0} ** 8,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
     transaction_id: u128 = 0,
     topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,

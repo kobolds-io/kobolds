@@ -24,7 +24,6 @@ const Channel = @import("../data_structures/channel.zig").Channel;
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
 const RingBuffer = @import("stdx").RingBuffer;
-// const MessageQueue = @import("../data_structures/message_queue.zig").MessageQueue;
 
 const TopicManager = @import("../pubsub/topic_manager.zig").TopicManager;
 const Topic = @import("../pubsub/topic.zig").Topic;

@@ -18,7 +18,6 @@ const ProtocolError = @import("../errors.zig").ProtocolError;
 // data structures
 const RingBuffer = @import("stdx").RingBuffer;
 const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
-const MessageQueue = @import("../data_structures/message_queue.zig").MessageQueue;
 
 const ConnectionState = enum {
     close,

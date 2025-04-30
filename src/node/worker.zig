@@ -30,8 +30,6 @@ const Connection = @import("../protocol/connection.zig").Connection;
 
 // Datastructure
 const Channel = @import("../data_structures/channel.zig").Channel;
-const UnmanagedQueue = @import("../data_structures/unmanaged_queue.zig").UnmanagedQueue;
-const MessageQueue = @import("../data_structures/message_queue.zig").MessageQueue;
 const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
 
 const WorkerState = enum {
@@ -56,7 +54,6 @@ pub const Worker = struct {
     io: *IO,
     message_pool: *MessagePool,
     node: *Node,
-    pending_messages: MessageQueue,
     state: WorkerState,
     publishers: std.AutoHashMap(uuid.Uuid, *Publisher),
     subscribers: std.AutoHashMap(u128, *Subscriber),
@@ -87,7 +84,6 @@ pub const Worker = struct {
             .io = io,
             .message_pool = message_pool,
             .node = node,
-            .pending_messages = MessageQueue.new(),
             .state = .closed,
             .publishers = std.AutoHashMap(uuid.Uuid, *Publisher).init(allocator),
             .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
@@ -120,8 +116,6 @@ pub const Worker = struct {
             publisher.deinit();
             self.allocator.destroy(publisher);
         }
-
-        self.pending_messages.reset();
 
         // deinit
         self.connections.deinit();
@@ -401,7 +395,7 @@ pub const Worker = struct {
         const connection = try self.allocator.create(Connection);
         errdefer self.allocator.destroy(connection);
 
-        const conn_id = uuid.v7.new();
+        const conn_id = utils.generateUniqueId(self.config.node_id);
 
         connection.* = try Connection.init(conn_id, .node, self.io, socket, self.allocator, self.message_pool);
         errdefer connection.deinit();
