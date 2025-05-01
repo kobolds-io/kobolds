@@ -221,25 +221,27 @@ test "refs and derefs" {
 }
 
 test "rust encoding/zig encoding" {
-    // const allocator = testing.allocator;
-    // const rust_encoding: []const u8 = &[_]u8{ 85, 193, 76, 106, 223, 22, 247, 210, 132, 231, 164, 248, 9, 22, 198, 28, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100, 33 };
-    //
-    // // this live as long as the scope of this function
-    // const body = "hello world!";
-    // var message = Message.new();
-    // message.headers.message_type = .ping;
-    // message.headers.origin_id = 0;
-    // message.setBody(body);
-    //
-    // const encoded_message = try allocator.alloc(u8, message.size());
-    // defer allocator.free(encoded_message);
-    //
-    // message.encode(encoded_message);
-    //
-    // std.debug.print("message {any}", .{message});
-    // std.debug.print("\nrust_encoding {any}\n", .{rust_encoding});
-    // std.debug.print("zig encoding  {any}\n", .{encoded_message});
-    //
-    // try testing.expectEqual(rust_encoding.len, encoded_message.len);
-    // try testing.expect(std.mem.eql(u8, rust_encoding, encoded_message));
+    const allocator = testing.allocator;
+    // this live as long as the scope of this function
+    const body = "hello world!";
+    var message = Message.new();
+    message.headers.message_type = .ping;
+    message.headers.origin_id = 0;
+    message.setBody(body);
+
+    const encoded_message = try allocator.alloc(u8, message.size());
+    defer allocator.free(encoded_message);
+
+    message.encode(encoded_message);
+
+    // std.debug.print("zig headers_checksum {any}\n", .{message.headers.headers_checksum});
+    // std.debug.print("zig body_checksum {any}\n", .{message.headers.body_checksum});
+
+    const rust_encoding: []const u8 = &[_]u8{ 144, 166, 189, 160, 94, 42, 182, 84, 228, 172, 99, 56, 142, 204, 94, 254, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 104, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100, 33 };
+
+    // std.debug.print("zig encoded message {any}\n", .{encoded_message});
+    // std.debug.print("rust encoded message {any}\n", .{rust_encoding});
+
+    try testing.expectEqual(rust_encoding.len, encoded_message.len);
+    try testing.expect(std.mem.eql(u8, rust_encoding, encoded_message));
 }

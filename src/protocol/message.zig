@@ -601,7 +601,7 @@ pub const Headers = extern struct {
         };
     }
 
-    fn toChecksumPayload(self: Headers, buf: *[@sizeOf(Headers)]u8) []const u8 {
+    pub fn toChecksumPayload(self: Headers, buf: *[@sizeOf(Headers)]u8) []const u8 {
         return self.serialize(buf, 0, 0);
     }
 
