@@ -15,12 +15,12 @@ pub const MessagePool = struct {
     const Self = @This();
 
     assigned_map: std.AutoHashMap(*Message, bool),
-    capacity: u32,
+    capacity: usize,
     free_list: RingBuffer(*Message),
     messages: std.ArrayList(Message),
     mutex: std.Thread.Mutex,
 
-    pub fn init(allocator: std.mem.Allocator, capacity: u32) !Self {
+    pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
         assert(capacity > 0);
 
         var free_queue = try RingBuffer(*Message).init(allocator, capacity);
@@ -57,13 +57,13 @@ pub const MessagePool = struct {
     }
 
     /// Count of currently assigned messages
-    pub fn count(self: *MessagePool) u32 {
+    pub fn count(self: *MessagePool) usize {
         // this might be slow??
         return self.assigned_map.count();
     }
 
     /// Count of messages that are available to be taken
-    pub fn available(self: *MessagePool) u32 {
+    pub fn available(self: *MessagePool) usize {
         return self.free_list.count;
     }
 
@@ -85,7 +85,7 @@ pub const MessagePool = struct {
         } else unreachable;
     }
 
-    pub fn createN(self: *MessagePool, allocator: std.mem.Allocator, n: u32) ![]*Message {
+    pub fn createN(self: *MessagePool, allocator: std.mem.Allocator, n: usize) ![]*Message {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -93,7 +93,7 @@ pub const MessagePool = struct {
     }
 
     /// Doesn't lock the message pool when creating pointers
-    pub fn unsafeCreateN(self: *MessagePool, allocator: std.mem.Allocator, n: u32) ![]*Message {
+    pub fn unsafeCreateN(self: *MessagePool, allocator: std.mem.Allocator, n: usize) ![]*Message {
         if (self.available() < n) return error.OutOfMemory;
 
         var list = try std.ArrayList(*Message).initCapacity(allocator, n);
