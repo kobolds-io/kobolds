@@ -3,13 +3,7 @@ comptime {
     _ = @import("./data_structures/channel.zig");
     _ = @import("./data_structures/connection_messages.zig");
     _ = @import("./data_structures/event_emitter.zig");
-    _ = @import("./data_structures/managed_queue.zig");
-    _ = @import("./data_structures/memory_pool.zig");
     // _ = @import("./data_structures/message_pool.zig");
-    _ = @import("./data_structures/message_queue.zig");
-    _ = @import("./data_structures/resource_pool.zig");
-    _ = @import("./data_structures/ring_buffer.zig");
-    _ = @import("./data_structures/unmanaged_queue.zig");
     _ = @import("./hash.zig");
     _ = @import("./io/test.zig");
     _ = @import("./node/acceptor.zig");
