@@ -124,106 +124,106 @@ pub const Topic = struct {
     }
 };
 
-test "topic init/deinit" {
-    const allocator = testing.allocator;
-
-    const topic_name = "/test/topic";
-    var topic = Topic.init(allocator, topic_name);
-    defer topic.deinit();
-}
-
-test "publish/subscribe" {
-    const allocator = testing.allocator;
-
-    const topic_name = "/test/topic";
-
-    // create a message to be published
-    var message_pool = try MessagePool.init(allocator, 100);
-    defer message_pool.deinit();
-
-    // NOTE: the message should be destroyed by the subscriber. Otherwise the message will leak
-    const message = try Message.create(&message_pool);
-    defer message.deref();
-    message.headers.message_type = .publish;
-    message.setTopicName(topic_name);
-
-    var topic = Topic.init(allocator, topic_name);
-    defer topic.deinit();
-
-    var subscriber = try Subscriber.init(allocator, 1, &topic);
-    defer subscriber.deinit();
-
-    try subscriber.subscribe();
-    defer subscriber.unsubscribe();
-
-    var publisher = try Publisher.init(allocator, 1, &topic);
-    defer publisher.deinit();
-
-    try testing.expectEqual(0, subscriber.queue.count);
-
-    try publisher.publish(message);
-
-    try testing.expectEqual(1, subscriber.queue.count);
-
-    // Pretend that we are "ticking" the subscriber
-    while (subscriber.queue.dequeue()) |subscriber_message| {
-        try testing.expectEqual(1, subscriber_message.refs());
-
-        subscriber_message.deref();
-    }
-
-    try testing.expectEqual(0, subscriber.queue.count);
-}
-
-test "publishMany" {
-    const allocator = testing.allocator;
-
-    const topic_name = "/test/topic";
-
-    // create a message to be published
-    var message_pool = try MessagePool.init(allocator, 100);
-    defer message_pool.deinit();
-
-    const messages_buf = try allocator.alloc(Message, 100);
-    defer allocator.free(messages_buf);
-
-    // NOTE: the message should be destroyed by the subscriber. Otherwise the message will leak
-    const messages = try message_pool.createN(allocator, @intCast(messages_buf.len));
-    defer allocator.free(messages);
-
-    for (messages, 0..messages_buf.len) |message, i| {
-        message.* = Message.new();
-        message.message_pool = &message_pool;
-        message.headers.message_type = .publish;
-        message.setTopicName(topic_name);
-
-        messages[i] = message;
-    }
-
-    var topic = Topic.init(allocator, topic_name);
-    defer topic.deinit();
-
-    var subscriber = try Subscriber.init(allocator, 1, &topic);
-    defer subscriber.deinit();
-
-    try subscriber.subscribe();
-    defer subscriber.unsubscribe();
-
-    var publisher = try Publisher.init(allocator, 1, &topic);
-    defer publisher.deinit();
-
-    try testing.expectEqual(0, subscriber.queue.count);
-
-    try publisher.publishMany(messages);
-
-    try testing.expectEqual(messages.len, subscriber.queue.count);
-
-    // Pretend that we are "ticking" the subscriber
-    while (subscriber.queue.dequeue()) |message| {
-        try testing.expectEqual(1, message.refs());
-
-        message.deref();
-    }
-
-    try testing.expectEqual(0, subscriber.queue.count);
-}
+// test "topic init/deinit" {
+//     const allocator = testing.allocator;
+//
+//     const topic_name = "/test/topic";
+//     var topic = Topic.init(allocator, topic_name);
+//     defer topic.deinit();
+// }
+//
+// test "publish/subscribe" {
+//     const allocator = testing.allocator;
+//
+//     const topic_name = "/test/topic";
+//
+//     // create a message to be published
+//     var message_pool = try MessagePool.init(allocator, 100);
+//     defer message_pool.deinit();
+//
+//     // NOTE: the message should be destroyed by the subscriber. Otherwise the message will leak
+//     const message = try Message.create(&message_pool);
+//     defer message.deref();
+//     message.headers.message_type = .publish;
+//     message.setTopicName(topic_name);
+//
+//     var topic = Topic.init(allocator, topic_name);
+//     defer topic.deinit();
+//
+//     var subscriber = try Subscriber.init(allocator, 1, &topic);
+//     defer subscriber.deinit();
+//
+//     try subscriber.subscribe();
+//     defer subscriber.unsubscribe();
+//
+//     var publisher = try Publisher.init(allocator, 1, &topic);
+//     defer publisher.deinit();
+//
+//     try testing.expectEqual(0, subscriber.queue.count);
+//
+//     try publisher.publish(message);
+//
+//     try testing.expectEqual(1, subscriber.queue.count);
+//
+//     // Pretend that we are "ticking" the subscriber
+//     while (subscriber.queue.dequeue()) |subscriber_message| {
+//         try testing.expectEqual(1, subscriber_message.refs());
+//
+//         subscriber_message.deref();
+//     }
+//
+//     try testing.expectEqual(0, subscriber.queue.count);
+// }
+//
+// test "publishMany" {
+//     const allocator = testing.allocator;
+//
+//     const topic_name = "/test/topic";
+//
+//     // create a message to be published
+//     var message_pool = try MessagePool.init(allocator, 100);
+//     defer message_pool.deinit();
+//
+//     const messages_buf = try allocator.alloc(Message, 100);
+//     defer allocator.free(messages_buf);
+//
+//     // NOTE: the message should be destroyed by the subscriber. Otherwise the message will leak
+//     const messages = try message_pool.createN(allocator, @intCast(messages_buf.len));
+//     defer allocator.free(messages);
+//
+//     for (messages, 0..messages_buf.len) |message, i| {
+//         message.* = Message.new();
+//         message.message_pool = &message_pool;
+//         message.headers.message_type = .publish;
+//         message.setTopicName(topic_name);
+//
+//         messages[i] = message;
+//     }
+//
+//     var topic = Topic.init(allocator, topic_name);
+//     defer topic.deinit();
+//
+//     var subscriber = try Subscriber.init(allocator, 1, &topic);
+//     defer subscriber.deinit();
+//
+//     try subscriber.subscribe();
+//     defer subscriber.unsubscribe();
+//
+//     var publisher = try Publisher.init(allocator, 1, &topic);
+//     defer publisher.deinit();
+//
+//     try testing.expectEqual(0, subscriber.queue.count);
+//
+//     try publisher.publishMany(messages);
+//
+//     try testing.expectEqual(messages.len, subscriber.queue.count);
+//
+//     // Pretend that we are "ticking" the subscriber
+//     while (subscriber.queue.dequeue()) |message| {
+//         try testing.expectEqual(1, message.refs());
+//
+//         message.deref();
+//     }
+//
+//     try testing.expectEqual(0, subscriber.queue.count);
+// }

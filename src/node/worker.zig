@@ -18,16 +18,14 @@ const Node = @import("./node.zig").Node;
 const IO = @import("../io.zig").IO;
 
 // Bus
-const Bus = @import("../bus/bus.zig").Bus;
-const BusManager = @import("../bus/bus_manager.zig").BusManager;
-const Producer = @import("../bus/producer.zig").Producer;
-const Consumer = @import("../bus/consumer.zig").Consumer;
+const Publisher = @import("../bus/publisher.zig").Publisher;
+const Subscriber = @import("../bus/subscriber.zig").Subscriber;
 
-// Pubsub
-const Publisher = @import("../pubsub/publisher.zig").Publisher;
-const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
-const Topic = @import("../pubsub/topic.zig").Topic;
-const TopicManager = @import("../pubsub/topic_manager.zig").TopicManager;
+// // Pubsub
+// const Publisher = @import("../pubsub/publisher.zig").Publisher;
+// const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
+// const Topic = @import("../pubsub/topic.zig").Topic;
+// const TopicManager = @import("../pubsub/topic_manager.zig").TopicManager;
 
 // Protocol
 const Message = @import("../protocol/message.zig").Message;
@@ -60,11 +58,8 @@ pub const Worker = struct {
     message_pool: *MessagePool,
     node: *Node,
     state: WorkerState,
-    publishers: std.AutoHashMap(uuid.Uuid, *Publisher),
-    subscribers: std.AutoHashMap(u128, *Subscriber),
-    buses: std.ArrayList(*Bus(*Message)),
-    producers: std.AutoHashMap(u128, *Producer(*Message)),
-    consumers: std.AutoHashMap(u128, *Consumer(*Message)),
+    publishers: std.AutoHashMap(u128, *Publisher(*Message)),
+    subscribers: std.AutoHashMap(u128, *Subscriber(*Message)),
     mutex: std.Thread.Mutex,
 
     pub fn init(
@@ -93,11 +88,8 @@ pub const Worker = struct {
             .message_pool = message_pool,
             .node = node,
             .state = .closed,
-            .publishers = std.AutoHashMap(uuid.Uuid, *Publisher).init(allocator),
-            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
-            .buses = std.ArrayList(*Bus(*Message)).init(allocator),
-            .producers = std.AutoHashMap(u128, *Producer(*Message)).init(allocator),
-            .consumers = std.AutoHashMap(u128, *Consumer(*Message)).init(allocator),
+            .publishers = std.AutoHashMap(u128, *Publisher(*Message)).init(allocator),
+            .subscribers = std.AutoHashMap(u128, *Subscriber(*Message)).init(allocator),
             .mutex = std.Thread.Mutex{},
         };
     }
@@ -105,59 +97,35 @@ pub const Worker = struct {
     pub fn deinit(self: *Self) void {
         // TODO: loop over and close all connections
         var connections_iter = self.connections.valueIterator();
-        while (connections_iter.next()) |connection_ptr| {
-            const connection = connection_ptr.*;
+        while (connections_iter.next()) |entry| {
+            const connection = entry.*;
 
             connection.deinit();
             self.allocator.destroy(connection);
         }
 
         var subscribers_iter = self.subscribers.valueIterator();
-        while (subscribers_iter.next()) |subscriber_ptr| {
-            const subscriber = subscriber_ptr.*;
+        while (subscribers_iter.next()) |entry| {
+            const subscriber = entry.*;
 
             subscriber.deinit();
             self.allocator.destroy(subscriber);
         }
 
         var publishers_iter = self.publishers.valueIterator();
-        while (publishers_iter.next()) |publisher_ptr| {
-            const publisher = publisher_ptr.*;
+        while (publishers_iter.next()) |entry| {
+            const publisher = entry.*;
 
             publisher.deinit();
             self.allocator.destroy(publisher);
-        }
-
-        for (self.buses.items) |bus| {
-            bus.deinit();
-            self.allocator.destroy(bus);
-        }
-
-        var producers_iter = self.producers.valueIterator();
-        while (producers_iter.next()) |producer_ptr| {
-            const producer = producer_ptr.*;
-
-            producer.deinit();
-            self.allocator.destroy(producer);
-        }
-
-        var consumers_iter = self.consumers.valueIterator();
-        while (consumers_iter.next()) |consumer_ptr| {
-            const consumer = consumer_ptr.*;
-
-            consumer.deinit();
-            self.allocator.destroy(consumer);
         }
 
         // deinit
         self.connections.deinit();
         self.io.deinit();
         self.message_pool.deinit();
-        self.subscribers.deinit();
         self.publishers.deinit();
-        self.buses.deinit();
-        self.producers.deinit();
-        self.consumers.deinit();
+        self.subscribers.deinit();
 
         // dealloc
         self.allocator.destroy(self.io);
@@ -276,30 +244,30 @@ pub const Worker = struct {
                     }
                 },
                 .publish => {
-                    log.debug("received publish messaged", .{});
+                    // log.debug("received publish messaged", .{});
                     // find the producer for this connection
 
-                    const producer_key = utils.generateKey(message.topicName(), conn.origin_id);
-                    if (self.producers.get(producer_key)) |producer| {
-                        try producer.produce(message);
+                    const publisher_key = utils.generateKey(message.topicName(), conn.origin_id);
+                    if (self.publishers.get(publisher_key)) |publisher| {
+                        try publisher.publish(message);
                         return;
                     }
 
-                    const producer = try self.allocator.create(Producer(*Message));
-                    errdefer self.allocator.destroy(producer);
+                    const publisher = try self.allocator.create(Publisher(*Message));
+                    errdefer self.allocator.destroy(publisher);
 
-                    producer.* = try Producer(*Message).init(self.allocator, uuid.v7.new(), conn.origin_id, 1_000);
-                    errdefer producer.deinit();
+                    publisher.* = try Publisher(*Message).init(self.allocator, publisher_key, conn.origin_id, 1_000);
+                    errdefer publisher.deinit();
 
-                    try self.producers.put(producer_key, producer);
+                    try self.publishers.put(publisher_key, publisher);
 
                     // check if the bus even exists
                     const bus_manager = self.node.bus_manager;
                     const bus = try bus_manager.findOrCreate(message.topicName());
 
-                    try bus.addProducer(producer);
+                    try bus.addPublisher(publisher);
 
-                    try producer.produce(message);
+                    try publisher.publish(message);
                 },
                 .subscribe => {
                     defer message.deref();
@@ -322,31 +290,24 @@ pub const Worker = struct {
                         return;
                     }
 
-                    const topic_manager = self.node.topic_manager;
-                    var topic: *Topic = undefined;
+                    const bus_manager = self.node.bus_manager;
+                    const bus = try bus_manager.findOrCreate(message.topicName());
 
-                    if (topic_manager.get(message.topicName())) |t| {
-                        topic = t;
-                    } else {
-                        topic = topic_manager.create(message.topicName()) catch |err| switch (err) {
-                            // BUG: Someone has created this topic during this tick. Should handle this better.
-                            // I think that adding the message back into the queue and just retry it. This runs
-                            // the risk of getting into an unhandledable loop
-                            error.TopicExists => topic_manager.get(message.topicName()).?,
-                            else => unreachable,
-                        };
-                    }
-
-                    const subscriber = try self.allocator.create(Subscriber);
+                    const subscriber = try self.allocator.create(Subscriber(*Message));
                     errdefer self.allocator.destroy(subscriber);
 
-                    subscriber.* = try Subscriber.init(self.allocator, conn.origin_id, topic);
+                    subscriber.* = try Subscriber(*Message).init(
+                        self.allocator,
+                        subscriber_key,
+                        conn.origin_id,
+                        1_000,
+                        bus,
+                    );
                     errdefer subscriber.deinit();
 
                     try self.subscribers.put(subscriber_key, subscriber);
-
                     try subscriber.subscribe();
-                    errdefer subscriber.unsubscribe();
+                    errdefer _ = subscriber.unsubscribe() catch @panic("subscriber could not unsubscribe");
 
                     // Reply to the subscribe request
                     const reply = try Message.create(self.message_pool);
@@ -365,14 +326,12 @@ pub const Worker = struct {
 
                     const subscriber_key = utils.generateKey(message.topicName(), conn.origin_id);
 
-                    self.mutex.lock();
-                    defer self.mutex.unlock();
-
                     if (self.subscribers.get(subscriber_key)) |subscriber| {
-                        subscriber.unsubscribe();
-
+                        try subscriber.unsubscribe();
                         _ = self.subscribers.remove(subscriber_key);
                     }
+
+                    // TODO: send unsubscribe reply
                 },
                 else => message.deref(),
             }
@@ -382,29 +341,30 @@ pub const Worker = struct {
     }
 
     fn process(self: *Self) !void {
-        var publishers_iter = self.publishers.valueIterator();
-        while (publishers_iter.next()) |entry| {
-            const publisher = entry.*;
-            if (publisher.queue.count == 0) continue;
-
-            while (publisher.queue.dequeue()) |message| {
-                try publisher.publish(message);
-            }
-        }
-
-        var subscribers_iter = self.subscribers.valueIterator();
-        while (subscribers_iter.next()) |entry| {
-            const subscriber = entry.*;
-            if (subscriber.queue.count == 0) continue;
-
-            if (self.connections.get(subscriber.conn_id)) |conn| {
-                // FIX: this should be WAYYYY more robust as this could fail
-                try conn.outbox.concatenate(subscriber.queue);
-            } else {
-                // this subscriber is bad???
-                @panic("subscriber isn't tied to connection");
-            }
-        }
+        _ = self;
+        // var publishers_iter = self.publishers.valueIterator();
+        // while (publishers_iter.next()) |entry| {
+        //     const publisher = entry.*;
+        //     if (publisher.queue.count == 0) continue;
+        //
+        //     while (publisher.queue.dequeue()) |message| {
+        //         try publisher.publish(message);
+        //     }
+        // }
+        //
+        // var subscribers_iter = self.subscribers.valueIterator();
+        // while (subscribers_iter.next()) |entry| {
+        //     const subscriber = entry.*;
+        //     if (subscriber.queue.count == 0) continue;
+        //
+        //     if (self.connections.get(subscriber.conn_id)) |conn| {
+        //         // FIX: this should be WAYYYY more robust as this could fail
+        //         try conn.outbox.concatenate(subscriber.queue);
+        //     } else {
+        //         // this subscriber is bad???
+        //         @panic("subscriber isn't tied to connection");
+        //     }
+        // }
     }
 
     pub fn addConnection(self: *Self, socket: posix.socket_t) !void {
@@ -491,7 +451,7 @@ pub const Worker = struct {
             const subscriber = subscriber_entry.value_ptr.*;
 
             if (subscriber.conn_id == conn.origin_id) {
-                subscriber.unsubscribe();
+                subscriber.unsubscribe() catch @panic("subscriber could not unsubscribe from bus");
                 subscriber.deinit();
                 self.allocator.destroy(subscriber);
                 try conn_subscriber_keys.append(subscriber_key);

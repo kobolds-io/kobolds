@@ -236,6 +236,21 @@ pub const Node = struct {
 
     pub fn tick(self: *Self) !void {
         try self.maybeAddConnection();
+        try self.processBuses();
+    }
+
+    fn processBuses(self: *Self) !void {
+        if (self.bus_manager.buses.count() > 0) {
+            self.bus_manager.mutex.lock();
+            defer self.bus_manager.mutex.unlock();
+
+            var buses_iterator = self.bus_manager.buses.valueIterator();
+            while (buses_iterator.next()) |entry| {
+                const bus = entry.*;
+
+                try bus.tick();
+            }
+        }
     }
 
     fn maybeAddConnection(self: *Self) !void {

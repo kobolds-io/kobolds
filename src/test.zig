@@ -15,5 +15,8 @@ comptime {
     // _ = @import("./pubsub/subscriber.zig");
     // _ = @import("./pubsub/topic.zig");
     _ = @import("./bus/bus.zig");
+    _ = @import("./bus/bus_manager.zig");
+    _ = @import("./bus/publisher.zig");
+    _ = @import("./bus/subscriber.zig");
     _ = @import("./utils.zig");
 }
