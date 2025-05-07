@@ -12,10 +12,16 @@ const utils = @import("../utils.zig");
 const hash = @import("../hash.zig");
 
 const RingBuffer = @import("stdx").RingBuffer;
-// const MemoryPool = @import("stdx").MemoryPool;
+const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 
 const Node = @import("./node.zig").Node;
 const IO = @import("../io.zig").IO;
+
+// Bus
+const Bus = @import("../bus/bus.zig").Bus;
+const BusManager = @import("../bus/bus_manager.zig").BusManager;
+const Producer = @import("../bus/producer.zig").Producer;
+const Consumer = @import("../bus/consumer.zig").Consumer;
 
 // Pubsub
 const Publisher = @import("../pubsub/publisher.zig").Publisher;
@@ -29,7 +35,6 @@ const Accept = @import("../protocol/message.zig").Accept;
 const Connection = @import("../protocol/connection.zig").Connection;
 
 // Datastructure
-const Channel = @import("../data_structures/channel.zig").Channel;
 const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
 
 const WorkerState = enum {
@@ -57,6 +62,9 @@ pub const Worker = struct {
     state: WorkerState,
     publishers: std.AutoHashMap(uuid.Uuid, *Publisher),
     subscribers: std.AutoHashMap(u128, *Subscriber),
+    buses: std.ArrayList(*Bus(*Message)),
+    producers: std.AutoHashMap(u128, *Producer(*Message)),
+    consumers: std.AutoHashMap(u128, *Consumer(*Message)),
     mutex: std.Thread.Mutex,
 
     pub fn init(
@@ -87,6 +95,9 @@ pub const Worker = struct {
             .state = .closed,
             .publishers = std.AutoHashMap(uuid.Uuid, *Publisher).init(allocator),
             .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
+            .buses = std.ArrayList(*Bus(*Message)).init(allocator),
+            .producers = std.AutoHashMap(u128, *Producer(*Message)).init(allocator),
+            .consumers = std.AutoHashMap(u128, *Consumer(*Message)).init(allocator),
             .mutex = std.Thread.Mutex{},
         };
     }
@@ -117,19 +128,43 @@ pub const Worker = struct {
             self.allocator.destroy(publisher);
         }
 
+        for (self.buses.items) |bus| {
+            bus.deinit();
+            self.allocator.destroy(bus);
+        }
+
+        var producers_iter = self.producers.valueIterator();
+        while (producers_iter.next()) |producer_ptr| {
+            const producer = producer_ptr.*;
+
+            producer.deinit();
+            self.allocator.destroy(producer);
+        }
+
+        var consumers_iter = self.consumers.valueIterator();
+        while (consumers_iter.next()) |consumer_ptr| {
+            const consumer = consumer_ptr.*;
+
+            consumer.deinit();
+            self.allocator.destroy(consumer);
+        }
+
         // deinit
         self.connections.deinit();
         self.io.deinit();
         self.message_pool.deinit();
         self.subscribers.deinit();
         self.publishers.deinit();
+        self.buses.deinit();
+        self.producers.deinit();
+        self.consumers.deinit();
 
         // dealloc
         self.allocator.destroy(self.io);
         self.allocator.destroy(self.message_pool);
     }
 
-    pub fn run(self: *Self, ready_chan: *Channel(anyerror!bool)) void {
+    pub fn run(self: *Self, ready_chan: *UnbufferedChannel(anyerror!bool)) void {
         assert(self.state != .running);
 
         log.info("worker {} running", .{self.config.id});
@@ -241,45 +276,30 @@ pub const Worker = struct {
                     }
                 },
                 .publish => {
-                    // log.debug("received publish messaged", .{});
-                    const publisher_key = utils.generateKey(message.topicName(), conn.origin_id);
+                    log.debug("received publish messaged", .{});
+                    // find the producer for this connection
 
-                    if (self.publishers.get(publisher_key)) |publisher| {
-                        publisher.queue.enqueue(message) catch {
-                            @panic("could not enqueue published message");
-                        };
-                    } else {
-                        // Create a new publisher since there is not one that exists
-                        const topic_manager = self.node.topic_manager;
-                        var topic: *Topic = undefined;
-
-                        if (topic_manager.get(message.topicName())) |t| {
-                            topic = t;
-                        } else {
-                            topic = topic_manager.create(message.topicName()) catch |err| switch (err) {
-                                // BUG: Someone has created this topic during this tick. Should handle this better.
-                                // I think that adding the message back into the queue and just retry it. This runs
-                                // the risk of getting into an unhandledable loop
-                                error.TopicExists => topic_manager.get(message.topicName()).?,
-                                else => unreachable,
-                            };
-                        }
-
-                        const publisher = try self.allocator.create(Publisher);
-                        errdefer self.allocator.destroy(publisher);
-
-                        publisher.* = try Publisher.init(self.allocator, conn.origin_id, topic);
-                        errdefer publisher.deinit();
-
-                        assert(publisher_key == publisher.key);
-
-                        try self.publishers.put(publisher.key, publisher);
-                        errdefer _ = self.publishers.remove(publisher.key);
-
-                        publisher.queue.enqueue(message) catch {
-                            @panic("could not enqueue published message");
-                        };
+                    const producer_key = utils.generateKey(message.topicName(), conn.origin_id);
+                    if (self.producers.get(producer_key)) |producer| {
+                        try producer.produce(message);
+                        return;
                     }
+
+                    const producer = try self.allocator.create(Producer(*Message));
+                    errdefer self.allocator.destroy(producer);
+
+                    producer.* = try Producer(*Message).init(self.allocator, uuid.v7.new(), conn.origin_id, 1_000);
+                    errdefer producer.deinit();
+
+                    try self.producers.put(producer_key, producer);
+
+                    // check if the bus even exists
+                    const bus_manager = self.node.bus_manager;
+                    const bus = try bus_manager.findOrCreate(message.topicName());
+
+                    try bus.addProducer(producer);
+
+                    try producer.produce(message);
                 },
                 .subscribe => {
                     defer message.deref();

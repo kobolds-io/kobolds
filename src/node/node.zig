@@ -10,12 +10,13 @@ const constants = @import("../constants.zig");
 const Acceptor = @import("./acceptor.zig").Acceptor;
 const Worker = @import("./worker.zig").Worker;
 const IO = @import("../io.zig").IO;
+const BusManager = @import("../bus/bus_manager.zig").BusManager;
 const TopicManager = @import("../pubsub/topic_manager.zig").TopicManager;
 
 const Message = @import("../protocol/message.zig").Message;
 
 // Datastructures
-const Channel = @import("../data_structures/channel.zig").Channel;
+const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const RingBuffer = @import("stdx").RingBuffer;
 
 /// static configuration used to configure the node
@@ -45,6 +46,7 @@ pub const Node = struct {
     workers: *std.AutoHashMap(u32, *Worker),
     processed_messages_count: u128,
     topic_manager: *TopicManager,
+    bus_manager: *BusManager(*Message),
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !*Self {
         const tcp_acceptor = try allocator.create(Acceptor);
@@ -58,6 +60,12 @@ pub const Node = struct {
 
         topic_manager.* = TopicManager.init(allocator);
         errdefer topic_manager.deinit();
+
+        const bus_manager = try allocator.create(BusManager(*Message));
+        errdefer allocator.destroy(bus_manager);
+
+        bus_manager.* = BusManager(*Message).init(allocator);
+        errdefer bus_manager.deinit();
 
         const io = try allocator.create(IO);
         errdefer allocator.destroy(io);
@@ -85,6 +93,7 @@ pub const Node = struct {
             .workers = workers,
             .processed_messages_count = 0,
             .topic_manager = topic_manager,
+            .bus_manager = bus_manager,
         };
 
         for (0..config.worker_threads) |i| {
@@ -119,11 +128,13 @@ pub const Node = struct {
         self.io.deinit();
         self.workers.deinit();
         self.topic_manager.deinit();
+        self.bus_manager.deinit();
 
         // destroy
         self.allocator.destroy(self.workers);
         self.allocator.destroy(self.tcp_acceptor);
         self.allocator.destroy(self.io);
+        self.allocator.destroy(self.bus_manager);
         self.allocator.destroy(self.topic_manager);
         self.allocator.destroy(self);
     }
@@ -140,7 +151,7 @@ pub const Node = struct {
         var workers_iter = self.workers.valueIterator();
         while (workers_iter.next()) |worker_ptr| {
             const worker = worker_ptr.*;
-            var ready_chan = Channel(anyerror!bool).init();
+            var ready_chan = UnbufferedChannel(anyerror!bool).new();
 
             const thread = try std.Thread.spawn(.{}, Worker.run, .{ worker, &ready_chan });
             thread.detach();
