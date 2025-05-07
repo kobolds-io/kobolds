@@ -46,7 +46,7 @@ pub const Node = struct {
     workers: *std.AutoHashMap(u32, *Worker),
     processed_messages_count: u128,
     topic_manager: *TopicManager,
-    bus_manager: *BusManager(*Message),
+    bus_manager: *BusManager,
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !*Self {
         const tcp_acceptor = try allocator.create(Acceptor);
@@ -61,10 +61,10 @@ pub const Node = struct {
         topic_manager.* = TopicManager.init(allocator);
         errdefer topic_manager.deinit();
 
-        const bus_manager = try allocator.create(BusManager(*Message));
+        const bus_manager = try allocator.create(BusManager);
         errdefer allocator.destroy(bus_manager);
 
-        bus_manager.* = BusManager(*Message).init(allocator);
+        bus_manager.* = BusManager.init(allocator);
         errdefer bus_manager.deinit();
 
         const io = try allocator.create(IO);

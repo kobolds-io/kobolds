@@ -58,8 +58,8 @@ pub const Worker = struct {
     message_pool: *MessagePool,
     node: *Node,
     state: WorkerState,
-    publishers: std.AutoHashMap(u128, *Publisher(*Message)),
-    subscribers: std.AutoHashMap(u128, *Subscriber(*Message)),
+    publishers: std.AutoHashMap(u128, *Publisher),
+    subscribers: std.AutoHashMap(u128, *Subscriber),
     mutex: std.Thread.Mutex,
 
     pub fn init(
@@ -88,8 +88,8 @@ pub const Worker = struct {
             .message_pool = message_pool,
             .node = node,
             .state = .closed,
-            .publishers = std.AutoHashMap(u128, *Publisher(*Message)).init(allocator),
-            .subscribers = std.AutoHashMap(u128, *Subscriber(*Message)).init(allocator),
+            .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
+            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
             .mutex = std.Thread.Mutex{},
         };
     }
@@ -253,10 +253,10 @@ pub const Worker = struct {
                         return;
                     }
 
-                    const publisher = try self.allocator.create(Publisher(*Message));
+                    const publisher = try self.allocator.create(Publisher);
                     errdefer self.allocator.destroy(publisher);
 
-                    publisher.* = try Publisher(*Message).init(
+                    publisher.* = try Publisher.init(
                         self.allocator,
                         publisher_key,
                         conn.origin_id,
@@ -301,10 +301,10 @@ pub const Worker = struct {
                     const bus_manager = self.node.bus_manager;
                     const bus = try bus_manager.findOrCreate(message.topicName());
 
-                    const subscriber = try self.allocator.create(Subscriber(*Message));
+                    const subscriber = try self.allocator.create(Subscriber);
                     errdefer self.allocator.destroy(subscriber);
 
-                    subscriber.* = try Subscriber(*Message).init(
+                    subscriber.* = try Subscriber.init(
                         self.allocator,
                         subscriber_key,
                         conn.origin_id,
