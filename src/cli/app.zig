@@ -440,11 +440,8 @@ pub fn nodePublish() !void {
     while (!sigint_received) {
         client.publish(conn, topic_name, body, .{}) catch |err| {
             log.err("error {any}", .{err});
-            std.time.sleep(1 * std.time.ns_per_ms);
             continue;
         };
-
-        std.time.sleep(1 * std.time.ns_per_ms);
     }
 }
 

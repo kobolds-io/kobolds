@@ -256,7 +256,12 @@ pub const Worker = struct {
                     const publisher = try self.allocator.create(Publisher(*Message));
                     errdefer self.allocator.destroy(publisher);
 
-                    publisher.* = try Publisher(*Message).init(self.allocator, publisher_key, conn.origin_id, 1_000);
+                    publisher.* = try Publisher(*Message).init(
+                        self.allocator,
+                        publisher_key,
+                        conn.origin_id,
+                        constants.publisher_max_queue_capacity,
+                    );
                     errdefer publisher.deinit();
 
                     try self.publishers.put(publisher_key, publisher);
@@ -267,7 +272,10 @@ pub const Worker = struct {
 
                     try bus.addPublisher(publisher);
 
-                    try publisher.publish(message);
+                    publisher.publish(message) catch |err| {
+                        log.err("could not publish message {any}", .{err});
+                        message.deref();
+                    };
                 },
                 .subscribe => {
                     defer message.deref();
@@ -300,7 +308,7 @@ pub const Worker = struct {
                         self.allocator,
                         subscriber_key,
                         conn.origin_id,
-                        1_000,
+                        constants.subscriber_max_queue_capacity,
                         bus,
                     );
                     errdefer subscriber.deinit();
@@ -341,7 +349,6 @@ pub const Worker = struct {
     }
 
     fn process(self: *Self) !void {
-        _ = self;
         // var publishers_iter = self.publishers.valueIterator();
         // while (publishers_iter.next()) |entry| {
         //     const publisher = entry.*;
@@ -352,19 +359,18 @@ pub const Worker = struct {
         //     }
         // }
         //
-        // var subscribers_iter = self.subscribers.valueIterator();
-        // while (subscribers_iter.next()) |entry| {
-        //     const subscriber = entry.*;
-        //     if (subscriber.queue.count == 0) continue;
-        //
-        //     if (self.connections.get(subscriber.conn_id)) |conn| {
-        //         // FIX: this should be WAYYYY more robust as this could fail
-        //         try conn.outbox.concatenate(subscriber.queue);
-        //     } else {
-        //         // this subscriber is bad???
-        //         @panic("subscriber isn't tied to connection");
-        //     }
-        // }
+        var subscribers_iter = self.subscribers.valueIterator();
+        while (subscribers_iter.next()) |entry| {
+            const subscriber = entry.*;
+            if (subscriber.queue.count == 0) continue;
+
+            if (self.connections.get(subscriber.conn_id)) |conn| {
+                conn.outbox.concatenateAvailable(subscriber.queue);
+            } else {
+                // this subscriber is bad???
+                @panic("subscriber isn't tied to connection");
+            }
+        }
     }
 
     pub fn addConnection(self: *Self, socket: posix.socket_t) !void {

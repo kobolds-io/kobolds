@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const constants = @import("../constants.zig");
+
 const Bus = @import("./bus.zig").Bus;
 
 pub fn BusManager(comptime T: type) type {
@@ -43,7 +45,11 @@ pub fn BusManager(comptime T: type) type {
                 const bus = try self.allocator.create(Bus(T));
                 errdefer self.allocator.destroy(bus);
 
-                bus.* = try Bus(T).init(self.allocator, topic_name, 5_000);
+                bus.* = try Bus(T).init(
+                    self.allocator,
+                    topic_name,
+                    constants.bus_max_queue_capacity,
+                );
                 errdefer bus.deinit();
 
                 try self.buses.put(topic_name, bus);

@@ -11,7 +11,7 @@ pub fn Publisher(comptime T: type) type {
         conn_id: uuid.Uuid,
         key: u128,
         mutex: std.Thread.Mutex,
-        produced_count: u128,
+        published_count: u128,
         queue: *RingBuffer(T),
 
         pub fn init(allocator: std.mem.Allocator, key: u128, conn_id: uuid.Uuid, queue_capacity: usize) !Self {
@@ -26,7 +26,7 @@ pub fn Publisher(comptime T: type) type {
                 .conn_id = conn_id,
                 .key = key,
                 .mutex = .{},
-                .produced_count = 0,
+                .published_count = 0,
                 .queue = queue,
             };
         }
@@ -42,7 +42,7 @@ pub fn Publisher(comptime T: type) type {
 
             try self.queue.enqueue(value);
 
-            self.produced_count += 1;
+            self.published_count += 1;
         }
     };
 }

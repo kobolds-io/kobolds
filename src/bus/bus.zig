@@ -11,8 +11,6 @@ const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const Publisher = @import("./publisher.zig").Publisher;
 const Subscriber = @import("./subscriber.zig").Subscriber;
 
-const BUS_QUEUE_SIZE = 1_000;
-
 pub fn Bus(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -87,14 +85,6 @@ pub fn Bus(comptime T: type) type {
                 self.mutex.lock();
                 defer self.mutex.unlock();
 
-                var max_available = self.queue.count;
-                for (self.subscribers.items) |subscriber| {
-                    const subscriber_available = subscriber.queue.available();
-                    if (subscriber_available < max_available) {
-                        max_available = subscriber_available;
-                    }
-                }
-
                 // lock this individual subscriber so that we can copy stuff to their queue
                 for (self.subscribers.items, 0..self.subscribers.items.len) |subscriber, i| {
                     subscriber.mutex.lock();
@@ -106,6 +96,7 @@ pub fn Bus(comptime T: type) type {
                     }
                 }
 
+                // each item needs to be refed for `n` subscribers
                 _ = self.queue.copyMaxToOthers(subscriber_queues);
             }
 
@@ -131,7 +122,7 @@ pub fn Bus(comptime T: type) type {
                     publisher.mutex.lock();
                     defer publisher.mutex.unlock();
 
-                    _ = self.queue.concatenateAvailable(publisher.queue);
+                    self.queue.concatenateAvailable(publisher.queue);
                 }
 
                 // If we completed the loop, set last index to the next publisher

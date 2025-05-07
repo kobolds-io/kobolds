@@ -50,17 +50,6 @@ pub fn Subscriber(comptime T: type) type {
             self.allocator.destroy(self.queue);
         }
 
-        pub fn tick(self: *Self) !void {
-            if (self.queue.count == 0) return;
-
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            // FIX: consumer should do something
-            self.consumed_count += self.queue.count;
-            self.queue.reset();
-        }
-
         pub fn subscribe(self: *Self) !void {
             try self.bus.addSubscriber(self);
         }
