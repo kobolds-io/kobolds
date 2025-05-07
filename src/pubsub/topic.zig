@@ -48,7 +48,20 @@ pub const Topic = struct {
     pub fn publish(self: *Self, message: *Message) !void {
         defer message.deref();
 
-        self.ee.emit(.publish, message);
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var subscribers_iter = self.subscribers.valueIterator();
+        while (subscribers_iter.next()) |entry| {
+            const subscriber = entry.*;
+
+            subscriber.mutex.lock();
+            defer subscriber.mutex.unlock();
+
+            try subscriber.queue.enqueue(message);
+        }
+
+        // self.ee.emit(.publish, message);
 
         // if (self.subscribers.count() == 0) {
         //     // TODO: we should write the message to disk
