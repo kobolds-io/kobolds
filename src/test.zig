@@ -11,8 +11,9 @@ comptime {
     _ = @import("./node/worker.zig");
     _ = @import("./protocol/message_test.zig");
     _ = @import("./protocol/parser_test.zig");
-    _ = @import("./pubsub/publisher.zig");
-    _ = @import("./pubsub/subscriber.zig");
-    _ = @import("./pubsub/topic.zig");
+    // _ = @import("./pubsub/publisher.zig");
+    // _ = @import("./pubsub/subscriber.zig");
+    // _ = @import("./pubsub/topic.zig");
+    _ = @import("./bus/bus.zig");
     _ = @import("./utils.zig");
 }
