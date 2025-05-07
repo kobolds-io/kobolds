@@ -61,7 +61,7 @@ pub const Topic = struct {
             try subscriber.queue.enqueue(message);
         }
 
-        // self.ee.emit(.publish, message);
+        self.ee.emit(.publish, message);
 
         // if (self.subscribers.count() == 0) {
         //     // TODO: we should write the message to disk

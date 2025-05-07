@@ -5,6 +5,8 @@ const log = std.log.scoped(.Bus);
 const testing = std.testing;
 const assert = std.debug.assert;
 
+const constants = @import("../constants.zig");
+
 const RingBuffer = @import("stdx").RingBuffer;
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 
@@ -26,6 +28,7 @@ pub const Bus = struct {
     close_channel: UnbufferedChannel(bool),
     last_publisher_index: usize,
     topic_name: []const u8,
+    messages_buffer: []*Message,
 
     pub fn init(allocator: std.mem.Allocator, topic_name: []const u8, queue_capacity: usize) !Self {
         const queue = try allocator.create(RingBuffer(*Message));
@@ -46,6 +49,9 @@ pub const Bus = struct {
         publishers.* = std.ArrayList(*Publisher).init(allocator);
         errdefer publishers.deinit();
 
+        const messages_buffer = try allocator.alloc(*Message, constants.subscriber_max_queue_capacity);
+        errdefer allocator.free(messages_buffer);
+
         return Self{
             .allocator = allocator,
             .mutex = std.Thread.Mutex{},
@@ -57,6 +63,7 @@ pub const Bus = struct {
             .publishers_mutex = std.Thread.Mutex{},
             .subscribers_mutex = std.Thread.Mutex{},
             .topic_name = topic_name,
+            .messages_buffer = messages_buffer,
         };
     }
 
@@ -68,6 +75,7 @@ pub const Bus = struct {
         self.allocator.destroy(self.queue);
         self.allocator.destroy(self.subscribers);
         self.allocator.destroy(self.publishers);
+        self.allocator.free(self.messages_buffer);
     }
 
     pub fn tick(self: *Self) !void {
@@ -128,8 +136,30 @@ pub const Bus = struct {
                 }
             }
 
-            // each item needs to be refed for `n` subscribers
-            _ = self.queue.copyMaxToOthers(subscriber_queues);
+            // TODO: reference each message before it goes to the subscribers
+            // figure out the maximum number of messages able to be copied.
+            // Determine how many items each other buffer can accept
+            var max_copy = self.queue.count;
+            for (subscriber_queues) |queue| {
+                if (queue.available() < max_copy) {
+                    max_copy = queue.available();
+                }
+            }
+
+            if (max_copy == 0) return;
+
+            const n = self.queue.dequeueMany(self.messages_buffer[0..max_copy]);
+            for (self.messages_buffer[0..n]) |message| {
+                message.ref();
+            }
+
+            for (subscriber_queues) |queue| {
+                const x = queue.enqueueMany(self.messages_buffer[0..n]);
+                assert(x == n);
+            }
+
+            // // each item needs to be refed for `n` subscribers
+            // _ = self.queue.copyMaxToOthers(subscriber_queues);
         }
     }
 
