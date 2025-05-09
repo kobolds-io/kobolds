@@ -57,6 +57,13 @@ pub const BusManager = struct {
         }
     }
 
+    pub fn get(self: *Self, topic_name: []const u8) ?*Bus {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        return self.buses.get(topic_name);
+    }
+
     pub fn destroy(self: *Self, topic_name: []const u8) bool {
         self.mutex.lock();
         defer self.mutex.unlock();

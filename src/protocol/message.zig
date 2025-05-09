@@ -418,7 +418,7 @@ pub const Message = struct {
         if (data.len < @sizeOf(Headers)) return ProtocolError.NotEnoughData;
 
         // try to parse the headers out of the buffer
-        self.headers = Headers.fromBytes(data[0..@sizeOf(Headers)]);
+        self.headers = try Headers.fromBytes(data[0..@sizeOf(Headers)]);
 
         // create a payload that is used to calculate the checksum of the headers
         // create a buffer that can hold the entirety of the headers payload
@@ -550,7 +550,7 @@ pub const Headers = extern struct {
     }
 
     // we assume the same byte layout as `asBytes`
-    pub fn fromBytes(bytes: []const u8) Headers {
+    pub fn fromBytes(bytes: []const u8) !Headers {
         assert(bytes.len == @sizeOf(Headers));
 
         var i: usize = 0;
@@ -567,13 +567,37 @@ pub const Headers = extern struct {
         const body_length = utils.bytesToU32(bytes[i..][0..4]);
         i += 4;
 
-        const protocol_version: ProtocolVersion = @enumFromInt(bytes[i]);
+        // const protocol_version: ProtocolVersion = @enumFromInt(bytes[i]);
+        const protocol_version: ProtocolVersion = switch (bytes[i]) {
+            0 => ProtocolVersion.unsupported,
+            1 => ProtocolVersion.v1,
+            else => ProtocolVersion.unsupported,
+        };
         i += 1;
 
-        const message_type: MessageType = @enumFromInt(bytes[i]);
+        // const message_type: MessageType = @enumFromInt(bytes[i]);
+        const message_type: MessageType = switch (bytes[i]) {
+            0 => MessageType.undefined,
+            1 => MessageType.request,
+            2 => MessageType.reply,
+            3 => MessageType.ping,
+            4 => MessageType.pong,
+            5 => MessageType.accept,
+            6 => MessageType.advertise,
+            7 => MessageType.unadvertise,
+            8 => MessageType.publish,
+            9 => MessageType.subscribe,
+            10 => MessageType.unsubscribe,
+            else => MessageType.undefined,
+        };
         i += 1;
 
-        const compression: Compression = @enumFromInt(bytes[i]);
+        // const compression: Compression = @enumFromInt(bytes[i]);
+        const compression: Compression = switch (bytes[i]) {
+            0 => Compression.none,
+            1 => Compression.gzip,
+            else => Compression.none,
+        };
         i += 1;
 
         const compressed = bytes[i] != 0;

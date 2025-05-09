@@ -48,6 +48,7 @@ pub const Connection = struct {
     origin_id: uuid.Uuid,
     outbox: *RingBuffer(*Message),
     parsed_messages: std.ArrayList(Message),
+    parsed_message_ptrs: std.ArrayList(*Message),
     parser: Parser,
     recv_buffer: []u8,
     recv_completion: *IO.Completion,
@@ -114,7 +115,16 @@ pub const Connection = struct {
             .messages_sent = 0,
             .origin_id = id,
             .outbox = outbox,
-            .parsed_messages = try std.ArrayList(Message).initCapacity(allocator, 50),
+            .parsed_messages = try std.ArrayList(Message).initCapacity(
+                allocator,
+                // 50,
+                constants.connection_recv_buffer_size / @sizeOf(Message),
+            ),
+            .parsed_message_ptrs = try std.ArrayList(*Message).initCapacity(
+                allocator,
+                // 100,
+                constants.connection_recv_buffer_size / @sizeOf(Message),
+            ),
             .parser = Parser.init(allocator),
             .recv_buffer = recv_buffer,
             .recv_completion = recv_completion,
@@ -141,6 +151,7 @@ pub const Connection = struct {
         self.inbox.deinit();
         self.outbox.deinit();
         self.parsed_messages.deinit();
+        self.parsed_message_ptrs.deinit();
         self.parser.deinit();
 
         self.allocator.destroy(self.recv_completion);
@@ -298,19 +309,21 @@ pub const Connection = struct {
             }
         }
 
-        var message_ptrs_buf: [@sizeOf(*Message) * 100]u8 = undefined;
-        var fba = std.heap.FixedBufferAllocator.init(&message_ptrs_buf);
-        const fba_allocator = fba.allocator();
-
-        assert(message_ptrs_buf.len >= self.parsed_messages.items.len);
+        // var message_ptrs_buf: [@sizeOf(*Message) * 100]u8 = undefined;
+        // var fba = std.heap.FixedBufferAllocator.init(&message_ptrs_buf);
+        // const fba_allocator = fba.allocator();
+        //
+        // assert(message_ptrs_buf.len >= self.parsed_messages.items.len);
+        assert(self.parsed_message_ptrs.items.len >= self.parsed_message_ptrs.items.len);
 
         const message_ptrs = self.message_pool.createN(
-            fba_allocator,
+            self.allocator,
             @intCast(self.parsed_messages.items.len),
         ) catch |err| {
             log.err("inbox message_pool.createN() returned err: {any}", .{err});
             return;
         };
+        defer self.allocator.free(message_ptrs);
 
         if (message_ptrs.len != self.parsed_messages.items.len) {
             log.err("not enough node ptrs {} for parsed_messages {}", .{ message_ptrs.len, self.parsed_messages.items.len });
@@ -347,7 +360,7 @@ pub const Connection = struct {
         if (n < message_ptrs.len) {
             log.err("could not enqueue all message ptrs. dropping {} messages", .{message_ptrs[n..].len});
             for (message_ptrs[n..]) |ptr| {
-                self.message_pool.destroy(ptr);
+                ptr.deref();
             }
         }
 

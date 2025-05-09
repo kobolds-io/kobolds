@@ -13,13 +13,14 @@ pub const message_max_size = @sizeOf(Headers) + message_max_body_size;
 
 /// The size of the parser's working buffer to be used for decoding messsages
 /// over multiple parse calls.
-pub const parser_max_buffer_size = message_max_size * 10; // TODO: this number needs to be adjusted
+// pub const parser_max_buffer_size = message_max_size * 100; // TODO: this number needs to be adjusted
+pub const parser_max_buffer_size = message_max_size * 3; // TODO: this number needs to be adjusted
 
 /// The number of bytes used as the recv buffer in each connection
-pub const connection_recv_buffer_size = 4096;
+pub const connection_recv_buffer_size = 4096 * 2;
 
 /// The number of bytes used as the send buffer in each connection
-pub const connection_send_buffer_size = 4096;
+pub const connection_send_buffer_size = 4096 * 2;
 
 /// The number of iterations to be executed for benchmark tests
 pub const benchmark_testing_iterations = 3_500_000;
@@ -35,7 +36,7 @@ pub const io_uring_entries: u16 = 256;
 pub const verify: bool = true;
 
 /// Maximum size of the message pool
-pub const default_worker_message_pool_capacity: u32 = 10_000;
+pub const default_worker_message_pool_capacity: u32 = 50_000;
 
 pub const connection_outbox_capacity: u32 = 5_000;
 pub const connection_inbox_capacity: u32 = 5_000;

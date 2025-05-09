@@ -3,6 +3,7 @@ const uuid = @import("uuid");
 
 const RingBuffer = @import("stdx").RingBuffer;
 const Message = @import("../protocol/message.zig").Message;
+const Bus = @import("./bus.zig").Bus;
 
 pub const Publisher = struct {
     const Self = @This();
@@ -13,8 +14,15 @@ pub const Publisher = struct {
     mutex: std.Thread.Mutex,
     published_count: u128,
     queue: *RingBuffer(*Message),
+    topic_name: []const u8,
 
-    pub fn init(allocator: std.mem.Allocator, key: u128, conn_id: uuid.Uuid, queue_capacity: usize) !Self {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        key: u128,
+        conn_id: uuid.Uuid,
+        queue_capacity: usize,
+        topic_name: []const u8,
+    ) !Self {
         const queue = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(queue);
 
@@ -28,6 +36,7 @@ pub const Publisher = struct {
             .mutex = .{},
             .published_count = 0,
             .queue = queue,
+            .topic_name = topic_name,
         };
     }
 

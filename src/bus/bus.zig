@@ -110,6 +110,10 @@ pub const Bus = struct {
             }
         }
 
+        // while (self.queue.dequeue()) |message| {
+        //     message.deref();
+        // }
+
         if (self.subscribers.items.len > 0) {
             // Ensure that the subscribers array list does not change
             self.subscribers_mutex.lock();
@@ -157,9 +161,6 @@ pub const Bus = struct {
                 const x = queue.enqueueMany(self.messages_buffer[0..n]);
                 assert(x == n);
             }
-
-            // // each item needs to be refed for `n` subscribers
-            // _ = self.queue.copyMaxToOthers(subscriber_queues);
         }
     }
 

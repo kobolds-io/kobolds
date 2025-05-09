@@ -244,9 +244,8 @@ pub const Worker = struct {
                     }
                 },
                 .publish => {
-                    // log.debug("received publish messaged", .{});
-                    // find the producer for this connection
 
+                    // get the publisher's key
                     const publisher_key = utils.generateKey(message.topicName(), conn.origin_id);
                     if (self.publishers.get(publisher_key)) |publisher| {
                         try publisher.publish(message);
@@ -261,6 +260,7 @@ pub const Worker = struct {
                         publisher_key,
                         conn.origin_id,
                         constants.publisher_max_queue_capacity,
+                        message.topicName(),
                     );
                     errdefer publisher.deinit();
 
@@ -269,7 +269,6 @@ pub const Worker = struct {
                     // check if the bus even exists
                     const bus_manager = self.node.bus_manager;
                     const bus = try bus_manager.findOrCreate(message.topicName());
-
                     try bus.addPublisher(publisher);
 
                     publisher.publish(message) catch |err| {
@@ -437,7 +436,14 @@ pub const Worker = struct {
             const publisher_key = publisher_entry.key_ptr.*;
             const publisher = publisher_entry.value_ptr.*;
 
+            // FIX: the publisher may be in the middle of publishing
+            // we should ensure that it is safe to destroy this publisher
+
             if (publisher.conn_id == conn.origin_id) {
+                if (self.node.bus_manager.get(publisher.topic_name)) |bus| {
+                    _ = try bus.removePublisher(publisher.key);
+                }
+
                 publisher.deinit();
                 self.allocator.destroy(publisher);
                 try conn_publisher_keys.append(publisher_key);
