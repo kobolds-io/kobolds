@@ -21,12 +21,6 @@ const IO = @import("../io.zig").IO;
 const Publisher = @import("../bus/publisher.zig").Publisher;
 const Subscriber = @import("../bus/subscriber.zig").Subscriber;
 
-// // Pubsub
-// const Publisher = @import("../pubsub/publisher.zig").Publisher;
-// const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
-// const Topic = @import("../pubsub/topic.zig").Topic;
-// const TopicManager = @import("../pubsub/topic_manager.zig").TopicManager;
-
 // Protocol
 const Message = @import("../protocol/message.zig").Message;
 const Accept = @import("../protocol/message.zig").Accept;
@@ -36,9 +30,9 @@ const Connection = @import("../protocol/connection.zig").Connection;
 const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
 
 const WorkerState = enum {
-    running,
     close,
     closed,
+    running,
 };
 
 const WorkerConfig = struct {
@@ -86,16 +80,15 @@ pub const Worker = struct {
             .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .io = io,
             .message_pool = message_pool,
-            .node = node,
-            .state = .closed,
-            .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
-            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
             .mutex = std.Thread.Mutex{},
+            .node = node,
+            .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
+            .state = .closed,
+            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
         };
     }
 
     pub fn deinit(self: *Self) void {
-        // TODO: loop over and close all connections
         var connections_iter = self.connections.valueIterator();
         while (connections_iter.next()) |entry| {
             const connection = entry.*;
@@ -165,7 +158,6 @@ pub const Worker = struct {
             const conn = entry.value_ptr.*;
 
             try self.gather(conn);
-            // try self.distribute(conn);
 
             conn.tick() catch |err| {
                 log.err("could not tick connection error: {any}", .{err});
@@ -244,11 +236,13 @@ pub const Worker = struct {
                     }
                 },
                 .publish => {
-
                     // get the publisher's key
                     const publisher_key = utils.generateKey(message.topicName(), conn.origin_id);
                     if (self.publishers.get(publisher_key)) |publisher| {
-                        try publisher.publish(message);
+                        publisher.publish(message) catch |err| {
+                            log.err("could not publish message {any}", .{err});
+                            message.deref();
+                        };
                         return;
                     }
 
@@ -366,7 +360,7 @@ pub const Worker = struct {
             if (self.connections.get(subscriber.conn_id)) |conn| {
                 conn.outbox.concatenateAvailable(subscriber.queue);
             } else {
-                // this subscriber is bad???
+                // FIX: this subscriber is bad???
                 @panic("subscriber isn't tied to connection");
             }
         }

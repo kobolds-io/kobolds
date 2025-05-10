@@ -181,10 +181,6 @@ pub const Client = struct {
                         log.err("client tick while running error: {any}", .{err});
                         unreachable;
                     };
-                    // self.io.run_for_ns(100 * std.time.ns_per_us) catch |err| {
-                    //     log.err("io.run_for_ns error: {any}", .{err});
-                    //     unreachable;
-                    // };
 
                     self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch |err| {
                         log.err("io.run_for_ns error: {any}", .{err});
@@ -270,6 +266,8 @@ pub const Client = struct {
             const conn = entry.value_ptr.*;
             const tmp_id = entry.key_ptr.*;
 
+            self.gather(conn);
+
             try conn.tick();
 
             if (conn.state == .connected and conn.origin_id != 0) {
@@ -287,57 +285,52 @@ pub const Client = struct {
         while (connections_iter.next()) |conn_ptr| {
             const conn = conn_ptr.*;
 
-            // log.debug("conn id {}, conn.outbox.count {}", .{ conn.origin_id, conn.outbox.count });
+            // aggregate all messages from the connection to the client inbox
+            self.gather(conn);
 
             try conn.tick();
-
-            // aggregate all messages from the connection to the client inbox
-            try self.gather(conn);
-            try self.distribute(conn);
         }
 
-        while (self.unprocessed_messages_queue.dequeue()) |message| {
-            try self.process(message);
-        }
+        try self.process();
     }
 
-    fn process(self: *Self, message: *Message) !void {
-        defer message.deref();
-        switch (message.headers.message_type) {
-            .pong => {
-                // lookup the transaction
-                if (self.transactions.get(message.transactionId())) |chan| {
-                    defer _ = self.transactions.remove(message.transactionId());
+    fn process(self: *Self) !void {
+        while (self.unprocessed_messages_queue.dequeue()) |message| {
+            defer message.deref();
+            switch (message.headers.message_type) {
+                .pong => {
+                    // lookup the transaction
+                    if (self.transactions.get(message.transactionId())) |chan| {
+                        defer _ = self.transactions.remove(message.transactionId());
 
+                        message.ref();
+                        chan.send(message);
+                    } else {
+                        log.err("missing transaction {}", .{message.transactionId()});
+                    }
+                },
+                .publish => {
+                    if (self.topic_manager.get(message.topicName())) |topic| {
+                        try topic.publish(message);
+                    }
+                },
+                .accept => {},
+                .reply => {
+                    log.debug("received reply message", .{});
                     message.ref();
-                    chan.send(message);
-                } else {
-                    log.err("missing transaction {}", .{message.transactionId()});
-                }
-            },
-            .publish => {
-                // log.debug("received published message {any}", .{message});
+                    const transaction_id = message.transactionId();
+                    if (self.transactions.get(transaction_id)) |chan| {
+                        chan.send(message);
+                    }
 
-                if (self.topic_manager.get(message.topicName())) |topic| {
-                    try topic.publish(message);
-                }
-            },
-            .accept => {},
-            .reply => {
-                log.debug("received reply message", .{});
-                message.ref();
-                const transaction_id = message.transactionId();
-                if (self.transactions.get(transaction_id)) |chan| {
-                    chan.send(message);
-                }
+                    defer _ = self.transactions.remove(transaction_id);
+                },
+                else => |t| {
+                    log.err("received unhandled message type {any}", .{t});
 
-                defer _ = self.transactions.remove(transaction_id);
-            },
-            else => |t| {
-                log.err("received unhandled message type {any}", .{t});
-
-                unreachable;
-            },
+                    unreachable;
+                },
+            }
         }
     }
 
@@ -566,8 +559,8 @@ pub const Client = struct {
         return rep;
     }
 
-    pub fn gather(self: *Self, conn: *Connection) !void {
-        try self.unprocessed_messages_queue.concatenate(conn.inbox);
+    pub fn gather(self: *Self, conn: *Connection) void {
+        self.unprocessed_messages_queue.concatenateAvailable(conn.inbox);
     }
 
     pub fn distribute(self: *Self, conn: *Connection) !void {

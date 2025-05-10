@@ -440,6 +440,7 @@ pub fn nodePublish() !void {
     while (!sigint_received) {
         client.publish(conn, topic_name, body, .{}) catch |err| {
             log.err("error {any}", .{err});
+            std.time.sleep(1 * std.time.ns_per_ms);
             continue;
         };
     }
@@ -469,7 +470,7 @@ pub fn nodeSubscribe() !void {
             // _ = context;
             const subscriber: *Subscriber = @ptrCast(@alignCast(context));
             subscriber.messages_received += 1;
-            if (subscriber.messages_received % 1000 == 0) {
+            if (subscriber.messages_received % 10 == 0) {
                 log.debug("subscriber.messages_received {}", .{subscriber.messages_received});
             }
             message.deref();

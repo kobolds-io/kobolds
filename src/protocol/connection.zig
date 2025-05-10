@@ -309,11 +309,6 @@ pub const Connection = struct {
             }
         }
 
-        // var message_ptrs_buf: [@sizeOf(*Message) * 100]u8 = undefined;
-        // var fba = std.heap.FixedBufferAllocator.init(&message_ptrs_buf);
-        // const fba_allocator = fba.allocator();
-        //
-        // assert(message_ptrs_buf.len >= self.parsed_messages.items.len);
         assert(self.parsed_message_ptrs.items.len >= self.parsed_message_ptrs.items.len);
 
         const message_ptrs = self.message_pool.createN(
@@ -355,6 +350,7 @@ pub const Connection = struct {
             // this is kind of redundent because the message_pool should be handling this
             assert(message_ptr.refs() == 1);
         }
+        self.parsed_messages.items.len = 0;
 
         const n = self.inbox.enqueueMany(message_ptrs);
         if (n < message_ptrs.len) {
@@ -363,8 +359,6 @@ pub const Connection = struct {
                 ptr.deref();
             }
         }
-
-        self.parsed_messages.items.len = 0;
     }
 
     pub fn onRecvTimeout(self: *Connection, comp: *IO.Completion, res: IO.TimeoutError!void) void {

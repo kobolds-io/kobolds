@@ -79,6 +79,11 @@ pub const Bus = struct {
     }
 
     pub fn tick(self: *Self) !void {
+        self.gather();
+        try self.distribute();
+    }
+
+    fn gather(self: *Self) void {
         if (self.publishers.items.len > 0) {
             self.mutex.lock();
             defer self.mutex.unlock();
@@ -109,11 +114,9 @@ pub const Bus = struct {
                 self.last_publisher_index = (self.last_publisher_index + 1) % publisher_count;
             }
         }
+    }
 
-        // while (self.queue.dequeue()) |message| {
-        //     message.deref();
-        // }
-
+    fn distribute(self: *Self) !void {
         if (self.subscribers.items.len > 0) {
             // Ensure that the subscribers array list does not change
             self.subscribers_mutex.lock();
@@ -140,9 +143,7 @@ pub const Bus = struct {
                 }
             }
 
-            // TODO: reference each message before it goes to the subscribers
-            // figure out the maximum number of messages able to be copied.
-            // Determine how many items each other buffer can accept
+            // FIX: this can be done in a much cleaner way. This basically requires multiple loops
             var max_copy = self.queue.count;
             for (subscriber_queues) |queue| {
                 if (queue.available() < max_copy) {
@@ -154,7 +155,13 @@ pub const Bus = struct {
 
             const n = self.queue.dequeueMany(self.messages_buffer[0..max_copy]);
             for (self.messages_buffer[0..n]) |message| {
-                message.ref();
+                assert(message.refs() == 1);
+                // increase the number of refs for this message to match how many subscribers
+                // the message will be added to
+                _ = message.ref_count.fetchAdd(@intCast(subscriber_queues.len), .seq_cst);
+
+                // deref once for the bus since it is giving up control
+                message.deref();
             }
 
             for (subscriber_queues) |queue| {
