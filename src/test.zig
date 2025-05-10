@@ -19,5 +19,6 @@ comptime {
     _ = @import("./bus/publisher.zig");
     _ = @import("./bus/subscriber.zig");
     _ = @import("./utils.zig");
-    _ = @import("./client/client2.zig");
+    _ = @import("./node/node2.zig");
+    _ = @import("./node/worker2.zig");
 }

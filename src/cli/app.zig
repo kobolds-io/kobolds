@@ -19,8 +19,8 @@ const IO = @import("../io.zig").IO;
 const Client = @import("../client/client.zig").Client;
 const ClientConfig = @import("../client/client.zig").ClientConfig;
 
-const Client2 = @import("../client/client2.zig").Client;
-const ClientConfig2 = @import("../client/client2.zig").ClientConfig;
+const Node2 = @import("../node/node2.zig").Node;
+const NodeConfig2 = @import("../node/node2.zig").NodeConfig;
 
 var node_config = NodeConfig{
     .host = "127.0.0.1",
@@ -37,7 +37,7 @@ var client_config = ClientConfig{
     .max_connections = 10,
 };
 
-var client_config_2 = ClientConfig2{
+var node_config2 = NodeConfig2{
     .host = "127.0.0.1",
     .port = 8000,
     .max_connections = 5,
@@ -121,12 +121,12 @@ pub fn run() !void {
             .{
                 .long_name = "host",
                 .help = "host to listen on",
-                .value_ref = app_runner.mkRef(&client_config_2.host),
+                .value_ref = app_runner.mkRef(&node_config2.host),
             },
             .{
                 .long_name = "port",
                 .help = "port to bind to",
-                .value_ref = app_runner.mkRef(&client_config_2.port),
+                .value_ref = app_runner.mkRef(&node_config2.port),
             },
         },
         .target = .{ .action = .{ .exec = nodePing } },
@@ -315,7 +315,7 @@ pub fn nodePing() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var client = try Client2.init(allocator, client_config_2);
+    var client = try Node2.init(allocator, node_config2);
     defer client.deinit();
 
     try client.run();
@@ -323,6 +323,8 @@ pub fn nodePing() !void {
 
     try client.connect();
     defer client.disconnect();
+
+    std.time.sleep(5 * std.time.ns_per_s);
 }
 
 pub fn nodeReply() !void {
