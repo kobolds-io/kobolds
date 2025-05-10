@@ -19,6 +19,9 @@ const IO = @import("../io.zig").IO;
 const Client = @import("../client/client.zig").Client;
 const ClientConfig = @import("../client/client.zig").ClientConfig;
 
+const Client2 = @import("../client/client2.zig").Client;
+const ClientConfig2 = @import("../client/client2.zig").ClientConfig;
+
 var node_config = NodeConfig{
     .host = "127.0.0.1",
     .port = 8000,
@@ -32,6 +35,12 @@ var client_config = ClientConfig{
     .compression = .none,
     .message_pool_capacity = 5_000,
     .max_connections = 10,
+};
+
+var client_config_2 = ClientConfig2{
+    .host = "127.0.0.1",
+    .port = 8000,
+    .max_connections = 5,
 };
 
 const RequestConfig = struct {
@@ -112,12 +121,12 @@ pub fn run() !void {
             .{
                 .long_name = "host",
                 .help = "host to listen on",
-                .value_ref = app_runner.mkRef(&client_config.host),
+                .value_ref = app_runner.mkRef(&client_config_2.host),
             },
             .{
                 .long_name = "port",
                 .help = "port to bind to",
-                .value_ref = app_runner.mkRef(&client_config.port),
+                .value_ref = app_runner.mkRef(&client_config_2.port),
             },
         },
         .target = .{ .action = .{ .exec = nodePing } },
@@ -306,25 +315,14 @@ pub fn nodePing() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var client = try Client.init(allocator, client_config);
+    var client = try Client2.init(allocator, client_config_2);
     defer client.deinit();
 
-    // run the background client thread
-    try client.start();
-    defer client.stop();
+    try client.run();
+    defer client.close();
 
-    const conn = try client.connect();
-    defer client.disconnect(conn);
-
-    // create a timer for the round trip calculation
-    var timer = try std.time.Timer.start();
-    defer timer.reset();
-    const start = timer.read();
-
-    try client.ping(conn, .{});
-    log.err("ping round trip took: {}ms", .{
-        (timer.read() - start) / std.time.ns_per_ms,
-    });
+    try client.connect();
+    defer client.disconnect();
 }
 
 pub fn nodeReply() !void {
