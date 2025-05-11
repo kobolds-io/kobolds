@@ -9,8 +9,8 @@ const uuid = @import("uuid");
 const Worker = @import("./worker2.zig").Worker;
 const Listener = @import("./listener.zig").Listener;
 const ListenerConfig = @import("./listener.zig").ListenerConfig;
-const InboundConnectionConfig = @import("./listener.zig").InboundConnectionConfig;
-const OutboundConnectionConfig = @import("./listener.zig").OutboundConnectionConfig;
+const InboundConnectionConfig = @import("../protocol/connection3.zig").InboundConnectionConfig;
+const OutboundConnectionConfig = @import("../protocol/connection3.zig").OutboundConnectionConfig;
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const MemoryPool = @import("stdx").MemoryPool;
@@ -204,6 +204,8 @@ pub const Node = struct {
             switch (self.state) {
                 .running => {
                     self.tick() catch unreachable;
+                    // FIX: this should us io uring or something much nicer
+                    std.time.sleep(100 * std.time.ns_per_ms);
                 },
                 .closing => {
                     log.info("node {}: closed", .{self.id});

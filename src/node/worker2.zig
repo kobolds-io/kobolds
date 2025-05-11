@@ -12,9 +12,10 @@ const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 
 const IO = @import("../io.zig").IO;
 const Node = @import("./node2.zig").Node;
-const OutboundConnectionConfig = @import("./listener.zig").OutboundConnectionConfig;
 
-const Connection = @import("../protocol/connection2.zig").Connection;
+const Connection = @import("../protocol/connection3.zig").Connection;
+const OutboundConnectionConfig = @import("../protocol/connection3.zig").OutboundConnectionConfig;
+const InboundConnectionConfig = @import("../protocol/connection3.zig").InboundConnectionConfig;
 const Message = @import("../protocol/message.zig").Message;
 const Accept = @import("../protocol/message.zig").Accept;
 
@@ -193,6 +194,7 @@ pub const Worker = struct {
                 }
             }
         }
+
         // try self.process();
     }
 
@@ -204,6 +206,8 @@ pub const Worker = struct {
         const connection = try self.allocator.create(Connection);
         errdefer self.allocator.destroy(connection);
 
+        const default_inbound_connection_config = InboundConnectionConfig{};
+
         const conn_id = uuid.v7.new();
         connection.* = try Connection.init(
             conn_id,
@@ -212,6 +216,7 @@ pub const Worker = struct {
             socket,
             self.allocator,
             self.node.memory_pool,
+            .{ .inbound = default_inbound_connection_config },
         );
         errdefer connection.deinit();
 
@@ -266,6 +271,7 @@ pub const Worker = struct {
             socket,
             self.allocator,
             self.node.memory_pool,
+            .{ .outbound = config },
         );
         errdefer conn.deinit();
 

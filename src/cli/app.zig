@@ -18,7 +18,7 @@ const ClientConfig = @import("../client/client.zig").ClientConfig;
 
 const Node = @import("../node/node2.zig").Node;
 const NodeConfig = @import("../node/node2.zig").NodeConfig;
-const OutboundConnectionConfig = @import("../node/listener.zig").OutboundConnectionConfig;
+const OutboundConnectionConfig = @import("../protocol/connection3.zig").OutboundConnectionConfig;
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
 
 var client_config = ClientConfig{
@@ -296,7 +296,9 @@ pub fn nodeListen() !void {
 
     registerSigintHandler();
 
-    while (!sigint_received) {}
+    while (!sigint_received) {
+        std.time.sleep(1 * std.time.ns_per_ms);
+    }
 }
 
 pub fn nodePing() !void {
@@ -325,7 +327,9 @@ pub fn nodePing() !void {
 
     registerSigintHandler();
 
-    while (!sigint_received) {}
+    while (!sigint_received) {
+        std.time.sleep(1 * std.time.ns_per_ms);
+    }
 }
 
 pub fn nodeReply() !void {
