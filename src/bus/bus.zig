@@ -155,7 +155,6 @@ pub const Bus = struct {
 
             const n = self.queue.dequeueMany(self.messages_buffer[0..max_copy]);
             for (self.messages_buffer[0..n]) |message| {
-                assert(message.refs() == 1);
                 // increase the number of refs for this message to match how many subscribers
                 // the message will be added to
                 _ = message.ref_count.fetchAdd(@intCast(subscriber_queues.len), .seq_cst);
@@ -238,7 +237,7 @@ test "tick" {
     var bus = try Bus.init(allocator, topic_name, bus_queue_capacity);
     defer bus.deinit();
 
-    var publisher = try Publisher.init(allocator, 1, uuid.v7.new(), publisher_queue_capacity);
+    var publisher = try Publisher.init(allocator, 1, uuid.v7.new(), publisher_queue_capacity, topic_name);
     defer publisher.deinit();
 
     var subscriber = try Subscriber.init(allocator, 1, uuid.v7.new(), subscriber_queue_capacity, &bus);

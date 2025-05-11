@@ -2,9 +2,11 @@ const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
 const log = std.log.scoped(.Worker);
+const constants = @import("../constants.zig");
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 
+const IO = @import("../io.zig").IO;
 const Node = @import("./node2.zig").Node;
 const Message = @import("../protocol/message.zig").Message;
 
@@ -23,6 +25,7 @@ pub const Worker = struct {
     state: WorkerState,
     id: u32,
     node: *Node,
+    io: *IO,
 
     pub fn init(allocator: std.mem.Allocator, id: u32, node: *Node) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -35,6 +38,12 @@ pub const Worker = struct {
 
         done_channel.* = UnbufferedChannel(bool).new();
 
+        const io = try allocator.create(IO);
+        errdefer allocator.destroy(io);
+
+        io.* = try IO.init(constants.io_uring_entries, 0);
+        errdefer io.deinit();
+
         return Self{
             .id = id,
             .allocator = allocator,
@@ -42,10 +51,14 @@ pub const Worker = struct {
             .done_channel = done_channel,
             .state = .closed,
             .node = node,
+            .io = io,
         };
     }
 
     pub fn deinit(self: *Self) void {
+        self.io.deinit();
+
+        self.allocator.destroy(self.io);
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
     }
@@ -65,7 +78,7 @@ pub const Worker = struct {
             switch (self.state) {
                 .running => {
                     self.tick() catch unreachable;
-                    // TODO: add io_uring
+                    self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
                 },
                 .closing => {
                     log.info("worker {}: closed", .{self.id});
