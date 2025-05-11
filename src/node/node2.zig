@@ -166,6 +166,8 @@ pub const Node = struct {
         // Start the workers
         try self.initializeWorkers();
         try self.spawnWorkerThreads();
+        try self.initializeListeners();
+        try self.spawnListeners();
 
         // Start the listeners
         try self.initializeListeners();

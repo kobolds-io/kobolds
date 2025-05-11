@@ -322,7 +322,18 @@ pub fn nodePing() !void {
         .transport = .tcp,
     };
 
-    var remote_configs = [_]RemoteConfig{remote_config};
+    const remote_configs = [_]RemoteConfig{remote_config};
+
+    // remote node to connect to
+    const listener_config = ListenerConfig{
+        .host = "127.0.0.1",
+        .port = 8000,
+        .transport = .tcp,
+    };
+
+    const listener_configs = [_]ListenerConfig{listener_config};
+
+    node_config2.listener_configs = &listener_configs;
     node_config2.remote_configs = &remote_configs;
 
     var client = try Node2.init(allocator, node_config2);
