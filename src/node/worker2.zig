@@ -134,7 +134,6 @@ pub const Worker = struct {
             .closed, .closing => return,
             else => {
                 while (!self.closeAllConnections()) {}
-
                 // block until this is received by the background thread
                 self.close_channel.send(true);
             },
@@ -154,12 +153,18 @@ pub const Worker = struct {
                 const tmp_id = entry.key_ptr.*;
                 const conn = entry.value_ptr.*;
 
-                try self.gather(conn);
+                // check if this connection was closed for whatever reason
+                if (conn.state == .closed) {
+                    try self.cleanupUninitializedConnection(tmp_id, conn);
+                    break;
+                }
 
                 conn.tick() catch |err| {
                     log.err("could not tick uninitialized_connection error: {any}", .{err});
-                    continue;
+                    break;
                 };
+
+                try self.gather(conn);
 
                 if (conn.state == .connected and conn.origin_id != 0) {
                     // the connection is now valid and ready for events
@@ -169,11 +174,6 @@ pub const Worker = struct {
                     // remove the connection from the uninitialized_connections map
                     assert(self.uninitialized_connections.remove(tmp_id));
                 }
-
-                if (conn.state == .closed) {
-                    try self.cleanupUninitializedConnection(conn);
-                    continue;
-                }
             }
 
             // loop over all connections and gather their messages
@@ -181,17 +181,18 @@ pub const Worker = struct {
             while (connections_iter.next()) |entry| {
                 const conn = entry.value_ptr.*;
 
-                try self.gather(conn);
+                // check if this connection was closed for whatever reason
+                if (conn.state == .closed) {
+                    try self.cleanupConnection(conn);
+                    continue;
+                }
 
                 conn.tick() catch |err| {
                     log.err("could not tick connection error: {any}", .{err});
                     continue;
                 };
 
-                if (conn.state == .closed) {
-                    try self.cleanupConnection(conn);
-                    continue;
-                }
+                try self.gather(conn);
             }
         }
 
@@ -251,7 +252,6 @@ pub const Worker = struct {
     // TODO: the config should be passed to the connection so it can be tracked
     //     the connection needs to be able to reconnect if the config says it should
     pub fn addOutboundConnection(self: *Self, config: OutboundConnectionConfig) !void {
-
         // create the socket
         const address = try std.net.Address.parseIp4(config.host, config.port);
         const socket_type: u32 = posix.SOCK.STREAM;
@@ -263,6 +263,8 @@ pub const Worker = struct {
         const conn = try self.allocator.create(Connection);
         errdefer self.allocator.destroy(conn);
 
+        // create a temporary id that will be used to identify this connection until it receives a proper
+        // origin_id from the remote node
         const tmp_conn_id = uuid.v7.new();
         conn.* = try Connection.init(
             0,
@@ -281,6 +283,7 @@ pub const Worker = struct {
         defer self.connections_mutex.unlock();
 
         try self.uninitialized_connections.put(tmp_conn_id, conn);
+        errdefer _ = self.uninitialized_connections.remove(tmp_conn_id);
 
         self.io.connect(
             *Connection,
@@ -294,6 +297,7 @@ pub const Worker = struct {
     }
 
     fn removeConnection(self: *Self, conn: *Connection) void {
+        log.debug("remove connection called", .{});
         // self.connections_mutex.lock();
         // defer self.connections_mutex.unlock();
 
@@ -304,11 +308,12 @@ pub const Worker = struct {
         self.allocator.destroy(conn);
     }
 
-    fn cleanupUninitializedConnection(self: *Self, conn: *Connection) !void {
+    fn cleanupUninitializedConnection(self: *Self, tmp_id: uuid.Uuid, conn: *Connection) !void {
+        log.debug("remove uninitialized connection called", .{});
         // self.connections_mutex.lock();
         // defer self.connections_mutex.unlock();
 
-        _ = self.uninitialized_connections.remove(conn.origin_id);
+        _ = self.uninitialized_connections.remove(tmp_id);
         log.info("worker: {} removed uninitialized_connection {}", .{ self.id, conn.origin_id });
 
         conn.deinit();

@@ -18,6 +18,7 @@ const ClientConfig = @import("../client/client.zig").ClientConfig;
 
 const Node = @import("../node/node2.zig").Node;
 const NodeConfig = @import("../node/node2.zig").NodeConfig;
+const InboundConnectionConfig = @import("../protocol/connection3.zig").InboundConnectionConfig;
 const OutboundConnectionConfig = @import("../protocol/connection3.zig").OutboundConnectionConfig;
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
 
@@ -278,14 +279,19 @@ pub fn nodeListen() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
+    const inbound_connection = InboundConnectionConfig{
+        .host = "127.0.0.2",
+        .port = 0,
+        .transport = .tcp,
+    };
+    const allowed_inbound_connections = [_]InboundConnectionConfig{inbound_connection};
     const listener_config = ListenerConfig{
         .host = "127.0.0.1",
         .port = 8000,
         .transport = .tcp,
+        .allowed_inbound_connections = &allowed_inbound_connections,
     };
-
     const listener_configs = [_]ListenerConfig{listener_config};
-
     node_config2.listener_configs = &listener_configs;
 
     var node = try Node.init(allocator, node_config2);

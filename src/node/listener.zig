@@ -189,11 +189,40 @@ pub const Listener = struct {
             unreachable;
         };
 
-        // FIX: need to figure out how to get the socket addr so we can track the connection retries and figured out
-        // if it is authorized to connect to this node.
-        log.debug("listener accepted {any}", .{"todo"});
-
         self.accept_submitted = false;
+
+        var inbound_address: net.Address = undefined;
+        var inbound_address_len: posix.socklen_t = @sizeOf(posix.sockaddr);
+
+        posix.getpeername(socket, &inbound_address.any, &inbound_address_len) catch |err| {
+            log.err("cannot getpeername from inbound socket {any}", .{err});
+            posix.close(socket);
+        };
+
+        if (self.config.allowed_inbound_connections) |allowed_inbound_connections| {
+            var allowed = false;
+            for (allowed_inbound_connections) |inbound_connection_config| {
+                const addr = net.Address.parseIp(inbound_connection_config.host, inbound_connection_config.port) catch |err| {
+                    log.err("could not part allowed_inbound_connection address {any}", .{err});
+                    continue;
+                };
+
+                // FIX: this can be much more robust. What this tells us that the inbound connection is from
+                //  a whitelisted IP address. We should also discriminate for ports
+                if (inbound_address.in.sa.addr == addr.in.sa.addr) {
+                    log.info("inbound connection from {any} is allowed", .{inbound_address});
+                    allowed = true;
+                    break;
+                }
+            }
+
+            if (!allowed) {
+                log.err("inbound_connection from {any} not allowed", .{inbound_address});
+                // we are going to close this connection
+                posix.close(socket);
+                return;
+            }
+        }
 
         self.mutex.lock();
         defer self.mutex.unlock();

@@ -227,9 +227,13 @@ pub const Connection = struct {
 
         switch (self.state) {
             .closing => {
-                self.state = .closed;
-                log.info("connection closed {}", .{self.origin_id});
+                if (self.origin_id == 0) {
+                    log.info("uninitialized connection closed {}", .{self.origin_id});
+                } else {
+                    log.info("connection closed {}", .{self.origin_id});
+                }
 
+                self.state = .closed;
                 // break out of the tick
                 return;
             },
@@ -334,6 +338,7 @@ pub const Connection = struct {
 
         // Connection closed by peer
         if (bytes == 0) {
+            log.err("connection {} received no bytes, closing", .{self.origin_id});
             self.state = .closing;
             return;
         }
@@ -430,9 +435,9 @@ pub const Connection = struct {
         self.connect_submitted = false;
 
         _ = completion;
-        _ = result catch |err| {
-            self.state = .closing;
+        result catch |err| {
             log.err("onConnect err closing conn {any}", .{err});
+            self.state = .closing;
         };
     }
 };

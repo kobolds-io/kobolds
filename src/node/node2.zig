@@ -299,10 +299,7 @@ pub const Node = struct {
                         const tcp_listener = try self.allocator.create(Listener);
                         errdefer self.allocator.destroy(tcp_listener);
 
-                        tcp_listener.* = try Listener.init(self.allocator, id, .{
-                            .host = listener_config.host,
-                            .port = listener_config.port,
-                        });
+                        tcp_listener.* = try Listener.init(self.allocator, id, listener_config);
                         errdefer tcp_listener.deinit();
 
                         try self.listeners.put(id, tcp_listener);
