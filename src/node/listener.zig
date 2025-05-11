@@ -9,13 +9,23 @@ const testing = std.testing;
 const constants = @import("../constants.zig");
 const IO = @import("../io.zig").IO;
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
-const InboundConnectionConfig = @import("../protocol/connection3.zig").InboundConnectionConfig;
+// const InboundConnectionConfig = @import("../protocol/connection3.zig").InboundConnectionConfig;
 const Transport = @import("../protocol/connection3.zig").Transport;
 
 const State = enum {
     running,
     closing,
     closed,
+};
+
+/// A whitelist
+pub const AllowedInboundConnectionConfig = struct {
+    /// when set to 0.0.0.0 allow all
+    host: []const u8 = "0.0.0.0",
+    port: u16 = 0,
+    port_min: u16 = 0,
+    port_max: u16 = std.math.maxInt(u16),
+    transport: Transport = .tcp,
 };
 
 // TODO: a user should be able to configure how many connections they want for a particular host.
@@ -25,7 +35,7 @@ pub const ListenerConfig = struct {
     port: u16 = 8000,
     transport: Transport = .tcp,
     /// a list of hosts that are allowed to communicate with this node. If `null`, all are allowed
-    allowed_inbound_connections: ?[]const InboundConnectionConfig = null,
+    allowed_inbound_connection_configs: ?[]const AllowedInboundConnectionConfig = null,
 };
 
 /// A standalone struct responsible for accepting connections. When a connection is accepted it is added to the `sockets`
@@ -199,25 +209,41 @@ pub const Listener = struct {
             posix.close(socket);
         };
 
+        // the config is zero'd and allowed inbound connections from any address
         const unspecified_address = net.Address.parseIp("0.0.0.0", 0) catch unreachable;
 
-        if (self.config.allowed_inbound_connections) |allowed_inbound_connections| {
+        if (self.config.allowed_inbound_connection_configs) |allowed_inbound_connection_configs| {
             var allowed = false;
-            for (allowed_inbound_connections) |inbound_connection_config| {
-                const addr = net.Address.parseIp(inbound_connection_config.host, inbound_connection_config.port) catch |err| {
+            for (allowed_inbound_connection_configs) |allowed_inbound_connection_config| {
+                const addr = net.Address.parseIp(
+                    allowed_inbound_connection_config.host,
+                    allowed_inbound_connection_config.port,
+                ) catch |err| {
                     log.err("could not part allowed_inbound_connection address {any}", .{err});
                     continue;
                 };
 
+                const inbound_address_port = inbound_address.getPort();
+
+                // if this config is an unspecified_address
                 if (addr.in.sa.addr == unspecified_address.in.sa.addr) {
-                    log.info("inbound connection from {any} is allowed by unspecified_address {}", .{ inbound_address, unspecified_address });
+                    if (inbound_address_port < allowed_inbound_connection_config.port_min) continue;
+                    if (inbound_address_port > allowed_inbound_connection_config.port_max) continue;
+                    if (allowed_inbound_connection_config.port != 0 and inbound_address_port != allowed_inbound_connection_config.port) continue;
+
+                    log.info("inbound connection from {any} is allowed by unspecified_address {}", .{
+                        inbound_address,
+                        unspecified_address,
+                    });
                     allowed = true;
                     break;
                 }
 
-                // FIX: this can be much more robust. What this tells us that the inbound connection is from
-                //  a whitelisted IP address. We should also discriminate for ports
                 if (inbound_address.in.sa.addr == addr.in.sa.addr) {
+                    if (inbound_address_port < allowed_inbound_connection_config.port_min) continue;
+                    if (inbound_address_port > allowed_inbound_connection_config.port_max) continue;
+                    if (allowed_inbound_connection_config.port != 0 and inbound_address_port != allowed_inbound_connection_config.port) continue;
+
                     log.info("inbound connection from {any} is allowed", .{inbound_address});
                     allowed = true;
                     break;

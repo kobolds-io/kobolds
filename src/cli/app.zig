@@ -18,9 +18,9 @@ const ClientConfig = @import("../client/client.zig").ClientConfig;
 
 const Node = @import("../node/node2.zig").Node;
 const NodeConfig = @import("../node/node2.zig").NodeConfig;
-const InboundConnectionConfig = @import("../protocol/connection3.zig").InboundConnectionConfig;
 const OutboundConnectionConfig = @import("../protocol/connection3.zig").OutboundConnectionConfig;
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
+const AllowedInboundConnectionConfig = @import("../node/listener.zig").AllowedInboundConnectionConfig;
 
 var client_config = ClientConfig{
     .host = "127.0.0.1",
@@ -279,17 +279,16 @@ pub fn nodeListen() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    const inbound_connection = InboundConnectionConfig{
+    // This is just a test used to whitelist a certain inbound connection origins
+    const allowed_inbound_connection_config = AllowedInboundConnectionConfig{
         .host = "0.0.0.0",
-        .port = 0,
-        .transport = .tcp,
     };
-    const allowed_inbound_connections = [_]InboundConnectionConfig{inbound_connection};
+    const allowed_inbound_connection_configs = [_]AllowedInboundConnectionConfig{allowed_inbound_connection_config};
     const listener_config = ListenerConfig{
         .host = "127.0.0.1",
         .port = 8000,
         .transport = .tcp,
-        .allowed_inbound_connections = &allowed_inbound_connections,
+        .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
     };
     const listener_configs = [_]ListenerConfig{listener_config};
     node_config2.listener_configs = &listener_configs;
