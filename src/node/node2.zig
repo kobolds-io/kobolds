@@ -6,17 +6,16 @@ const posix = std.posix;
 
 const uuid = @import("uuid");
 
-const uuid = @import("uuid");
-
 const Worker = @import("./worker2.zig").Worker;
 const Listener = @import("./listener.zig").Listener;
-const RemoteConfig = @import("./listener.zig").RemoteConfig;
+const ConnectionConfig = @import("./listener.zig").ConnectionConfig;
 const ListenerConfig = @import("./listener.zig").ListenerConfig;
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const MemoryPool = @import("stdx").MemoryPool;
 
 const Message = @import("../protocol/message.zig").Message;
+const Connection = @import("../protocol/connection.zig").Connection;
 
 pub const NodeConfig = struct {
     const Self = @This();
@@ -25,7 +24,7 @@ pub const NodeConfig = struct {
     max_connections: u16 = 1024,
     memory_pool_capacity: usize = 5_000,
     listener_configs: ?[]const ListenerConfig = null,
-    remote_configs: ?[]const RemoteConfig = null, // a list of hosts this node will attempt to automatically connect to
+    outbound_configs: ?[]const ConnectionConfig = null, // a list of hosts this node will attempt to automatically connect to
 
     pub fn validate(self: Self) ?[]const u8 {
         const cpu_core_count = std.Thread.getCpuCount() catch {
@@ -43,7 +42,7 @@ pub const NodeConfig = struct {
                 }
             }
         }
-        if (self.remote_configs) |remote_configs| {
+        if (self.outbound_configs) |remote_configs| {
             if (remote_configs.len == 0) return "`remotes` is non null but contains no entries";
             for (remote_configs) |remote_config| {
                 switch (remote_config.transport) {
@@ -173,9 +172,8 @@ pub const Node = struct {
         try self.initializeListeners();
         try self.spawnListeners();
 
-        // Start the listeners
-        try self.initializeListeners();
-        try self.spawnListeners();
+        // Start the outbound connections
+        try self.initializeOutboundConnections();
 
         // Start the core thread
         var ready_channel = UnbufferedChannel(bool).new();
@@ -223,7 +221,7 @@ pub const Node = struct {
                 self.mutex.lock();
                 defer self.mutex.unlock();
 
-                // spind down the workers
+                // spin down the workers
                 var worker_iterator = self.workers.valueIterator();
                 while (worker_iterator.next()) |entry| {
                     const worker = entry.*;
@@ -247,7 +245,7 @@ pub const Node = struct {
     }
 
     fn tick(self: *Self) !void {
-        try self.maybeAddConnections();
+        try self.maybeAddInboundConnections();
         // TODO: try self.processMessages()
     }
 
@@ -328,7 +326,19 @@ pub const Node = struct {
         }
     }
 
-    fn maybeAddConnections(self: *Self) !void {
+    fn initializeOutboundConnections(self: *Self) !void {
+        if (self.config.outbound_configs) |outbound_configs| {
+            for (outbound_configs) |outbound_config| {
+                switch (outbound_config.transport) {
+                    .tcp => {
+                        try self.addOutboundConnectionToWorker(outbound_config);
+                    },
+                }
+            }
+        }
+    }
+
+    fn maybeAddInboundConnections(self: *Self) !void {
         var listeners_iterator = self.listeners.valueIterator();
         while (listeners_iterator.next()) |entry| {
             const listener = entry.*;
@@ -371,7 +381,39 @@ pub const Node = struct {
         if (worker_with_min_connections == null) unreachable;
         const worker = worker_with_min_connections.?;
 
-        try worker.addConnection(socket);
+        try worker.addInboundConnection(socket);
+    }
+
+    fn addOutboundConnectionToWorker(self: *Self, config: ConnectionConfig) !void {
+        var worker_iter = self.workers.valueIterator();
+        var worker_with_min_connections: ?*Worker = null;
+        var min_connections: u32 = 0;
+
+        while (worker_iter.next()) |worker_ptr| {
+            const worker = worker_ptr.*;
+            if (worker_with_min_connections == null) {
+                worker_with_min_connections = worker;
+                min_connections = worker.connections.count();
+                continue;
+            }
+
+            if (worker.connections.count() < min_connections) {
+                worker_with_min_connections = worker;
+                min_connections = worker.connections.count();
+            }
+        }
+
+        if (worker_with_min_connections == null) unreachable;
+        const worker = worker_with_min_connections.?;
+
+        // create the socket
+        const address = try std.net.Address.parseIp4(config.host, config.port);
+        const socket_type: u32 = posix.SOCK.STREAM;
+        const protocol = posix.IPPROTO.TCP;
+        const socket = try posix.socket(address.any.family, socket_type, protocol);
+        errdefer posix.close(socket);
+
+        try worker.addOutboundConnection(socket, address);
     }
 };
 

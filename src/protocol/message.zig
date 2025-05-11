@@ -7,8 +7,6 @@ const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 const hash = @import("../hash.zig");
 const ProtocolError = @import("../errors.zig").ProtocolError;
-// const MessagePool = @import("../data_structures/memory_pool.zig").MessagePool;
-const MemoryPool = @import("stdx").MemoryPool;
 
 pub const MessageType = enum(u8) {
     undefined,
@@ -49,11 +47,6 @@ pub const Message = struct {
     headers: Headers,
     body_buffer: [constants.message_max_body_size]u8,
 
-    memory_pool: ?*MemoryPool(Message) = null,
-
-    // A reference to the next message to be processed
-    next: ?*Message,
-
     // how many times this message is referenced
     ref_count: atomic.Value(u32),
 
@@ -62,21 +55,8 @@ pub const Message = struct {
         return Message{
             .headers = Headers{ .message_type = .undefined },
             .body_buffer = undefined,
-            .next = null,
             .ref_count = atomic.Value(u32).init(0),
-            .memory_pool = null,
         };
-    }
-
-    pub fn create(memory_pool: *MemoryPool(Message)) !*Message {
-        const message = try memory_pool.create();
-        errdefer memory_pool.destroy(message);
-
-        message.* = Message.new();
-        message.memory_pool = memory_pool;
-        message.ref();
-
-        return message;
     }
 
     pub fn refs(self: *Self) u32 {
@@ -88,11 +68,11 @@ pub const Message = struct {
     }
 
     pub fn deref(self: *Self) void {
-        if (self.ref_count.fetchSub(1, .seq_cst) == 1) {
-            if (self.memory_pool) |memory_pool| {
-                memory_pool.destroy(self);
-            }
-        }
+        // this is a logical guard as we should never be dereferencing messages more than we
+        // have previously referenced them
+        assert(self.refs() > 0);
+
+        _ = self.ref_count.fetchSub(1, .seq_cst);
     }
 
     // this needs to be a mut ref to self

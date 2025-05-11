@@ -20,15 +20,15 @@ const RingBuffer = @import("stdx").RingBuffer;
 const MemoryPool = @import("stdx").MemoryPool;
 
 const ConnectionState = enum {
-    close,
+    closing,
     closed,
     connected,
     connecting,
 };
 
 const ConnectionType = enum {
-    node,
-    client,
+    inbound,
+    outbound,
 };
 
 pub const Connection = struct {
@@ -182,7 +182,7 @@ pub const Connection = struct {
         // }
 
         switch (self.state) {
-            .close => {
+            .closing => {
                 self.state = .closed;
                 log.info("connection closed {}", .{self.origin_id});
 
@@ -290,7 +290,7 @@ pub const Connection = struct {
 
         // Connection closed by peer
         if (bytes == 0) {
-            self.state = .close;
+            self.state = .closing;
             return;
         }
 
@@ -307,7 +307,7 @@ pub const Connection = struct {
         for (self.parsed_messages.items) |message| {
             // assume that invalid messages are poison and close this connection
             if (message.validate()) |reason| {
-                self.state = .close;
+                self.state = .closing;
                 log.err("invalid message: {s}", .{reason});
                 return;
             }
@@ -334,7 +334,7 @@ pub const Connection = struct {
 
         // Process messages
         for (message_ptrs, self.parsed_messages.items) |message_ptr, message| {
-            if (self.connection_type == .client and message.headers.message_type == .accept) {
+            if (self.connection_type == .outbound and message.headers.message_type == .accept) {
                 assert(self.origin_id == 0);
 
                 const accept_headers: *const Accept = message.headers.intoConst(.accept).?;
@@ -348,20 +348,20 @@ pub const Connection = struct {
             }
 
             message_ptr.* = message;
-            message_ptr.memory_pool = self.memory_pool;
             message_ptr.ref();
 
             // this is kind of redundent because the memory_pool should be handling this
             assert(message_ptr.refs() == 1);
         }
+
         self.parsed_messages.items.len = 0;
 
         const n = self.inbox.enqueueMany(message_ptrs);
         if (n < message_ptrs.len) {
             log.err("could not enqueue all message ptrs. dropping {} messages", .{message_ptrs[n..].len});
-            for (message_ptrs[n..]) |ptr| {
-                ptr.deref();
-                self.memory_pool.destroy(ptr);
+            for (message_ptrs[n..]) |message_ptr| {
+                message_ptr.deref();
+                self.memory_pool.destroy(message_ptr);
             }
         }
     }
@@ -381,25 +381,13 @@ pub const Connection = struct {
         self.send_submitted = false;
     }
 
-    pub fn onClose(self: *Connection, comp: *IO.Completion, res: IO.CloseError!void) void {
-        res catch {};
-        _ = comp;
-
-        // this means that the connection has been closed by the peer and we should
-        // shutdown the connection
-        self.state = .closed;
-        self.close_submitted = false;
-
-        std.debug.print("closed connection\n", .{});
-    }
-
     pub fn onConnect(self: *Connection, completion: *IO.Completion, result: IO.ConnectError!void) void {
         // reset the submission
         self.connect_submitted = false;
 
         _ = completion;
         _ = result catch |err| {
-            self.state = .close;
+            self.state = .closing;
             log.err("onConnect err closing conn {any}", .{err});
         };
     }

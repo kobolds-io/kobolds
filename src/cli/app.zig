@@ -18,7 +18,7 @@ const ClientConfig = @import("../client/client.zig").ClientConfig;
 
 const Node = @import("../node/node2.zig").Node;
 const NodeConfig = @import("../node/node2.zig").NodeConfig;
-const RemoteConfig = @import("../node/listener.zig").RemoteConfig;
+const ConnectionConfig = @import("../node/listener.zig").ConnectionConfig;
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
 
 var client_config = ClientConfig{
@@ -272,12 +272,6 @@ pub fn run() !void {
     return app_runner.run(&app);
 }
 
-// Action function to execute when the "short" command is invoked.
-fn run_server() !void {
-    // Log a debug message indicating the server is listening on the specified host and port.
-    std.log.debug("server is listening on {s}:{d}", .{ config.host, config.port });
-}
-
 pub fn nodeListen() !void {
     // creating a client to communicate with the node
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -312,24 +306,22 @@ pub fn nodePing() !void {
     defer _ = gpa.deinit();
 
     // remote node to connect to
-    const remote_config = RemoteConfig{
+    const outbound_config = ConnectionConfig{
         .host = "127.0.0.1",
         .port = 8000,
         .transport = .tcp,
     };
 
-    const remote_configs = [_]RemoteConfig{remote_config};
+    const outbound_configs = [_]ConnectionConfig{outbound_config};
 
-    node_config2.remote_configs = &remote_configs;
+    node_config2.worker_threads = 1;
+    node_config2.outbound_configs = &outbound_configs;
 
     var node = try Node.init(allocator, node_config2);
     defer node.deinit();
 
     try node.start();
     defer node.close();
-
-    // send a ping message and receive a pong
-    // const rep = try node.ping();
 
     registerSigintHandler();
 

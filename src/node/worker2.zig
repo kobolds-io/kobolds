@@ -35,6 +35,7 @@ pub const Worker = struct {
     io: *IO,
     connections_mutex: std.Thread.Mutex,
     connections: std.AutoHashMap(uuid.Uuid, *Connection),
+    uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
 
     pub fn init(allocator: std.mem.Allocator, id: usize, node: *Node) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -62,6 +63,7 @@ pub const Worker = struct {
             .node = node,
             .io = io,
             .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
+            .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .connections_mutex = std.Thread.Mutex{},
         };
     }
@@ -76,6 +78,17 @@ pub const Worker = struct {
         }
 
         self.connections.deinit();
+
+        var uninitialized_connections_iter = self.uninitialized_connections.valueIterator();
+        while (uninitialized_connections_iter.next()) |entry| {
+            const connection = entry.*;
+
+            connection.deinit();
+            self.allocator.destroy(connection);
+        }
+
+        self.uninitialized_connections.deinit();
+
         self.io.deinit();
 
         self.allocator.destroy(self.io);
@@ -118,16 +131,8 @@ pub const Worker = struct {
         switch (self.state) {
             .closed, .closing => return,
             else => {
-                self.connections_mutex.lock();
-                defer self.connections_mutex.unlock();
+                while (!self.closeAllConnections()) {}
 
-                var connections_iterator = self.connections.valueIterator();
-                while (connections_iterator.next()) |entry| {
-                    const connection = entry.*;
-
-                    connection.deinit();
-                    self.allocator.destroy(connection);
-                }
                 // block until this is received by the background thread
                 self.close_channel.send(true);
             },
@@ -138,29 +143,59 @@ pub const Worker = struct {
     }
 
     pub fn tick(self: *Self) !void {
+        {
+            self.connections_mutex.lock();
+            defer self.connections_mutex.unlock();
 
-        // loop over all connections and gather their messages
-        var connections_iter = self.connections.iterator();
-        while (connections_iter.next()) |entry| {
-            const conn = entry.value_ptr.*;
+            var uninitialized_connections_iter = self.uninitialized_connections.iterator();
+            while (uninitialized_connections_iter.next()) |entry| {
+                const tmp_id = entry.key_ptr.*;
+                const conn = entry.value_ptr.*;
 
-            try self.gather(conn);
+                try self.gather(conn);
 
-            conn.tick() catch |err| {
-                log.err("could not tick connection error: {any}", .{err});
-                continue;
-            };
+                conn.tick() catch |err| {
+                    log.err("could not tick uninitialized_connection error: {any}", .{err});
+                    continue;
+                };
 
-            if (conn.state == .closed) {
-                try self.cleanupConnection(conn);
-                continue;
+                if (conn.state == .connected and conn.origin_id != 0) {
+                    // the connection is now valid and ready for events
+                    // move the connection to the regular connections map
+                    try self.connections.put(conn.origin_id, conn);
+
+                    // remove the connection from the uninitialized_connections map
+                    assert(self.uninitialized_connections.remove(tmp_id));
+                }
+
+                if (conn.state == .closed) {
+                    try self.cleanupUninitializedConnection(conn);
+                    continue;
+                }
+            }
+
+            // loop over all connections and gather their messages
+            var connections_iter = self.connections.iterator();
+            while (connections_iter.next()) |entry| {
+                const conn = entry.value_ptr.*;
+
+                try self.gather(conn);
+
+                conn.tick() catch |err| {
+                    log.err("could not tick connection error: {any}", .{err});
+                    continue;
+                };
+
+                if (conn.state == .closed) {
+                    try self.cleanupConnection(conn);
+                    continue;
+                }
             }
         }
-
         // try self.process();
     }
 
-    pub fn addConnection(self: *Self, socket: posix.socket_t) !void {
+    pub fn addInboundConnection(self: *Self, socket: posix.socket_t) !void {
         // we are just gonna try to close this socket if anything blows up
         errdefer posix.close(socket);
 
@@ -171,7 +206,7 @@ pub const Worker = struct {
         const conn_id = uuid.v7.new();
         connection.* = try Connection.init(
             conn_id,
-            .node,
+            .inbound,
             self.io,
             socket,
             self.allocator,
@@ -189,7 +224,7 @@ pub const Worker = struct {
 
         const accept_message = self.node.memory_pool.create() catch |err| {
             log.err("unable to create an accept message for connection {any}", .{err});
-            connection.state = .close;
+            connection.state = .closing;
             return;
         };
         accept_message.* = Message.new();
@@ -207,13 +242,58 @@ pub const Worker = struct {
         log.info("worker: {} added connection {}", .{ self.id, conn_id });
     }
 
-    fn removeConnection(self: *Self, conn: *Connection) void {
+    pub fn addOutboundConnection(self: *Self, socket: posix.socket_t, address: std.net.Address) !void {
+        // initialize the connection
+        const conn = try self.allocator.create(Connection);
+        errdefer self.allocator.destroy(conn);
+
+        const tmp_conn_id = uuid.v7.new();
+        conn.* = try Connection.init(
+            0,
+            .outbound,
+            self.io,
+            socket,
+            self.allocator,
+            self.node.memory_pool,
+        );
+        errdefer conn.deinit();
+
+        conn.state = .connecting;
+
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
+
+        try self.uninitialized_connections.put(tmp_conn_id, conn);
+
+        self.io.connect(
+            *Connection,
+            conn,
+            Connection.onConnect,
+            conn.connect_completion,
+            socket,
+            address,
+        );
+        conn.connect_submitted = true;
+    }
+
+    fn removeConnection(self: *Self, conn: *Connection) void {
+        // self.connections_mutex.lock();
+        // defer self.connections_mutex.unlock();
 
         _ = self.connections.remove(conn.origin_id);
 
         log.info("worker: {} removed connection {}", .{ self.id, conn.origin_id });
+        conn.deinit();
+        self.allocator.destroy(conn);
+    }
+
+    fn cleanupUninitializedConnection(self: *Self, conn: *Connection) !void {
+        // self.connections_mutex.lock();
+        // defer self.connections_mutex.unlock();
+
+        _ = self.uninitialized_connections.remove(conn.origin_id);
+        log.info("worker: {} removed uninitialized_connection {}", .{ self.id, conn.origin_id });
+
         conn.deinit();
         self.allocator.destroy(conn);
     }
@@ -275,7 +355,10 @@ pub const Worker = struct {
 
         while (conn.inbox.dequeue()) |message| {
             // defer self.node.processed_messages_count += 1;
-
+            defer {
+                message.deref();
+                if (message.refs() == 0) self.node.memory_pool.destroy(message);
+            }
             switch (message.headers.message_type) {
                 .ping => {
                     // Since this is a `ping` we don't need to do any extra work to figure out how to respond
@@ -391,12 +474,57 @@ pub const Worker = struct {
                     // TODO: send unsubscribe reply
                 },
                 else => {
-                    message.deref();
-                    if (message.refs() == 0) self.node.memory_pool.destroy(message);
+                    //                     message.deref();
                 },
             }
         }
 
         assert(conn.inbox.count == 0);
+    }
+
+    fn closeAllConnections(self: *Self) bool {
+        var all_connections_closed = true;
+
+        var uninitialized_connections_iter = self.uninitialized_connections.valueIterator();
+        while (uninitialized_connections_iter.next()) |entry| {
+            var conn = entry.*;
+            switch (conn.state) {
+                .closed => continue,
+                .closing => {
+                    all_connections_closed = false;
+                },
+                else => {
+                    conn.state = .closing;
+                    all_connections_closed = false;
+                },
+            }
+
+            conn.tick() catch |err| {
+                log.err("worker uninitialized_connection tick err {any}", .{err});
+                unreachable;
+            };
+        }
+
+        var connections_iter = self.connections.valueIterator();
+        while (connections_iter.next()) |entry| {
+            var conn = entry.*;
+            switch (conn.state) {
+                .closed => continue,
+                .closing => {
+                    all_connections_closed = false;
+                },
+                else => {
+                    conn.state = .closing;
+                    all_connections_closed = false;
+                },
+            }
+
+            conn.tick() catch |err| {
+                log.err("worker connection tick err {any}", .{err});
+                unreachable;
+            };
+        }
+
+        return all_connections_closed;
     }
 };

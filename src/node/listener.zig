@@ -2,7 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const posix = std.posix;
 const net = std.net;
-const log = std.log.scoped(.Acceptor);
+const log = std.log.scoped(.Listener);
 
 const testing = std.testing;
 
@@ -19,7 +19,7 @@ const State = enum {
 
 // TODO: a user should be able to configure how many connections they want for a particular host.
 // TODO: a user should be able to provide a token/key for authentication to remotes
-pub const RemoteConfig = struct {
+pub const ConnectionConfig = struct {
     host: []const u8,
     port: u16,
     transport: Transport = .tcp,
@@ -32,7 +32,7 @@ pub const ListenerConfig = struct {
     port: u16 = 8000,
     transport: Transport = .tcp,
     /// a list of hosts that are allowed to communicate with this node. If `null`, all are allowed
-    allowed_remotes: ?[]const RemoteConfig = null,
+    allowed_inbound_connections: ?[]const ConnectionConfig = null,
 };
 
 pub const Transport = enum {
@@ -118,29 +118,29 @@ pub const Listener = struct {
 
         const address = std.net.Address.parseIp(self.config.host, self.config.port) catch |err| {
             log.err("could not parse ip {any}", .{err});
-            @panic("acceptor failed to run");
+            @panic("Listener failed to run");
         };
         const socket_type: u32 = posix.SOCK.STREAM;
         const protocol = posix.IPPROTO.TCP;
 
         const listener_socket = posix.socket(address.any.family, socket_type, protocol) catch |err| {
             log.err("unable to listen for connections on {s}:{d}: {any}", .{ self.config.host, self.config.port, err });
-            @panic("acceptor failed to run");
+            @panic("Listener failed to run");
         };
         defer posix.close(listener_socket);
 
         // add options to listener socket
         posix.setsockopt(listener_socket, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1))) catch |err| {
             log.err("unable to setsockopt {any}", .{err});
-            @panic("acceptor failed to run");
+            @panic("Listener failed to run");
         };
         posix.bind(listener_socket, &address.any, address.getOsSockLen()) catch |err| {
             log.err("unable to bind {any}", .{err});
-            @panic("acceptor failed to run");
+            @panic("Listener failed to run");
         };
         posix.listen(listener_socket, 128) catch |err| {
             log.err("unable to listen {any}", .{err});
-            @panic("acceptor failed to run");
+            @panic("Listener failed to run");
         };
 
         log.info("listening for TCP connections - {s}:{d}", .{ self.config.host, self.config.port });
@@ -185,7 +185,7 @@ pub const Listener = struct {
 
             self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch |err| {
                 log.err("unable to io.run_for_ns {any}", .{err});
-                @panic("acceptor failed to run");
+                @panic("Listener failed to run");
             };
         }
     }
