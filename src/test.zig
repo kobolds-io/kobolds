@@ -21,4 +21,5 @@ comptime {
     _ = @import("./utils.zig");
     _ = @import("./node/node2.zig");
     _ = @import("./node/worker2.zig");
+    _ = @import("./node/listener.zig");
 }

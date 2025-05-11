@@ -13,6 +13,8 @@ const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
 
 const Node = @import("../node/node.zig").Node;
 const NodeConfig = @import("../node/node.zig").NodeConfig;
+const RemoteConfig = @import("../node/listener.zig").RemoteConfig;
+const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
 
 const IO = @import("../io.zig").IO;
 
@@ -38,8 +40,6 @@ var client_config = ClientConfig{
 };
 
 var node_config2 = NodeConfig2{
-    .host = "127.0.0.1",
-    .port = 8000,
     .max_connections = 5,
 };
 
@@ -117,18 +117,18 @@ pub fn run() !void {
     const node_ping_command = cli.Command{
         .name = "ping",
         .description = cli.Description{ .one_line = "ping a node" },
-        .options = &.{
-            .{
-                .long_name = "host",
-                .help = "host to listen on",
-                .value_ref = app_runner.mkRef(&node_config2.host),
-            },
-            .{
-                .long_name = "port",
-                .help = "port to bind to",
-                .value_ref = app_runner.mkRef(&node_config2.port),
-            },
-        },
+        // .options = &.{
+        //     .{
+        //         .long_name = "host",
+        //         .help = "host to listen on",
+        //         .value_ref = app_runner.mkRef(&node_config2.host),
+        //     },
+        //     .{
+        //         .long_name = "port",
+        //         .help = "port to bind to",
+        //         .value_ref = app_runner.mkRef(&node_config2.port),
+        //     },
+        // },
         .target = .{ .action = .{ .exec = nodePing } },
     };
 
@@ -314,6 +314,16 @@ pub fn nodePing() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
+
+    // remote node to connect to
+    const remote_config = RemoteConfig{
+        .host = "127.0.0.1",
+        .port = 8000,
+        .transport = .tcp,
+    };
+
+    var remote_configs = [_]RemoteConfig{remote_config};
+    node_config2.remote_configs = &remote_configs;
 
     var client = try Node2.init(allocator, node_config2);
     defer client.deinit();

@@ -23,11 +23,11 @@ pub const Worker = struct {
     close_channel: *UnbufferedChannel(bool),
     done_channel: *UnbufferedChannel(bool),
     state: WorkerState,
-    id: u32,
+    id: usize,
     node: *Node,
     io: *IO,
 
-    pub fn init(allocator: std.mem.Allocator, id: u32, node: *Node) !Self {
+    pub fn init(allocator: std.mem.Allocator, id: usize, node: *Node) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
         errdefer allocator.destroy(close_channel);
 
