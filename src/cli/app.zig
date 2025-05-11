@@ -71,38 +71,33 @@ pub fn run() !void {
         .target = cli.CommandTarget{ .action = cli.CommandAction{ .exec = version } },
     };
 
-    // const node_listen_command = cli.Command{
-    //     .name = "listen",
-    //     .description = cli.Description{
-    //         .one_line = "listen for new connections",
-    //         .detailed = "start a node and listen for incomming connections",
-    //     },
+    const node_listen_command = cli.Command{
+        .name = "listen",
+        .description = cli.Description{
+            .one_line = "listen for incomming connections",
+            .detailed = "start a node and listen for incomming connections",
+        },
 
-    //     .options = &.{
-    //         .{
-    //             .long_name = "host",
-    //             .help = "host to listen on",
-    //             .value_ref = app_runner.mkRef(&node_config.host),
-    //         },
-    //         .{
-    //             .long_name = "port",
-    //             .help = "port to bind to",
-    //             .value_ref = app_runner.mkRef(&node_config.port),
-    //         },
-    //         .{
-    //             .long_name = "worker-threads",
-    //             .help = "worker threads to be spawned",
-    //             .value_ref = app_runner.mkRef(&node_config.worker_threads),
-    //         },
-    //         .{
-    //             .long_name = "worker-message-pool-capacity",
-    //             .help = "number of messages in each worker pool's capacity",
-    //             .value_ref = app_runner.mkRef(&node_config.worker_message_pool_capacity),
-    //         },
-    //     },
+        .options = &.{
+            // .{
+            //     .long_name = "host",
+            //     .help = "host to listen on",
+            //     .value_ref = app_runner.mkRef(&node_config.host),
+            // },
+            // .{
+            //     .long_name = "port",
+            //     .help = "port to bind to",
+            //     .value_ref = app_runner.mkRef(&node_config.port),
+            // },
+            .{
+                .long_name = "worker-threads",
+                .help = "worker threads to be spawned",
+                .value_ref = app_runner.mkRef(&node_config2.worker_threads),
+            },
+        },
 
-    //     .target = .{ .action = .{ .exec = nodeListen } },
-    // };
+        .target = .{ .action = .{ .exec = nodeListen } },
+    };
 
     const node_ping_command = cli.Command{
         .name = "ping",
@@ -245,7 +240,7 @@ pub fn run() !void {
         .description = cli.Description{ .one_line = "commands to control nodes" },
         .target = .{
             .subcommands = &.{
-                // node_listen_command,
+                node_listen_command,
                 node_ping_command,
                 // node_request_command,
                 // node_bench_command,
@@ -284,21 +279,30 @@ fn run_server() !void {
 }
 
 pub fn nodeListen() !void {
+    // creating a client to communicate with the node
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    // validate the config
-    const max_cpu_count = try std.Thread.getCpuCount();
-    assert(node_config2.worker_threads >= 1);
-    assert(node_config2.worker_threads <= max_cpu_count);
+    const listener_config = ListenerConfig{
+        .host = "127.0.0.1",
+        .port = 8000,
+        .transport = .tcp,
+    };
+
+    const listener_configs = [_]ListenerConfig{listener_config};
+
+    node_config2.listener_configs = &listener_configs;
 
     var node = try Node.init(allocator, node_config2);
     defer node.deinit();
 
-    // FIX: this is broken now
+    try node.start();
+    defer node.close();
 
-    // try node.run();
+    registerSigintHandler();
+
+    while (!sigint_received) {}
 }
 
 pub fn nodePing() !void {
@@ -316,16 +320,6 @@ pub fn nodePing() !void {
 
     const remote_configs = [_]RemoteConfig{remote_config};
 
-    // remote node to connect to
-    const listener_config = ListenerConfig{
-        .host = "127.0.0.1",
-        .port = 8000,
-        .transport = .tcp,
-    };
-
-    const listener_configs = [_]ListenerConfig{listener_config};
-
-    node_config2.listener_configs = &listener_configs;
     node_config2.remote_configs = &remote_configs;
 
     var node = try Node.init(allocator, node_config2);
@@ -334,8 +328,8 @@ pub fn nodePing() !void {
     try node.start();
     defer node.close();
 
-    try node.connect();
-    defer node.disconnect();
+    // send a ping message and receive a pong
+    // const rep = try node.ping();
 
     registerSigintHandler();
 
@@ -510,10 +504,11 @@ pub fn noop() !void {}
 
 var sigint_received: bool = false;
 
+/// Intercepts the SIGINT signal and allows for actions after the signal is triggered
 fn registerSigintHandler() void {
-    // This function will be called when SIGINT is received
     const onSigint = struct {
         fn onSigint(_: i32) callconv(.C) void {
+            log.warn("sigint received", .{});
             sigint_received = true;
         }
     }.onSigint;
