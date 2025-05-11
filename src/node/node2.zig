@@ -6,6 +6,8 @@ const posix = std.posix;
 
 const uuid = @import("uuid");
 
+const uuid = @import("uuid");
+
 const Worker = @import("./worker2.zig").Worker;
 const Listener = @import("./listener.zig").Listener;
 const RemoteConfig = @import("./listener.zig").RemoteConfig;
@@ -166,6 +168,8 @@ pub const Node = struct {
         // Start the workers
         try self.initializeWorkers();
         try self.spawnWorkerThreads();
+
+        // Start the listeners
         try self.initializeListeners();
         try self.spawnListeners();
 

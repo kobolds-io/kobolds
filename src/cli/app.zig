@@ -336,14 +336,14 @@ pub fn nodePing() !void {
     node_config2.listener_configs = &listener_configs;
     node_config2.remote_configs = &remote_configs;
 
-    var client = try Node2.init(allocator, node_config2);
-    defer client.deinit();
+    var node = try Node2.init(allocator, node_config2);
+    defer node.deinit();
 
-    try client.run();
-    defer client.close();
+    try node.start();
+    defer node.close();
 
-    try client.connect();
-    defer client.disconnect();
+    try node.connect();
+    defer node.disconnect();
 
     std.time.sleep(5 * std.time.ns_per_s);
 }
