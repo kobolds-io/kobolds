@@ -67,6 +67,14 @@ pub const Worker = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        var connections_iter = self.connections.valueIterator();
+        while (connections_iter.next()) |entry| {
+            const connection = entry.*;
+
+            connection.deinit();
+            self.allocator.destroy(connection);
+        }
+
         self.connections.deinit();
         self.io.deinit();
 
@@ -130,7 +138,26 @@ pub const Worker = struct {
     }
 
     pub fn tick(self: *Self) !void {
-        _ = self;
+
+        // loop over all connections and gather their messages
+        var connections_iter = self.connections.iterator();
+        while (connections_iter.next()) |entry| {
+            const conn = entry.value_ptr.*;
+
+            try self.gather(conn);
+
+            conn.tick() catch |err| {
+                log.err("could not tick connection error: {any}", .{err});
+                continue;
+            };
+
+            if (conn.state == .closed) {
+                try self.cleanupConnection(conn);
+                continue;
+            }
+        }
+
+        // try self.process();
     }
 
     pub fn addConnection(self: *Self, socket: posix.socket_t) !void {
@@ -178,5 +205,198 @@ pub const Worker = struct {
         try connection.outbox.enqueue(accept_message);
 
         log.info("worker: {} added connection {}", .{ self.id, conn_id });
+    }
+
+    fn removeConnection(self: *Self, conn: *Connection) void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        _ = self.connections.remove(conn.origin_id);
+
+        log.info("worker: {} removed connection {}", .{ self.id, conn.origin_id });
+        conn.deinit();
+        self.allocator.destroy(conn);
+    }
+
+    fn cleanupConnection(self: *Self, conn: *Connection) !void {
+        // Clean up publishers and subscribers associated with this connection
+        // var conn_publisher_keys = std.ArrayList(u128).init(self.allocator);
+        // defer conn_publisher_keys.deinit();
+
+        // var publishers_iter = self.publishers.iterator();
+        // while (publishers_iter.next()) |publisher_entry| {
+        //     const publisher_key = publisher_entry.key_ptr.*;
+        //     const publisher = publisher_entry.value_ptr.*;
+
+        //     // FIX: the publisher may be in the middle of publishing
+        //     // we should ensure that it is safe to destroy this publisher
+
+        //     if (publisher.conn_id == conn.origin_id) {
+        //         if (self.node.bus_manager.get(publisher.topic_name)) |bus| {
+        //             _ = try bus.removePublisher(publisher.key);
+        //         }
+
+        //         publisher.deinit();
+        //         self.allocator.destroy(publisher);
+        //         try conn_publisher_keys.append(publisher_key);
+        //     }
+        // }
+
+        // for (conn_publisher_keys.items) |publisher_key| {
+        //     _ = self.publishers.remove(publisher_key);
+        // }
+
+        // var conn_subscriber_keys = std.ArrayList(u128).init(self.allocator);
+        // defer conn_subscriber_keys.deinit();
+
+        // var subscribers_iter = self.subscribers.iterator();
+        // while (subscribers_iter.next()) |subscriber_entry| {
+        //     const subscriber_key = subscriber_entry.key_ptr.*;
+        //     const subscriber = subscriber_entry.value_ptr.*;
+
+        //     if (subscriber.conn_id == conn.origin_id) {
+        //         subscriber.unsubscribe() catch @panic("subscriber could not unsubscribe from bus");
+        //         subscriber.deinit();
+        //         self.allocator.destroy(subscriber);
+        //         try conn_subscriber_keys.append(subscriber_key);
+        //     }
+        // }
+
+        // for (conn_subscriber_keys.items) |subscriber_key| {
+        //     _ = self.subscribers.remove(subscriber_key);
+        // }
+
+        self.removeConnection(conn);
+    }
+
+    fn gather(self: *Self, conn: *Connection) !void {
+        // check to see if there are messages
+        if (conn.inbox.count == 0) return;
+
+        while (conn.inbox.dequeue()) |message| {
+            // defer self.node.processed_messages_count += 1;
+
+            switch (message.headers.message_type) {
+                .ping => {
+                    // Since this is a `ping` we don't need to do any extra work to figure out how to respond
+                    message.headers.message_type = .pong;
+                    message.headers.origin_id = self.node.id;
+                    message.setTransactionId(message.transactionId());
+                    message.setErrorCode(.ok);
+
+                    assert(message.refs() == 1);
+
+                    if (conn.outbox.enqueue(message)) |_| {} else |err| {
+                        log.err("Failed to enqueue message to outbox: {}", .{err});
+                        message.deref(); // Undo reference if enqueue fails
+                    }
+                },
+                .publish => {
+                    // // get the publisher's key
+                    // const publisher_key = utils.generateKey(message.topicName(), conn.origin_id);
+                    // if (self.publishers.get(publisher_key)) |publisher| {
+                    //     publisher.publish(message) catch |err| {
+                    //         log.err("could not publish message {any}", .{err});
+                    //         message.deref();
+                    //     };
+                    //     return;
+                    // }
+
+                    // const publisher = try self.allocator.create(Publisher);
+                    // errdefer self.allocator.destroy(publisher);
+
+                    // publisher.* = try Publisher.init(
+                    //     self.allocator,
+                    //     publisher_key,
+                    //     conn.origin_id,
+                    //     constants.publisher_max_queue_capacity,
+                    //     message.topicName(),
+                    // );
+                    // errdefer publisher.deinit();
+
+                    // try self.publishers.put(publisher_key, publisher);
+
+                    // // check if the bus even exists
+                    // const bus_manager = self.node.bus_manager;
+                    // const bus = try bus_manager.findOrCreate(message.topicName());
+                    // try bus.addPublisher(publisher);
+
+                    // publisher.publish(message) catch |err| {
+                    //     log.err("could not publish message {any}", .{err});
+                    //     message.deref();
+                    // };
+                },
+                .subscribe => {
+                    // defer message.deref();
+                    // log.debug("subscribe message received!", .{});
+
+                    // const subscriber_key = utils.generateKey(message.topicName(), conn.origin_id);
+
+                    // // check if this connection is already subscribed to this topic
+                    // if (self.subscribers.contains(subscriber_key)) {
+                    //     // this is not allowed
+                    //     const reply = try Message.create(self.message_pool);
+                    //     errdefer reply.deref();
+
+                    //     reply.headers.message_type = .reply;
+                    //     reply.setTopicName(message.topicName());
+                    //     reply.setTransactionId(message.transactionId());
+                    //     reply.setErrorCode(.bad_request); // TODO: this should be a better error
+
+                    //     try conn.outbox.enqueue(reply);
+                    //     return;
+                    // }
+
+                    // const bus_manager = self.node.bus_manager;
+                    // const bus = try bus_manager.findOrCreate(message.topicName());
+
+                    // const subscriber = try self.allocator.create(Subscriber);
+                    // errdefer self.allocator.destroy(subscriber);
+
+                    // subscriber.* = try Subscriber.init(
+                    //     self.allocator,
+                    //     subscriber_key,
+                    //     conn.origin_id,
+                    //     constants.subscriber_max_queue_capacity,
+                    //     bus,
+                    // );
+                    // errdefer subscriber.deinit();
+
+                    // try self.subscribers.put(subscriber_key, subscriber);
+                    // try subscriber.subscribe();
+                    // errdefer _ = subscriber.unsubscribe() catch @panic("subscriber could not unsubscribe");
+
+                    // // Reply to the subscribe request
+                    // const reply = try Message.create(self.message_pool);
+                    // errdefer reply.deref();
+
+                    // reply.headers.message_type = .reply;
+                    // reply.setTopicName(message.topicName());
+                    // reply.setTransactionId(message.transactionId());
+                    // reply.setErrorCode(.ok);
+
+                    // try conn.outbox.enqueue(reply);
+                },
+                .unsubscribe => {
+                    // defer message.deref();
+                    // log.debug("unsubscribe message received!", .{});
+
+                    // const subscriber_key = utils.generateKey(message.topicName(), conn.origin_id);
+
+                    // if (self.subscribers.get(subscriber_key)) |subscriber| {
+                    //     try subscriber.unsubscribe();
+                    //     _ = self.subscribers.remove(subscriber_key);
+                    // }
+
+                    // TODO: send unsubscribe reply
+                },
+                else => {
+                    message.deref();
+                    if (message.refs() == 0) self.node.memory_pool.destroy(message);
+                },
+            }
+        }
+
+        assert(conn.inbox.count == 0);
     }
 };

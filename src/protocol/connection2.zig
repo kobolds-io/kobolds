@@ -67,7 +67,7 @@ pub const Connection = struct {
         io: *IO,
         socket: posix.socket_t,
         allocator: std.mem.Allocator,
-        message_pool: *MemoryPool(Message),
+        memory_pool: *MemoryPool(Message),
     ) !Connection {
         const recv_completion = try allocator.create(IO.Completion);
         errdefer allocator.destroy(recv_completion);
@@ -110,7 +110,7 @@ pub const Connection = struct {
             .connect_submitted = false,
             .inbox = inbox,
             .io = io,
-            .memory_pool = message_pool,
+            .memory_pool = memory_pool,
             .messages_recv = 0,
             .messages_sent = 0,
             .origin_id = id,
@@ -319,7 +319,7 @@ pub const Connection = struct {
             self.allocator,
             @intCast(self.parsed_messages.items.len),
         ) catch |err| {
-            log.err("inbox message_pool.createN() returned err: {any}", .{err});
+            log.err("inbox memory_pool.createN() returned err: {any}", .{err});
             return;
         };
         defer self.allocator.free(message_ptrs);
@@ -348,10 +348,10 @@ pub const Connection = struct {
             }
 
             message_ptr.* = message;
-            message_ptr.message_pool = self.memory_pool;
+            message_ptr.memory_pool = self.memory_pool;
             message_ptr.ref();
 
-            // this is kind of redundent because the message_pool should be handling this
+            // this is kind of redundent because the memory_pool should be handling this
             assert(message_ptr.refs() == 1);
         }
         self.parsed_messages.items.len = 0;

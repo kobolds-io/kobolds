@@ -7,7 +7,8 @@ const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 const hash = @import("../hash.zig");
 const ProtocolError = @import("../errors.zig").ProtocolError;
-const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
+// const MessagePool = @import("../data_structures/memory_pool.zig").MessagePool;
+const MemoryPool = @import("stdx").MemoryPool;
 
 pub const MessageType = enum(u8) {
     undefined,
@@ -48,7 +49,7 @@ pub const Message = struct {
     headers: Headers,
     body_buffer: [constants.message_max_body_size]u8,
 
-    message_pool: ?*MessagePool = null,
+    memory_pool: ?*MemoryPool(Message) = null,
 
     // A reference to the next message to be processed
     next: ?*Message,
@@ -63,16 +64,16 @@ pub const Message = struct {
             .body_buffer = undefined,
             .next = null,
             .ref_count = atomic.Value(u32).init(0),
-            .message_pool = null,
+            .memory_pool = null,
         };
     }
 
-    pub fn create(message_pool: *MessagePool) !*Message {
-        const message = try message_pool.create();
-        errdefer message_pool.destroy(message);
+    pub fn create(memory_pool: *MemoryPool(Message)) !*Message {
+        const message = try memory_pool.create();
+        errdefer memory_pool.destroy(message);
 
         message.* = Message.new();
-        message.message_pool = message_pool;
+        message.memory_pool = memory_pool;
         message.ref();
 
         return message;
@@ -88,8 +89,8 @@ pub const Message = struct {
 
     pub fn deref(self: *Self) void {
         if (self.ref_count.fetchSub(1, .seq_cst) == 1) {
-            if (self.message_pool) |message_pool| {
-                message_pool.destroy(self);
+            if (self.memory_pool) |memory_pool| {
+                memory_pool.destroy(self);
             }
         }
     }
