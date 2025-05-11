@@ -199,6 +199,8 @@ pub const Listener = struct {
             posix.close(socket);
         };
 
+        const unspecified_address = net.Address.parseIp("0.0.0.0", 0) catch unreachable;
+
         if (self.config.allowed_inbound_connections) |allowed_inbound_connections| {
             var allowed = false;
             for (allowed_inbound_connections) |inbound_connection_config| {
@@ -206,6 +208,12 @@ pub const Listener = struct {
                     log.err("could not part allowed_inbound_connection address {any}", .{err});
                     continue;
                 };
+
+                if (addr.in.sa.addr == unspecified_address.in.sa.addr) {
+                    log.info("inbound connection from {any} is allowed by unspecified_address {}", .{ inbound_address, unspecified_address });
+                    allowed = true;
+                    break;
+                }
 
                 // FIX: this can be much more robust. What this tells us that the inbound connection is from
                 //  a whitelisted IP address. We should also discriminate for ports

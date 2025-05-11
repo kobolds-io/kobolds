@@ -20,7 +20,7 @@ const RingBuffer = @import("stdx").RingBuffer;
 const MemoryPool = @import("stdx").MemoryPool;
 
 pub const InboundConnectionConfig = struct {
-    host: []const u8 = "unknown",
+    host: []const u8 = "0.0.0.0",
     port: u16 = 0,
     transport: Transport = .tcp,
 };

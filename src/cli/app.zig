@@ -280,7 +280,7 @@ pub fn nodeListen() !void {
     defer _ = gpa.deinit();
 
     const inbound_connection = InboundConnectionConfig{
-        .host = "127.0.0.2",
+        .host = "0.0.0.0",
         .port = 0,
         .transport = .tcp,
     };
