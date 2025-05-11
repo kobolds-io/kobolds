@@ -17,9 +17,7 @@ const ProtocolError = @import("../errors.zig").ProtocolError;
 
 // data structures
 const RingBuffer = @import("stdx").RingBuffer;
-
-// TODO: convert from message pool to MemoryPool
-const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
+const MemoryPool = @import("stdx").MemoryPool;
 
 const ConnectionState = enum {
     close,
@@ -44,7 +42,7 @@ pub const Connection = struct {
     connect_submitted: bool,
     inbox: *RingBuffer(*Message),
     io: *IO,
-    message_pool: *MessagePool,
+    memory_pool: *MemoryPool(Message),
     messages_recv: u128,
     messages_sent: u128,
     origin_id: uuid.Uuid,
@@ -69,7 +67,7 @@ pub const Connection = struct {
         io: *IO,
         socket: posix.socket_t,
         allocator: std.mem.Allocator,
-        message_pool: *MessagePool,
+        message_pool: *MemoryPool(Message),
     ) !Connection {
         const recv_completion = try allocator.create(IO.Completion);
         errdefer allocator.destroy(recv_completion);
@@ -112,7 +110,7 @@ pub const Connection = struct {
             .connect_submitted = false,
             .inbox = inbox,
             .io = io,
-            .message_pool = message_pool,
+            .memory_pool = message_pool,
             .messages_recv = 0,
             .messages_sent = 0,
             .origin_id = id,
@@ -144,10 +142,12 @@ pub const Connection = struct {
     pub fn deinit(self: *Connection) void {
         while (self.outbox.dequeue()) |message| {
             message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
         while (self.inbox.dequeue()) |message| {
             message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
         self.inbox.deinit();
@@ -236,8 +236,10 @@ pub const Connection = struct {
 
                 var i: usize = 0;
                 while (self.outbox.dequeue()) |message| : (i += 1) {
-                    defer message.deref();
-
+                    defer {
+                        message.deref();
+                        if (message.refs() == 0) self.memory_pool.destroy(message);
+                    }
                     const message_size = message.size();
 
                     message.encode(buf[0..message_size]);
@@ -313,7 +315,7 @@ pub const Connection = struct {
 
         assert(self.parsed_message_ptrs.items.len >= self.parsed_message_ptrs.items.len);
 
-        const message_ptrs = self.message_pool.createN(
+        const message_ptrs = self.memory_pool.createN(
             self.allocator,
             @intCast(self.parsed_messages.items.len),
         ) catch |err| {
@@ -325,7 +327,7 @@ pub const Connection = struct {
         if (message_ptrs.len != self.parsed_messages.items.len) {
             log.err("not enough node ptrs {} for parsed_messages {}", .{ message_ptrs.len, self.parsed_messages.items.len });
             for (message_ptrs) |message_ptr| {
-                self.message_pool.destroy(message_ptr);
+                self.memory_pool.destroy(message_ptr);
             }
             return;
         }
@@ -346,7 +348,7 @@ pub const Connection = struct {
             }
 
             message_ptr.* = message;
-            message_ptr.message_pool = self.message_pool;
+            message_ptr.message_pool = self.memory_pool;
             message_ptr.ref();
 
             // this is kind of redundent because the message_pool should be handling this
@@ -359,6 +361,7 @@ pub const Connection = struct {
             log.err("could not enqueue all message ptrs. dropping {} messages", .{message_ptrs[n..].len});
             for (message_ptrs[n..]) |ptr| {
                 ptr.deref();
+                self.memory_pool.destroy(ptr);
             }
         }
     }
@@ -399,9 +402,5 @@ pub const Connection = struct {
             self.state = .close;
             log.err("onConnect err closing conn {any}", .{err});
         };
-
-        // self.state = .connected;
-
-        // log.info("connected ", .{});
     }
 };
