@@ -12,6 +12,7 @@ const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 
 const IO = @import("../io.zig").IO;
 const Node = @import("./node2.zig").Node;
+const OutboundConnectionConfig = @import("./listener.zig").OutboundConnectionConfig;
 
 const Connection = @import("../protocol/connection2.zig").Connection;
 const Message = @import("../protocol/message.zig").Message;
@@ -242,7 +243,17 @@ pub const Worker = struct {
         log.info("worker: {} added connection {}", .{ self.id, conn_id });
     }
 
-    pub fn addOutboundConnection(self: *Self, socket: posix.socket_t, address: std.net.Address) !void {
+    // TODO: the config should be passed to the connection so it can be tracked
+    //     the connection needs to be able to reconnect if the config says it should
+    pub fn addOutboundConnection(self: *Self, config: OutboundConnectionConfig) !void {
+
+        // create the socket
+        const address = try std.net.Address.parseIp4(config.host, config.port);
+        const socket_type: u32 = posix.SOCK.STREAM;
+        const protocol = posix.IPPROTO.TCP;
+        const socket = try posix.socket(address.any.family, socket_type, protocol);
+        errdefer posix.close(socket);
+
         // initialize the connection
         const conn = try self.allocator.create(Connection);
         errdefer self.allocator.destroy(conn);

@@ -8,8 +8,9 @@ const uuid = @import("uuid");
 
 const Worker = @import("./worker2.zig").Worker;
 const Listener = @import("./listener.zig").Listener;
-const ConnectionConfig = @import("./listener.zig").ConnectionConfig;
 const ListenerConfig = @import("./listener.zig").ListenerConfig;
+const InboundConnectionConfig = @import("./listener.zig").InboundConnectionConfig;
+const OutboundConnectionConfig = @import("./listener.zig").OutboundConnectionConfig;
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const MemoryPool = @import("stdx").MemoryPool;
@@ -24,7 +25,7 @@ pub const NodeConfig = struct {
     max_connections: u16 = 1024,
     memory_pool_capacity: usize = 5_000,
     listener_configs: ?[]const ListenerConfig = null,
-    outbound_configs: ?[]const ConnectionConfig = null, // a list of hosts this node will attempt to automatically connect to
+    outbound_configs: ?[]const OutboundConnectionConfig = null,
 
     pub fn validate(self: Self) ?[]const u8 {
         const cpu_core_count = std.Thread.getCpuCount() catch {
@@ -34,18 +35,19 @@ pub const NodeConfig = struct {
         if (self.worker_threads > cpu_core_count) return "`worker_threads` exceeds cpu core count";
         if (self.max_connections > 5_000) return "`max_connections` exceeds arbitrary limit";
         if (self.memory_pool_capacity > 500_000) return "`memory_pool_capacity` exceeds arbitrary limit";
+
         if (self.listener_configs) |listener_configs| {
-            if (listener_configs.len == 0) return "`listeners` is non null but contains no entries";
+            if (listener_configs.len == 0) return "`listener_configs` is non null but contains no entries";
             for (listener_configs) |listener_config| {
                 switch (listener_config.transport) {
                     .tcp => {},
                 }
             }
         }
-        if (self.outbound_configs) |remote_configs| {
-            if (remote_configs.len == 0) return "`remotes` is non null but contains no entries";
-            for (remote_configs) |remote_config| {
-                switch (remote_config.transport) {
+        if (self.outbound_configs) |outbound_configs| {
+            if (outbound_configs.len == 0) return "`outbound_configs` is non null but contains no entries";
+            for (outbound_configs) |outbound_config| {
+                switch (outbound_config.transport) {
                     .tcp => {},
                 }
             }
@@ -384,7 +386,7 @@ pub const Node = struct {
         try worker.addInboundConnection(socket);
     }
 
-    fn addOutboundConnectionToWorker(self: *Self, config: ConnectionConfig) !void {
+    fn addOutboundConnectionToWorker(self: *Self, config: OutboundConnectionConfig) !void {
         var worker_iter = self.workers.valueIterator();
         var worker_with_min_connections: ?*Worker = null;
         var min_connections: u32 = 0;
@@ -406,14 +408,7 @@ pub const Node = struct {
         if (worker_with_min_connections == null) unreachable;
         const worker = worker_with_min_connections.?;
 
-        // create the socket
-        const address = try std.net.Address.parseIp4(config.host, config.port);
-        const socket_type: u32 = posix.SOCK.STREAM;
-        const protocol = posix.IPPROTO.TCP;
-        const socket = try posix.socket(address.any.family, socket_type, protocol);
-        errdefer posix.close(socket);
-
-        try worker.addOutboundConnection(socket, address);
+        try worker.addOutboundConnection(config);
     }
 };
 

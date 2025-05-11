@@ -19,7 +19,7 @@ const State = enum {
 
 // TODO: a user should be able to configure how many connections they want for a particular host.
 // TODO: a user should be able to provide a token/key for authentication to remotes
-pub const ConnectionConfig = struct {
+pub const InboundConnectionConfig = struct {
     host: []const u8,
     port: u16,
     transport: Transport = .tcp,
@@ -32,7 +32,30 @@ pub const ListenerConfig = struct {
     port: u16 = 8000,
     transport: Transport = .tcp,
     /// a list of hosts that are allowed to communicate with this node. If `null`, all are allowed
-    allowed_inbound_connections: ?[]const ConnectionConfig = null,
+    allowed_inbound_connections: ?[]const InboundConnectionConfig = null,
+};
+
+pub const OutboundConnectionConfig = struct {
+    host: []const u8,
+    port: u16,
+    transport: Transport = .tcp,
+    /// The reconnection configuration to be used. If `null`, no reconnection attempts will be performed.
+    reconnect_config: ?ReconnectionConfig = null,
+};
+
+pub const ReconnectionStrategy = enum {
+    timed,
+    exponential_backoff,
+};
+
+pub const ReconnectionConfig = struct {
+    /// Is this connection allowed be retried
+    enabled: bool = false,
+    /// The number of attempts to reconnect on connection loss. If `enabled` is true and `max_retries` is 0,
+    /// the connection retries will be infinite,
+    max_attempts: u32 = 0,
+    /// The connection retry strategy to be used for reconnection attempts
+    reconnection_strategy: ReconnectionStrategy = .timed,
 };
 
 pub const Transport = enum {

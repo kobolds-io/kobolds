@@ -18,7 +18,7 @@ const ClientConfig = @import("../client/client.zig").ClientConfig;
 
 const Node = @import("../node/node2.zig").Node;
 const NodeConfig = @import("../node/node2.zig").NodeConfig;
-const ConnectionConfig = @import("../node/listener.zig").ConnectionConfig;
+const OutboundConnectionConfig = @import("../node/listener.zig").OutboundConnectionConfig;
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
 
 var client_config = ClientConfig{
@@ -306,13 +306,13 @@ pub fn nodePing() !void {
     defer _ = gpa.deinit();
 
     // remote node to connect to
-    const outbound_config = ConnectionConfig{
+    const outbound_config = OutboundConnectionConfig{
         .host = "127.0.0.1",
         .port = 8000,
         .transport = .tcp,
     };
 
-    const outbound_configs = [_]ConnectionConfig{outbound_config};
+    const outbound_configs = [_]OutboundConnectionConfig{outbound_config};
 
     node_config2.worker_threads = 1;
     node_config2.outbound_configs = &outbound_configs;
