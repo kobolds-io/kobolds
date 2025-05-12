@@ -166,7 +166,7 @@ pub const Node = struct {
         try self.initializeListeners();
         try self.spawnListeners();
 
-        // // Start the outbound connections
+        // Start the outbound connections
         try self.initializeOutboundConnections();
 
         // Start the core thread
@@ -196,6 +196,7 @@ pub const Node = struct {
             switch (self.state) {
                 .running => {
                     self.tick() catch unreachable;
+
                     // FIX: this should us io uring or something much nicer
                     std.time.sleep(100 * std.time.ns_per_ms);
                 },
@@ -242,8 +243,6 @@ pub const Node = struct {
 
     fn tick(self: *Self) !void {
         try self.maybeAddInboundConnections();
-        // try self.maybeAddOutboundConnections();
-        // TODO: try self.processMessages()
     }
 
     fn initializeWorkers(self: *Self) !void {

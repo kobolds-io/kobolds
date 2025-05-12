@@ -241,8 +241,6 @@ pub const Worker = struct {
         accept_headers.connection_id = conn_id;
         accept_headers.node_id = self.node.id;
 
-        // connection.state = .connected;
-
         try connection.outbox.enqueue(accept_message);
 
         log.info("worker: {} added connection {}", .{ self.id, conn_id });
@@ -298,8 +296,6 @@ pub const Worker = struct {
 
     fn removeConnection(self: *Self, conn: *Connection) void {
         log.debug("remove connection called", .{});
-        // self.connections_mutex.lock();
-        // defer self.connections_mutex.unlock();
 
         _ = self.connections.remove(conn.connection_id);
 
@@ -310,8 +306,6 @@ pub const Worker = struct {
 
     fn cleanupUninitializedConnection(self: *Self, tmp_id: uuid.Uuid, conn: *Connection) !void {
         log.debug("remove uninitialized connection called", .{});
-        // self.connections_mutex.lock();
-        // defer self.connections_mutex.unlock();
 
         _ = self.uninitialized_connections.remove(tmp_id);
         log.info("worker: {} removed uninitialized_connection {}", .{ self.id, conn.connection_id });
