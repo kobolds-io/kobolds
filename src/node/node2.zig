@@ -155,14 +155,6 @@ pub const Node = struct {
         self.allocator.destroy(self.done_channel);
     }
 
-    pub fn connect(self: *Self) !void {
-        _ = self;
-    }
-
-    pub fn disconnect(self: *Self) void {
-        _ = self;
-    }
-
     pub fn start(self: *Self) !void {
         assert(self.state == .closed);
 
@@ -174,7 +166,7 @@ pub const Node = struct {
         try self.initializeListeners();
         try self.spawnListeners();
 
-        // Start the outbound connections
+        // // Start the outbound connections
         try self.initializeOutboundConnections();
 
         // Start the core thread
@@ -250,6 +242,7 @@ pub const Node = struct {
 
     fn tick(self: *Self) !void {
         try self.maybeAddInboundConnections();
+        // try self.maybeAddOutboundConnections();
         // TODO: try self.processMessages()
     }
 

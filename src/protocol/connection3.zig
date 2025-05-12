@@ -32,6 +32,12 @@ pub const OutboundConnectionConfig = struct {
     transport: Transport = .tcp,
     /// The reconnection configuration to be used. If `null`, no reconnection attempts will be performed.
     reconnect_config: ?ReconnectionConfig = null,
+    keep_alive_config: ?KeepAliveConfig = null,
+};
+
+pub const KeepAliveConfig = struct {
+    enabled: bool = true,
+    interval: u64 = 10 * std.time.ns_per_ms,
 };
 
 pub const ReconnectionStrategy = enum {
