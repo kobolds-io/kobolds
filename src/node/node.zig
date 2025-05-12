@@ -1,220 +1,209 @@
 const std = @import("std");
-const posix = std.posix;
 const testing = std.testing;
 const assert = std.debug.assert;
 const log = std.log.scoped(.Node);
+const posix = std.posix;
 
 const uuid = @import("uuid");
-const constants = @import("../constants.zig");
 
-const Acceptor = @import("./acceptor.zig").Acceptor;
 const Worker = @import("./worker.zig").Worker;
-const IO = @import("../io.zig").IO;
-const BusManager = @import("../bus/bus_manager.zig").BusManager;
-const TopicManager = @import("../pubsub/topic_manager.zig").TopicManager;
+const Listener = @import("./listener.zig").Listener;
+const ListenerConfig = @import("./listener.zig").ListenerConfig;
+const InboundConnectionConfig = @import("../protocol/connection.zig").InboundConnectionConfig;
+const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
+
+const UnbufferedChannel = @import("stdx").UnbufferedChannel;
+const MemoryPool = @import("stdx").MemoryPool;
 
 const Message = @import("../protocol/message.zig").Message;
+const Connection = @import("../protocol/connection.zig").Connection;
 
-// Datastructures
-const UnbufferedChannel = @import("stdx").UnbufferedChannel;
-const RingBuffer = @import("stdx").RingBuffer;
-
-/// static configuration used to configure the node
 pub const NodeConfig = struct {
-    host: []const u8 = "127.0.0.1",
-    port: u16 = 8000,
-    worker_threads: u32 = 1,
-    worker_message_pool_capacity: u32 = constants.default_worker_message_pool_capacity,
+    const Self = @This();
+
+    worker_threads: usize = 3,
+    max_connections: u16 = 1024,
+    memory_pool_capacity: usize = 5_000,
+    listener_configs: ?[]const ListenerConfig = null,
+    outbound_configs: ?[]const OutboundConnectionConfig = null,
+
+    pub fn validate(self: Self) ?[]const u8 {
+        const cpu_core_count = std.Thread.getCpuCount() catch {
+            const msg = "could not getCpuCount";
+            @panic(msg);
+        };
+        if (self.worker_threads > cpu_core_count) return "`worker_threads` exceeds cpu core count";
+        if (self.max_connections > 5_000) return "`max_connections` exceeds arbitrary limit";
+        if (self.memory_pool_capacity > 500_000) return "`memory_pool_capacity` exceeds arbitrary limit";
+
+        if (self.listener_configs) |listener_configs| {
+            if (listener_configs.len == 0) return "`listener_configs` is non null but contains no entries";
+            for (listener_configs) |listener_config| {
+                switch (listener_config.transport) {
+                    .tcp => {},
+                }
+            }
+        }
+        if (self.outbound_configs) |outbound_configs| {
+            if (outbound_configs.len == 0) return "`outbound_configs` is non null but contains no entries";
+            for (outbound_configs) |outbound_config| {
+                switch (outbound_config.transport) {
+                    .tcp => {},
+                }
+            }
+        }
+
+        return null;
+    }
 };
 
 const NodeState = enum {
     running,
-    close,
+    closing,
     closed,
 };
 
 pub const Node = struct {
     const Self = @This();
 
+    id: uuid.Uuid,
     allocator: std.mem.Allocator,
     config: NodeConfig,
-    id: uuid.Uuid,
-    io: *IO,
-    mutex: std.Thread.Mutex,
+    listeners: *std.AutoHashMap(usize, *Listener),
+    close_channel: *UnbufferedChannel(bool),
+    done_channel: *UnbufferedChannel(bool),
     state: NodeState,
-    tcp_acceptor: *Acceptor,
-    workers: *std.AutoHashMap(u32, *Worker),
-    processed_messages_count: u128,
-    topic_manager: *TopicManager,
-    bus_manager: *BusManager,
+    workers: *std.AutoHashMap(usize, *Worker),
+    memory_pool: *MemoryPool(Message),
+    mutex: std.Thread.Mutex,
 
-    pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !*Self {
-        const tcp_acceptor = try allocator.create(Acceptor);
-        errdefer allocator.destroy(tcp_acceptor);
-
-        tcp_acceptor.* = try Acceptor.init(allocator, .{ .host = config.host, .port = config.port });
-        errdefer tcp_acceptor.deinit();
-
-        const topic_manager = try allocator.create(TopicManager);
-        errdefer allocator.destroy(topic_manager);
-
-        topic_manager.* = TopicManager.init(allocator);
-        errdefer topic_manager.deinit();
-
-        const bus_manager = try allocator.create(BusManager);
-        errdefer allocator.destroy(bus_manager);
-
-        bus_manager.* = BusManager.init(allocator);
-        errdefer bus_manager.deinit();
-
-        const io = try allocator.create(IO);
-        errdefer allocator.destroy(io);
-
-        io.* = try IO.init(constants.io_uring_entries, 0);
-        errdefer io.deinit();
-
-        const workers = try allocator.create(std.AutoHashMap(u32, *Worker));
-        errdefer allocator.destroy(workers);
-
-        workers.* = std.AutoHashMap(u32, *Worker).init(allocator);
-        errdefer workers.deinit();
-
-        const node = try allocator.create(Node);
-        errdefer allocator.destroy(node);
-
-        node.* = Self{
-            .allocator = allocator,
-            .config = config,
-            .id = uuid.v7.new(),
-            .io = io,
-            .mutex = std.Thread.Mutex{},
-            .state = .closed,
-            .tcp_acceptor = tcp_acceptor,
-            .workers = workers,
-            .processed_messages_count = 0,
-            .topic_manager = topic_manager,
-            .bus_manager = bus_manager,
-        };
-
-        for (0..config.worker_threads) |i| {
-            // initialize a new worker
-            const worker = try allocator.create(Worker);
-            errdefer allocator.destroy(worker);
-
-            worker.* = try Worker.init(allocator, node, .{
-                .node_id = node.id,
-                .id = @intCast(i),
-                .message_pool_capacity = config.worker_message_pool_capacity,
-            });
-            errdefer workers.deinit();
-
-            try workers.put(worker.config.id, worker);
-            errdefer _ = workers.remove(worker.config.id);
+    pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
+        if (config.validate()) |err_message| {
+            log.err("invalid config: {s}", .{err_message});
+            return error.InvalidConfig;
         }
 
-        return node;
+        // ensure that this node is not spawning a crazy amount of threads
+        const cpu_count = try std.Thread.getCpuCount();
+        assert(config.worker_threads < cpu_count);
+
+        const close_channel = try allocator.create(UnbufferedChannel(bool));
+        errdefer allocator.destroy(close_channel);
+
+        close_channel.* = UnbufferedChannel(bool).new();
+
+        const done_channel = try allocator.create(UnbufferedChannel(bool));
+        errdefer allocator.destroy(done_channel);
+
+        done_channel.* = UnbufferedChannel(bool).new();
+
+        const workers = try allocator.create(std.AutoHashMap(usize, *Worker));
+        errdefer allocator.destroy(workers);
+
+        workers.* = std.AutoHashMap(usize, *Worker).init(allocator);
+        errdefer workers.deinit();
+
+        const memory_pool = try allocator.create(MemoryPool(Message));
+        errdefer allocator.destroy(memory_pool);
+
+        memory_pool.* = try MemoryPool(Message).init(allocator, config.memory_pool_capacity);
+        errdefer memory_pool.deinit();
+
+        const listeners = try allocator.create(std.AutoHashMap(usize, *Listener));
+        errdefer allocator.destroy(listeners);
+
+        listeners.* = std.AutoHashMap(usize, *Listener).init(allocator);
+        errdefer listeners.deinit();
+
+        return Self{
+            .id = uuid.v7.new(),
+            .allocator = allocator,
+            .config = config,
+            .close_channel = close_channel,
+            .done_channel = done_channel,
+            .state = .closed,
+            .workers = workers,
+            .memory_pool = memory_pool,
+            .listeners = listeners,
+            .mutex = std.Thread.Mutex{},
+        };
     }
 
     pub fn deinit(self: *Self) void {
-        var workers_iter = self.workers.valueIterator();
-        while (workers_iter.next()) |worker_ptr| {
-            const worker = worker_ptr.*;
+        var listeners_iterator = self.listeners.valueIterator();
+        while (listeners_iterator.next()) |entry| {
+            const listener = entry.*;
+            listener.deinit();
+            self.allocator.destroy(listener);
+        }
 
+        var workers_iterator = self.workers.valueIterator();
+        while (workers_iterator.next()) |entry| {
+            const worker = entry.*;
             worker.deinit();
             self.allocator.destroy(worker);
         }
 
-        self.tcp_acceptor.deinit();
-        self.io.deinit();
+        self.listeners.deinit();
         self.workers.deinit();
-        self.topic_manager.deinit();
-        self.bus_manager.deinit();
+        self.memory_pool.deinit();
 
-        // destroy
+        self.allocator.destroy(self.listeners);
         self.allocator.destroy(self.workers);
-        self.allocator.destroy(self.tcp_acceptor);
-        self.allocator.destroy(self.io);
-        self.allocator.destroy(self.bus_manager);
-        self.allocator.destroy(self.topic_manager);
-        self.allocator.destroy(self);
+        self.allocator.destroy(self.memory_pool);
+        self.allocator.destroy(self.close_channel);
+        self.allocator.destroy(self.done_channel);
     }
 
-    pub fn run(self: *Self) !void {
+    pub fn start(self: *Self) !void {
         assert(self.state == .closed);
+
+        // Start the workers
+        try self.initializeWorkers();
+        try self.spawnWorkerThreads();
+
+        // Start the listeners
+        try self.initializeListeners();
+        try self.spawnListeners();
+
+        // // Start the outbound connections
+        try self.initializeOutboundConnections();
+
+        // Start the core thread
+        var ready_channel = UnbufferedChannel(bool).new();
+        const core_thread = try std.Thread.spawn(.{}, Node.run, .{ self, &ready_channel });
+        core_thread.detach();
+
+        _ = ready_channel.timedReceive(100 * std.time.ns_per_ms) catch |err| {
+            log.err("core_thread spawn timeout", .{});
+            self.close();
+            return err;
+        };
+    }
+
+    pub fn run(self: *Node, ready_channel: *UnbufferedChannel(bool)) void {
         self.state = .running;
-
-        // have the tcp_acceptor start listening for new connections
-        try self.tcp_acceptor.listen();
-        defer self.tcp_acceptor.close();
-
-        // spawn all worker threads based on config
-        var workers_iter = self.workers.valueIterator();
-        while (workers_iter.next()) |worker_ptr| {
-            const worker = worker_ptr.*;
-            var ready_chan = UnbufferedChannel(anyerror!bool).new();
-
-            const thread = try std.Thread.spawn(.{}, Worker.run, .{ worker, &ready_chan });
-            thread.detach();
-
-            const res = ready_chan.receive();
-            _ = try res;
-        }
-
-        var start: u64 = 0;
-        var timer = try std.time.Timer.start();
-        defer timer.reset();
-        var printed: bool = false;
-        var printed_at: u64 = 0;
-        var messages_processed_count_since_last_print: u128 = 0;
-
-        // FIX: This is a spinlock and very no bueno because we end up idling at 100% CPU. Need to figure out a better way to loop when there is new work.
-        //  1. a Possible solution is to add a channel that all the workers use to notify that there is new work. I think
-        //      that this could be tricky on the whole timing front though.
+        ready_channel.send(true);
+        log.info("node {} running", .{self.id});
         while (true) {
+            // check if the close channel has received a close command
+            const close_channel_received = self.close_channel.timedReceive(0) catch false;
+            if (close_channel_received) {
+                log.info("node {} closing", .{self.id});
+                self.state = .closing;
+            }
+
             switch (self.state) {
                 .running => {
-                    // check if there are new sockets to add to the collection!
-                    if (start == 0 and self.processed_messages_count > 0) {
-                        timer.reset();
-                        start = timer.read();
-                    }
-
-                    if (self.processed_messages_count > 0) {
-                        const now = timer.read();
-                        const elapsed_seconds = (now - start) / std.time.ns_per_s;
-                        const time_since_last_print = (now - printed_at) / std.time.ns_per_s;
-
-                        if (time_since_last_print >= 1) {
-                            if (!printed) {
-                                const processed_messages_count = self.processed_messages_count;
-
-                                log.err("duration {}s, processed messages: {}, processed delta {}\n", .{
-                                    elapsed_seconds,
-                                    processed_messages_count,
-                                    processed_messages_count - messages_processed_count_since_last_print,
-                                });
-
-                                messages_processed_count_since_last_print = processed_messages_count;
-
-                                printed = true;
-                                printed_at = now;
-                            }
-                        } else {
-                            printed = false;
-                        }
-                    }
-
-                    try self.tick();
-                    try self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms);
+                    self.tick() catch unreachable;
+                    // FIX: this should us io uring or something much nicer
+                    std.time.sleep(100 * std.time.ns_per_ms);
                 },
-                .close => {
-                    workers_iter = self.workers.valueIterator();
-                    while (workers_iter.next()) |worker_ptr| {
-                        const worker = worker_ptr.*;
-                        worker.close();
-                    }
-                    // once all the workers are closed, we can just close the node
+                .closing => {
+                    log.info("node {}: closed", .{self.id});
                     self.state = .closed;
+                    self.done_channel.send(true);
+                    return;
                 },
                 .closed => return,
             }
@@ -222,50 +211,145 @@ pub const Node = struct {
     }
 
     pub fn close(self: *Self) void {
-        if (self.state == .closed) return;
-        if (self.state == .running) self.state = .close;
+        switch (self.state) {
+            .closed, .closing => return,
+            else => {
+                self.mutex.lock();
+                defer self.mutex.unlock();
 
-        // wait for the node to stop
-        var i: usize = 0;
-        while (self.state != .closed) : (i += 1) {
-            log.debug("close node attempt - {}", .{i});
+                // spin down the workers
+                var worker_iterator = self.workers.valueIterator();
+                while (worker_iterator.next()) |entry| {
+                    const worker = entry.*;
 
-            std.time.sleep(1 * std.time.ns_per_ms);
+                    worker.close();
+                }
+
+                // spind down the listeners
+                var listener_iterator = self.listeners.valueIterator();
+                while (listener_iterator.next()) |entry| {
+                    const listener = entry.*;
+
+                    listener.close();
+                }
+
+                self.close_channel.send(true);
+            },
+        }
+
+        _ = self.done_channel.receive();
+    }
+
+    fn tick(self: *Self) !void {
+        try self.maybeAddInboundConnections();
+        // try self.maybeAddOutboundConnections();
+        // TODO: try self.processMessages()
+    }
+
+    fn initializeWorkers(self: *Self) !void {
+        assert(self.workers.count() == 0);
+
+        // initialize `n` connection_workers
+        for (0..self.config.worker_threads) |id| {
+            const worker = try self.allocator.create(Worker);
+            errdefer self.allocator.destroy(worker);
+
+            worker.* = try Worker.init(self.allocator, id, self);
+            errdefer worker.deinit();
+
+            try self.workers.put(id, worker);
+            errdefer _ = self.workers.remove(id);
         }
     }
 
-    pub fn tick(self: *Self) !void {
-        try self.maybeAddConnection();
-        try self.processBuses();
+    fn spawnWorkerThreads(self: *Self) !void {
+        assert(self.workers.count() == self.config.worker_threads);
+
+        var ready_channel = UnbufferedChannel(bool).new();
+        // Spawn all of the connection_workers
+        var worker_iterator = self.workers.valueIterator();
+        while (worker_iterator.next()) |entry| {
+            const worker = entry.*;
+            assert(worker.state == .closed);
+
+            const worker_thread = try std.Thread.spawn(.{}, Worker.run, .{ worker, &ready_channel });
+            worker_thread.detach();
+
+            _ = ready_channel.timedReceive(100 * std.time.ns_per_ms) catch |err| {
+                log.err("worker_thread spawn timeout", .{});
+                self.close();
+                return err;
+            };
+        }
     }
 
-    fn processBuses(self: *Self) !void {
-        if (self.bus_manager.buses.count() > 0) {
-            self.bus_manager.mutex.lock();
-            defer self.bus_manager.mutex.unlock();
+    fn initializeListeners(self: *Self) !void {
+        if (self.config.listener_configs) |listener_configs| {
+            // we have already validated that the configuration is valid
+            for (listener_configs, 0..listener_configs.len) |listener_config, id| {
+                switch (listener_config.transport) {
+                    .tcp => {
+                        const tcp_listener = try self.allocator.create(Listener);
+                        errdefer self.allocator.destroy(tcp_listener);
 
-            var buses_iterator = self.bus_manager.buses.valueIterator();
-            while (buses_iterator.next()) |entry| {
-                const bus = entry.*;
+                        tcp_listener.* = try Listener.init(self.allocator, id, listener_config);
+                        errdefer tcp_listener.deinit();
 
-                try bus.tick();
+                        try self.listeners.put(id, tcp_listener);
+                    },
+                }
             }
         }
     }
 
-    fn maybeAddConnection(self: *Self) !void {
-        // check if there are new sockets on the tcp_acceptor
-        if (self.tcp_acceptor.sockets.items.len > 0) {
-            self.tcp_acceptor.mutex.lock();
-            defer self.tcp_acceptor.mutex.unlock();
+    fn spawnListeners(self: *Self) !void {
+        var listeners_iterator = self.listeners.valueIterator();
+        while (listeners_iterator.next()) |entry| {
+            const listener = entry.*;
 
-            while (self.tcp_acceptor.sockets.pop()) |socket| {
-                try self.addConnection(socket);
+            var ready_channel = UnbufferedChannel(bool).new();
+
+            const listener_thread = try std.Thread.spawn(.{}, Listener.run, .{ listener, &ready_channel });
+            listener_thread.detach();
+
+            _ = ready_channel.timedReceive(100 * std.time.ns_per_ms) catch |err| {
+                log.err("listener_thread spawn timeout", .{});
+                self.close();
+                return err;
+            };
+        }
+    }
+
+    fn initializeOutboundConnections(self: *Self) !void {
+        if (self.config.outbound_configs) |outbound_configs| {
+            for (outbound_configs) |outbound_config| {
+                switch (outbound_config.transport) {
+                    .tcp => {
+                        try self.addOutboundConnectionToWorker(outbound_config);
+                    },
+                }
             }
         }
     }
 
-    fn addConnection(self: *Self, socket: posix.socket_t) !void {
+    fn maybeAddInboundConnections(self: *Self) !void {
+        var listeners_iterator = self.listeners.valueIterator();
+        while (listeners_iterator.next()) |entry| {
+            const listener = entry.*;
+
+            if (listener.sockets.items.len > 0) {
+                listener.mutex.lock();
+                defer listener.mutex.unlock();
+
+                // try to add the connections
+                while (listener.sockets.pop()) |socket| {
+                    try self.addConnectionToNextWorker(socket);
+                }
+            }
+        }
+    }
+
+    fn addConnectionToNextWorker(self: *Self, socket: posix.socket_t) !void {
         // we are just gonna try to close this socket if anything blows up
         errdefer posix.close(socket);
 
@@ -291,29 +375,51 @@ pub const Node = struct {
         if (worker_with_min_connections == null) unreachable;
         const worker = worker_with_min_connections.?;
 
-        try worker.addConnection(socket);
+        try worker.addInboundConnection(socket);
+    }
+
+    fn addOutboundConnectionToWorker(self: *Self, config: OutboundConnectionConfig) !void {
+        var worker_iter = self.workers.valueIterator();
+        var worker_with_min_connections: ?*Worker = null;
+        var min_connections: u32 = 0;
+
+        while (worker_iter.next()) |worker_ptr| {
+            const worker = worker_ptr.*;
+            if (worker_with_min_connections == null) {
+                worker_with_min_connections = worker;
+                min_connections = worker.connections.count();
+                continue;
+            }
+
+            if (worker.connections.count() < min_connections) {
+                worker_with_min_connections = worker;
+                min_connections = worker.connections.count();
+            }
+        }
+
+        if (worker_with_min_connections == null) unreachable;
+        const worker = worker_with_min_connections.?;
+
+        try worker.addOutboundConnection(config);
     }
 };
 
 test "init/deinit" {
     const allocator = testing.allocator;
 
-    var node = try Node.init(allocator, .{
-        .port = 9753,
-        .host = "127.0.0.1",
-        .worker_threads = 1,
-        .worker_message_pool_capacity = 100,
-    });
+    var node = try Node.init(allocator, .{});
+    defer node.deinit();
+}
+
+test "the api" {
+    const allocator = testing.allocator;
+
+    var node = try Node.init(allocator, .{});
     defer node.deinit();
 
-    const closeNode = struct {
-        fn close(n: *Node) !void {
-            std.time.sleep(5 * std.time.ms_per_s);
-            n.close();
-        }
-    }.close;
-
-    const thread = try std.Thread.spawn(.{}, closeNode, .{node});
     try node.run();
-    thread.join();
+    defer node.close();
+
+    try node.connect();
+    defer node.disconnect();
 }

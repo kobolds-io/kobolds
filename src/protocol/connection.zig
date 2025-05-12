@@ -17,40 +17,86 @@ const ProtocolError = @import("../errors.zig").ProtocolError;
 
 // data structures
 const RingBuffer = @import("stdx").RingBuffer;
+const MemoryPool = @import("stdx").MemoryPool;
 
-// TODO: convert from message pool to MemoryPool
-const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
+pub const InboundConnectionConfig = struct {
+    host: []const u8 = "0.0.0.0",
+    port: u16 = 0,
+    transport: Transport = .tcp,
+};
+
+// TODO: a user should be able to provide a token/key for authentication to remotes
+pub const OutboundConnectionConfig = struct {
+    host: []const u8,
+    port: u16,
+    transport: Transport = .tcp,
+    /// The reconnection configuration to be used. If `null`, no reconnection attempts will be performed.
+    reconnect_config: ?ReconnectionConfig = null,
+    keep_alive_config: ?KeepAliveConfig = null,
+};
+
+pub const KeepAliveConfig = struct {
+    enabled: bool = true,
+    interval: u64 = 10 * std.time.ns_per_ms,
+};
+
+pub const ReconnectionStrategy = enum {
+    timed,
+    exponential_backoff,
+};
+
+pub const ReconnectionConfig = struct {
+    /// Is this connection allowed be retried
+    enabled: bool = true,
+    /// The number of attempts to reconnect on connection loss. If `enabled` is true and `max_retries` is 0,
+    /// the connection retries will be infinite,
+    max_attempts: u32 = 0,
+    /// The connection retry strategy to be used for reconnection attempts
+    reconnection_strategy: ReconnectionStrategy = .timed,
+};
+
+pub const Transport = enum {
+    tcp,
+};
+
+const ConnectionConfig = union(ConnectionType) {
+    inbound: InboundConnectionConfig,
+    outbound: OutboundConnectionConfig,
+};
 
 const ConnectionState = enum {
-    close,
+    closing,
     closed,
     connected,
     connecting,
 };
 
 const ConnectionType = enum {
-    node,
-    client,
+    inbound,
+    outbound,
 };
 
 pub const Connection = struct {
+    const Self = @This();
+
     allocator: std.mem.Allocator,
     bytes_recv: u128,
     bytes_sent: u128,
     close_completion: *IO.Completion,
     close_submitted: bool,
+    config: ConnectionConfig,
     connect_completion: *IO.Completion,
+    connection_id: uuid.Uuid,
     connection_type: ConnectionType,
     connect_submitted: bool,
     inbox: *RingBuffer(*Message),
     io: *IO,
-    message_pool: *MessagePool,
+    memory_pool: *MemoryPool(Message),
     messages_recv: u128,
     messages_sent: u128,
-    origin_id: uuid.Uuid,
     outbox: *RingBuffer(*Message),
-    parsed_messages: std.ArrayList(Message),
     parsed_message_ptrs: std.ArrayList(*Message),
+    parsed_messages: std.ArrayList(Message),
     parser: Parser,
     recv_buffer: []u8,
     recv_completion: *IO.Completion,
@@ -69,8 +115,9 @@ pub const Connection = struct {
         io: *IO,
         socket: posix.socket_t,
         allocator: std.mem.Allocator,
-        message_pool: *MessagePool,
-    ) !Connection {
+        memory_pool: *MemoryPool(Message),
+        config: ConnectionConfig,
+    ) !Self {
         const recv_completion = try allocator.create(IO.Completion);
         errdefer allocator.destroy(recv_completion);
 
@@ -101,7 +148,7 @@ pub const Connection = struct {
         outbox.* = try RingBuffer(*Message).init(allocator, constants.connection_outbox_capacity);
         errdefer outbox.deinit();
 
-        return Connection{
+        return Self{
             .allocator = allocator,
             .bytes_recv = 0,
             .bytes_sent = 0,
@@ -112,10 +159,10 @@ pub const Connection = struct {
             .connect_submitted = false,
             .inbox = inbox,
             .io = io,
-            .message_pool = message_pool,
+            .memory_pool = memory_pool,
             .messages_recv = 0,
             .messages_sent = 0,
-            .origin_id = id,
+            .connection_id = id,
             .outbox = outbox,
             .parsed_messages = try std.ArrayList(Message).initCapacity(
                 allocator,
@@ -138,16 +185,19 @@ pub const Connection = struct {
             .send_submitted = false,
             .socket = socket,
             .state = .closed,
+            .config = config,
         };
     }
 
     pub fn deinit(self: *Connection) void {
         while (self.outbox.dequeue()) |message| {
             message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
         while (self.inbox.dequeue()) |message| {
             message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
         self.inbox.deinit();
@@ -182,10 +232,14 @@ pub const Connection = struct {
         // }
 
         switch (self.state) {
-            .close => {
-                self.state = .closed;
-                log.info("connection closed {}", .{self.origin_id});
+            .closing => {
+                if (self.connection_id == 0) {
+                    log.info("uninitialized connection closed {}", .{self.connection_id});
+                } else {
+                    log.info("connection closed {}", .{self.connection_id});
+                }
 
+                self.state = .closed;
                 // break out of the tick
                 return;
             },
@@ -236,8 +290,10 @@ pub const Connection = struct {
 
                 var i: usize = 0;
                 while (self.outbox.dequeue()) |message| : (i += 1) {
-                    defer message.deref();
-
+                    defer {
+                        message.deref();
+                        if (message.refs() == 0) self.memory_pool.destroy(message);
+                    }
                     const message_size = message.size();
 
                     message.encode(buf[0..message_size]);
@@ -288,7 +344,8 @@ pub const Connection = struct {
 
         // Connection closed by peer
         if (bytes == 0) {
-            self.state = .close;
+            log.err("connection {} received no bytes, closing", .{self.connection_id});
+            self.state = .closing;
             return;
         }
 
@@ -305,7 +362,7 @@ pub const Connection = struct {
         for (self.parsed_messages.items) |message| {
             // assume that invalid messages are poison and close this connection
             if (message.validate()) |reason| {
-                self.state = .close;
+                self.state = .closing;
                 log.err("invalid message: {s}", .{reason});
                 return;
             }
@@ -313,11 +370,11 @@ pub const Connection = struct {
 
         assert(self.parsed_message_ptrs.items.len >= self.parsed_message_ptrs.items.len);
 
-        const message_ptrs = self.message_pool.createN(
+        const message_ptrs = self.memory_pool.createN(
             self.allocator,
             @intCast(self.parsed_messages.items.len),
         ) catch |err| {
-            log.err("inbox message_pool.createN() returned err: {any}", .{err});
+            log.err("inbox memory_pool.createN() returned err: {any}", .{err});
             return;
         };
         defer self.allocator.free(message_ptrs);
@@ -325,40 +382,41 @@ pub const Connection = struct {
         if (message_ptrs.len != self.parsed_messages.items.len) {
             log.err("not enough node ptrs {} for parsed_messages {}", .{ message_ptrs.len, self.parsed_messages.items.len });
             for (message_ptrs) |message_ptr| {
-                self.message_pool.destroy(message_ptr);
+                self.memory_pool.destroy(message_ptr);
             }
             return;
         }
 
         // Process messages
         for (message_ptrs, self.parsed_messages.items) |message_ptr, message| {
-            if (self.connection_type == .client and message.headers.message_type == .accept) {
-                assert(self.origin_id == 0);
+            if (self.connection_type == .outbound and message.headers.message_type == .accept) {
+                assert(self.connection_id == 0);
 
                 const accept_headers: *const Accept = message.headers.intoConst(.accept).?;
 
-                assert(accept_headers.origin_id != accept_headers.accepted_origin_id);
-                self.origin_id = accept_headers.accepted_origin_id;
+                assert(accept_headers.connection_id != accept_headers.accepted_connection_id);
+                self.connection_id = accept_headers.accepted_connection_id;
 
                 // update the state of this connection to fully connected.
                 self.state = .connected;
-                log.info("connection origin_id is set {}", .{self.origin_id});
+                log.info("connection connection_id is set {}", .{self.connection_id});
             }
 
             message_ptr.* = message;
-            message_ptr.message_pool = self.message_pool;
             message_ptr.ref();
 
-            // this is kind of redundent because the message_pool should be handling this
+            // this is kind of redundent because the memory_pool should be handling this
             assert(message_ptr.refs() == 1);
         }
+
         self.parsed_messages.items.len = 0;
 
         const n = self.inbox.enqueueMany(message_ptrs);
         if (n < message_ptrs.len) {
             log.err("could not enqueue all message ptrs. dropping {} messages", .{message_ptrs[n..].len});
-            for (message_ptrs[n..]) |ptr| {
-                ptr.deref();
+            for (message_ptrs[n..]) |message_ptr| {
+                message_ptr.deref();
+                self.memory_pool.destroy(message_ptr);
             }
         }
     }
@@ -378,30 +436,14 @@ pub const Connection = struct {
         self.send_submitted = false;
     }
 
-    pub fn onClose(self: *Connection, comp: *IO.Completion, res: IO.CloseError!void) void {
-        res catch {};
-        _ = comp;
-
-        // this means that the connection has been closed by the peer and we should
-        // shutdown the connection
-        self.state = .closed;
-        self.close_submitted = false;
-
-        std.debug.print("closed connection\n", .{});
-    }
-
     pub fn onConnect(self: *Connection, completion: *IO.Completion, result: IO.ConnectError!void) void {
         // reset the submission
         self.connect_submitted = false;
 
         _ = completion;
-        _ = result catch |err| {
-            self.state = .close;
+        result catch |err| {
             log.err("onConnect err closing conn {any}", .{err});
+            self.state = .closing;
         };
-
-        // self.state = .connected;
-
-        // log.info("connected ", .{});
     }
 };

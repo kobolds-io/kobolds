@@ -9,8 +9,7 @@ const testing = std.testing;
 const constants = @import("../constants.zig");
 const IO = @import("../io.zig").IO;
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
-// const InboundConnectionConfig = @import("../protocol/connection3.zig").InboundConnectionConfig;
-const Transport = @import("../protocol/connection3.zig").Transport;
+const Transport = @import("../protocol/connection.zig").Transport;
 
 const State = enum {
     running,

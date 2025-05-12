@@ -23,7 +23,7 @@ test "encoding" {
     const topic = "/hello/world";
     var message = Message.new();
     message.headers.message_type = .publish;
-    message.headers.origin_id = 332665699182789392398147937282310771713;
+    message.headers.connection_id = 332665699182789392398147937282310771713;
     message.setBody(body);
     message.setTopicName(topic);
 
@@ -226,7 +226,7 @@ test "rust encoding/zig encoding" {
     const body = "hello world!";
     var message = Message.new();
     message.headers.message_type = .ping;
-    message.headers.origin_id = 0;
+    message.headers.connection_id = 0;
     message.setBody(body);
 
     const encoded_message = try allocator.alloc(u8, message.size());

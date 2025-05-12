@@ -70,7 +70,7 @@ test "append a message" {
 
     var message_1 = Message.new();
     message_1.headers.message_type = .ping;
-    message_1.headers.origin_id = 2;
+    message_1.headers.connection_id = 2;
 
     const conn_id = uuid.v7.new();
 
@@ -85,7 +85,7 @@ test "append a message" {
 
     var message_2 = Message.new();
     message_2.headers.message_type = .ping;
-    message_2.headers.origin_id = 2;
+    message_2.headers.connection_id = 2;
 
     try connection_messages.append(conn_id, &message_2);
     try testing.expectEqual(2, list.items.len);

@@ -488,7 +488,7 @@ pub const Headers = extern struct {
     pub const padding_len: comptime_int = 24;
     pub const reserved_len: comptime_int = 64;
 
-    origin_id: u128 = 0,
+    connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
     body_length: u32 = 0,
@@ -542,7 +542,7 @@ pub const Headers = extern struct {
         const body_checksum = utils.bytesToU64(bytes[i..][0..8]);
         i += 8;
 
-        const origin_id = utils.bytesToU128(bytes[i..][0..16]);
+        const connection_id = utils.bytesToU128(bytes[i..][0..16]);
         i += 16;
 
         const body_length = utils.bytesToU32(bytes[i..][0..4]);
@@ -595,7 +595,7 @@ pub const Headers = extern struct {
         return Headers{
             .headers_checksum = headers_checksum,
             .body_checksum = body_checksum,
-            .origin_id = origin_id,
+            .connection_id = connection_id,
             .body_length = body_length,
             .protocol_version = protocol_version,
             .message_type = message_type,
@@ -626,7 +626,7 @@ pub const Headers = extern struct {
 
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(headers_checksum));
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(body_checksum));
-        list.appendSliceAssumeCapacity(&utils.u128ToBytes(self.origin_id));
+        list.appendSliceAssumeCapacity(&utils.u128ToBytes(self.connection_id));
         list.appendSliceAssumeCapacity(&utils.u32ToBytes(self.body_length));
         list.appendAssumeCapacity(@intFromEnum(self.protocol_version));
         list.appendAssumeCapacity(@intFromEnum(self.message_type));
@@ -650,7 +650,7 @@ pub const Request = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    origin_id: u128 = 0,
+    connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
     body_length: u32 = 0,
@@ -690,7 +690,7 @@ pub const Reply = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    origin_id: u128 = 0,
+    connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
     body_length: u32 = 0,
@@ -734,7 +734,7 @@ pub const Ping = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    origin_id: u128 = 0,
+    connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
     body_length: u32 = 0,
@@ -771,7 +771,7 @@ pub const Pong = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    origin_id: u128 = 0,
+    connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
     body_length: u32 = 0,
@@ -810,7 +810,7 @@ pub const Accept = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    origin_id: u128 = 0,
+    connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
     body_length: u32 = 0,
@@ -820,7 +820,7 @@ pub const Accept = extern struct {
     compressed: bool = false,
     padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
-    accepted_origin_id: u128 = 0, // this will be the ID to be used by the connected
+    accepted_connection_id: u128 = 0, // this will be the ID to be used by the connected
 
     reserved: [48]u8 = [_]u8{0} ** 48,
 
@@ -831,11 +831,11 @@ pub const Accept = extern struct {
         if (self.protocol_version == .unsupported) return "invalid protocol_version";
         for (self.padding) |b| if (b != 0) return "invalid padding";
 
-        // ensure the origin_id is valid
-        if (self.origin_id == 0) return "invalid origin_id";
+        // ensure the connection_id is valid
+        if (self.connection_id == 0) return "invalid connection_id";
 
-        // ensure the accepted_origin_id is valid
-        if (self.accepted_origin_id == 0) return "invalid accepted_origin_id";
+        // ensure the accepted_connection_id is valid
+        if (self.accepted_connection_id == 0) return "invalid accepted_connection_id";
 
         // ensure reserved is empty
         for (self.reserved) |b| if (b != 0) return "invalid reserved";
@@ -848,7 +848,7 @@ pub const Advertise = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    origin_id: u128 = 0,
+    connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
     body_length: u32 = 0,
@@ -892,7 +892,7 @@ pub const Unadvertise = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    origin_id: u128 = 0,
+    connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
     body_length: u32 = 0,
@@ -936,7 +936,7 @@ pub const Publish = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    origin_id: u128 = 0,
+    connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
     body_length: u32 = 0,
@@ -973,7 +973,7 @@ pub const Subscribe = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    origin_id: u128 = 0,
+    connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
     body_length: u32 = 0,
@@ -1014,7 +1014,7 @@ pub const Unsubscribe = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    origin_id: u128 = 0,
+    connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
     body_length: u32 = 0,

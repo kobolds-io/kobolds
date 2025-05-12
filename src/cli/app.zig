@@ -13,24 +13,13 @@ const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
 
 const IO = @import("../io.zig").IO;
 
-const Client = @import("../client/client.zig").Client;
-const ClientConfig = @import("../client/client.zig").ClientConfig;
-
-const Node = @import("../node/node2.zig").Node;
-const NodeConfig = @import("../node/node2.zig").NodeConfig;
-const OutboundConnectionConfig = @import("../protocol/connection3.zig").OutboundConnectionConfig;
+const Node = @import("../node/node.zig").Node;
+const NodeConfig = @import("../node/node.zig").NodeConfig;
+const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
 const AllowedInboundConnectionConfig = @import("../node/listener.zig").AllowedInboundConnectionConfig;
 
-var client_config = ClientConfig{
-    .host = "127.0.0.1",
-    .port = 8000,
-    .compression = .none,
-    .message_pool_capacity = 5_000,
-    .max_connections = 10,
-};
-
-var node_config2 = NodeConfig{
+var node_config = NodeConfig{
     .max_connections = 5,
 };
 
@@ -93,7 +82,7 @@ pub fn run() !void {
             .{
                 .long_name = "worker-threads",
                 .help = "worker threads to be spawned",
-                .value_ref = app_runner.mkRef(&node_config2.worker_threads),
+                .value_ref = app_runner.mkRef(&node_config.worker_threads),
             },
         },
 
@@ -291,9 +280,9 @@ pub fn nodeListen() !void {
         .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
     };
     const listener_configs = [_]ListenerConfig{listener_config};
-    node_config2.listener_configs = &listener_configs;
+    node_config.listener_configs = &listener_configs;
 
-    var node = try Node.init(allocator, node_config2);
+    var node = try Node.init(allocator, node_config);
     defer node.deinit();
 
     try node.start();
@@ -321,10 +310,10 @@ pub fn nodePing() !void {
 
     const outbound_configs = [_]OutboundConnectionConfig{outbound_config};
 
-    node_config2.worker_threads = 1;
-    node_config2.outbound_configs = &outbound_configs;
+    node_config.worker_threads = 1;
+    node_config.outbound_configs = &outbound_configs;
 
-    var node = try Node.init(allocator, node_config2);
+    var node = try Node.init(allocator, node_config);
     defer node.deinit();
 
     try node.start();
@@ -337,165 +326,165 @@ pub fn nodePing() !void {
     }
 }
 
-pub fn nodeReply() !void {
-    // log.debug("reply config {any}", .{reply_config});
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // const allocator = gpa.allocator();
-    // defer _ = gpa.deinit();
-    //
-    // var client = try Client.init(allocator, client_config);
-    // defer client.deinit();
-    //
-    // // spin up the client worker thread
-    // try client.run();
-    // defer client.close();
-    //
-    // const connect_deadline_ms: i64 = 1000;
-    // const conn = try client.connect(connect_deadline_ms);
-    // _ = conn; // NOTE: i'm actually not to sure if I want to give users access to the connection
-    //
-    // const handler_fn = struct {
-    //     fn handle(request: *Message, reply: *Message) void {
-    //         log.debug("handling request!", .{});
-    //         // echo this back
-    //         reply.setBody(request.body());
-    //     }
-    // }.handle;
-    //
-    // try client.advertise("/my/topic", handler_fn);
-    // defer client.unadvertise("/my/topic") catch unreachable;
-    //
-    // try registerSigintHandler();
-    // while (!sigint_received) {
-    //     std.time.sleep(1 * std.time.ns_per_ms);
-    // }
-}
+// pub fn nodeReply() !void {
+// log.debug("reply config {any}", .{reply_config});
+// var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+// const allocator = gpa.allocator();
+// defer _ = gpa.deinit();
+//
+// var client = try Client.init(allocator, client_config);
+// defer client.deinit();
+//
+// // spin up the client worker thread
+// try client.run();
+// defer client.close();
+//
+// const connect_deadline_ms: i64 = 1000;
+// const conn = try client.connect(connect_deadline_ms);
+// _ = conn; // NOTE: i'm actually not to sure if I want to give users access to the connection
+//
+// const handler_fn = struct {
+//     fn handle(request: *Message, reply: *Message) void {
+//         log.debug("handling request!", .{});
+//         // echo this back
+//         reply.setBody(request.body());
+//     }
+// }.handle;
+//
+// try client.advertise("/my/topic", handler_fn);
+// defer client.unadvertise("/my/topic") catch unreachable;
+//
+// try registerSigintHandler();
+// while (!sigint_received) {
+//     std.time.sleep(1 * std.time.ns_per_ms);
+// }
+// }
 
-pub fn nodeRequest() !void {}
+// pub fn nodeRequest() !void {}
 
-pub fn nodeBench() !void {
-    // creating a client to communicate with the node
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+// pub fn nodeBench() !void {
+//     // creating a client to communicate with the node
+//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+//     const allocator = gpa.allocator();
+//     defer _ = gpa.deinit();
 
-    var client = try Client.init(allocator, client_config);
-    defer client.deinit();
+//     var client = try Client.init(allocator, client_config);
+//     defer client.deinit();
 
-    // run the background client thread
-    try client.start();
-    defer client.stop();
+//     // run the background client thread
+//     try client.start();
+//     defer client.stop();
 
-    for (0..client.config.max_connections) |_| {
-        const conn = try client.connect();
-        errdefer client.disconnect(conn);
-    }
+//     for (0..client.config.max_connections) |_| {
+//         const conn = try client.connect();
+//         errdefer client.disconnect(conn);
+//     }
 
-    defer {
-        for (0..client.config.max_connections) |_| {
-            var conn_iter = client.connections.valueIterator();
-            while (conn_iter.next()) |conn_ptr| {
-                const conn = conn_ptr.*;
-                errdefer client.disconnect(conn);
-            }
-        }
-    }
+//     defer {
+//         for (0..client.config.max_connections) |_| {
+//             var conn_iter = client.connections.valueIterator();
+//             while (conn_iter.next()) |conn_ptr| {
+//                 const conn = conn_ptr.*;
+//                 errdefer client.disconnect(conn);
+//             }
+//         }
+//     }
 
-    const body = "";
-    // const body = "a" ** constants.message_max_body_size;
-    const topic_name = "/test";
+//     const body = "";
+//     // const body = "a" ** constants.message_max_body_size;
+//     const topic_name = "/test";
 
-    while (true) {
-        var conn_iter = client.connections.valueIterator();
-        while (conn_iter.next()) |conn_ptr| {
-            const conn = conn_ptr.*;
-            client.publish(conn, topic_name, body, .{}) catch |err| switch (err) {
-                error.OutOfMemory => {
-                    std.time.sleep(1 * std.time.ns_per_ms);
-                    continue;
-                },
-                else => {
-                    std.time.sleep(1 * std.time.ns_per_ms);
-                    continue;
+//     while (true) {
+//         var conn_iter = client.connections.valueIterator();
+//         while (conn_iter.next()) |conn_ptr| {
+//             const conn = conn_ptr.*;
+//             client.publish(conn, topic_name, body, .{}) catch |err| switch (err) {
+//                 error.OutOfMemory => {
+//                     std.time.sleep(1 * std.time.ns_per_ms);
+//                     continue;
+//                 },
+//                 else => {
+//                     std.time.sleep(1 * std.time.ns_per_ms);
+//                     continue;
 
-                    // @panic("unhandled publish error");
-                },
-            };
-        }
-    }
-}
+//                     // @panic("unhandled publish error");
+//                 },
+//             };
+//         }
+//     }
+// }
 
-pub fn nodePublish() !void {
-    // creating a client to communicate with the node
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+// pub fn nodePublish() !void {
+//     // creating a client to communicate with the node
+//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+//     const allocator = gpa.allocator();
+//     defer _ = gpa.deinit();
 
-    var client = try Client.init(allocator, client_config);
-    defer client.deinit();
+//     var client = try Client.init(allocator, client_config);
+//     defer client.deinit();
 
-    // run the background client thread
-    try client.start();
-    defer client.stop();
+//     // run the background client thread
+//     try client.start();
+//     defer client.stop();
 
-    const conn = try client.connect();
-    defer client.disconnect(conn);
+//     const conn = try client.connect();
+//     defer client.disconnect(conn);
 
-    // const body = "hello from the publisher";
-    const body = "a" ** constants.message_max_body_size;
-    const topic_name = "/test";
+//     // const body = "hello from the publisher";
+//     const body = "a" ** constants.message_max_body_size;
+//     const topic_name = "/test";
 
-    registerSigintHandler();
+//     registerSigintHandler();
 
-    while (!sigint_received) {
-        client.publish(conn, topic_name, body, .{}) catch |err| {
-            log.err("error {any}", .{err});
-            std.time.sleep(1 * std.time.ns_per_ms);
-            continue;
-        };
-    }
-}
+//     while (!sigint_received) {
+//         client.publish(conn, topic_name, body, .{}) catch |err| {
+//             log.err("error {any}", .{err});
+//             std.time.sleep(1 * std.time.ns_per_ms);
+//             continue;
+//         };
+//     }
+// }
 
-pub fn nodeSubscribe() !void {
-    // creating a client to communicate with the node
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+// pub fn nodeSubscribe() !void {
+//     // creating a client to communicate with the node
+//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+//     const allocator = gpa.allocator();
+//     defer _ = gpa.deinit();
 
-    var client = try Client.init(allocator, client_config);
-    defer client.deinit();
+//     var client = try Client.init(allocator, client_config);
+//     defer client.deinit();
 
-    // run the background client thread
-    try client.start();
-    defer client.stop();
+//     // run the background client thread
+//     try client.start();
+//     defer client.stop();
 
-    const conn = try client.connect();
-    defer client.disconnect(conn);
+//     const conn = try client.connect();
+//     defer client.disconnect(conn);
 
-    const topic_name = "/test";
+//     const topic_name = "/test";
 
-    const callback = struct {
-        pub fn callback(event: Topic.TopicEvent, context: ?*anyopaque, message: *Message) void {
-            _ = event;
-            // _ = context;
-            const subscriber: *Subscriber = @ptrCast(@alignCast(context));
-            subscriber.messages_received += 1;
-            if (subscriber.messages_received % 10 == 0) {
-                log.debug("subscriber.messages_received {}", .{subscriber.messages_received});
-            }
-            message.deref();
-        }
-    }.callback;
+//     const callback = struct {
+//         pub fn callback(event: Topic.TopicEvent, context: ?*anyopaque, message: *Message) void {
+//             _ = event;
+//             // _ = context;
+//             const subscriber: *Subscriber = @ptrCast(@alignCast(context));
+//             subscriber.messages_received += 1;
+//             if (subscriber.messages_received % 10 == 0) {
+//                 log.debug("subscriber.messages_received {}", .{subscriber.messages_received});
+//             }
+//             message.deref();
+//         }
+//     }.callback;
 
-    registerSigintHandler();
+//     registerSigintHandler();
 
-    const subscriber = try client.subscribe(conn, topic_name, callback, .{});
-    defer client.unsubscribe(subscriber) catch unreachable;
+//     const subscriber = try client.subscribe(conn, topic_name, callback, .{});
+//     defer client.unsubscribe(subscriber) catch unreachable;
 
-    while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
-    }
-}
+//     while (!sigint_received) {
+//         std.time.sleep(1 * std.time.ns_per_ms);
+//     }
+// }
 
 pub fn version() !void {
     std.log.debug("0.0.0", .{});
