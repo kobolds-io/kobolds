@@ -79,8 +79,6 @@ pub const Worker = struct {
             self.allocator.destroy(connection);
         }
 
-        self.connections.deinit();
-
         var uninitialized_connections_iter = self.uninitialized_connections.valueIterator();
         while (uninitialized_connections_iter.next()) |entry| {
             const connection = entry.*;
@@ -89,8 +87,8 @@ pub const Worker = struct {
             self.allocator.destroy(connection);
         }
 
+        self.connections.deinit();
         self.uninitialized_connections.deinit();
-
         self.io.deinit();
 
         self.allocator.destroy(self.io);
