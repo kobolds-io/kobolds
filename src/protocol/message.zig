@@ -485,9 +485,10 @@ pub const Message = struct {
 
 pub const Headers = extern struct {
     const Self = @This();
-    pub const padding_len: comptime_int = 24;
+    pub const padding_len: comptime_int = 8;
     pub const reserved_len: comptime_int = 64;
 
+    node_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -542,6 +543,9 @@ pub const Headers = extern struct {
         const body_checksum = utils.bytesToU64(bytes[i..][0..8]);
         i += 8;
 
+        const node_id = utils.bytesToU128(bytes[i..][0..16]);
+        i += 16;
+
         const connection_id = utils.bytesToU128(bytes[i..][0..16]);
         i += 16;
 
@@ -595,6 +599,7 @@ pub const Headers = extern struct {
         return Headers{
             .headers_checksum = headers_checksum,
             .body_checksum = body_checksum,
+            .node_id = node_id,
             .connection_id = connection_id,
             .body_length = body_length,
             .protocol_version = protocol_version,
@@ -626,6 +631,7 @@ pub const Headers = extern struct {
 
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(headers_checksum));
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(body_checksum));
+        list.appendSliceAssumeCapacity(&utils.u128ToBytes(self.node_id));
         list.appendSliceAssumeCapacity(&utils.u128ToBytes(self.connection_id));
         list.appendSliceAssumeCapacity(&utils.u32ToBytes(self.body_length));
         list.appendAssumeCapacity(@intFromEnum(self.protocol_version));
@@ -650,6 +656,7 @@ pub const Request = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
+    node_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -690,6 +697,7 @@ pub const Reply = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
+    node_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -734,6 +742,7 @@ pub const Ping = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
+    node_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -771,6 +780,7 @@ pub const Pong = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
+    node_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -810,6 +820,7 @@ pub const Accept = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
+    node_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -820,9 +831,7 @@ pub const Accept = extern struct {
     compressed: bool = false,
     padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
-    accepted_connection_id: u128 = 0, // this will be the ID to be used by the connected
-
-    reserved: [48]u8 = [_]u8{0} ** 48,
+    reserved: [64]u8 = [_]u8{0} ** 64,
 
     pub fn validate(self: @This()) ?[]const u8 {
         assert(self.message_type == .accept);
@@ -831,11 +840,11 @@ pub const Accept = extern struct {
         if (self.protocol_version == .unsupported) return "invalid protocol_version";
         for (self.padding) |b| if (b != 0) return "invalid padding";
 
+        // ensure the node_id is valid
+        if (self.node_id == 0) return "invalid node_id";
+
         // ensure the connection_id is valid
         if (self.connection_id == 0) return "invalid connection_id";
-
-        // ensure the accepted_connection_id is valid
-        if (self.accepted_connection_id == 0) return "invalid accepted_connection_id";
 
         // ensure reserved is empty
         for (self.reserved) |b| if (b != 0) return "invalid reserved";
@@ -848,6 +857,7 @@ pub const Advertise = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
+    node_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -892,6 +902,7 @@ pub const Unadvertise = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
+    node_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -936,6 +947,7 @@ pub const Publish = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
+    node_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -973,6 +985,7 @@ pub const Subscribe = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
+    node_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -1014,6 +1027,7 @@ pub const Unsubscribe = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
+    node_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,

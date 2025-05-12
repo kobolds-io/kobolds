@@ -417,9 +417,6 @@ test "the api" {
     var node = try Node.init(allocator, .{});
     defer node.deinit();
 
-    try node.run();
+    try node.start();
     defer node.close();
-
-    try node.connect();
-    defer node.disconnect();
 }

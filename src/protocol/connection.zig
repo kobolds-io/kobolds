@@ -87,6 +87,8 @@ pub const Connection = struct {
     config: ConnectionConfig,
     connect_completion: *IO.Completion,
     connection_id: uuid.Uuid,
+    node_id: uuid.Uuid,
+    remote_node_id: uuid.Uuid,
     connection_type: ConnectionType,
     connect_submitted: bool,
     inbox: *RingBuffer(*Message),
@@ -111,6 +113,7 @@ pub const Connection = struct {
 
     pub fn init(
         id: uuid.Uuid,
+        node_id: uuid.Uuid,
         connection_type: ConnectionType,
         io: *IO,
         socket: posix.socket_t,
@@ -163,6 +166,8 @@ pub const Connection = struct {
             .messages_recv = 0,
             .messages_sent = 0,
             .connection_id = id,
+            .node_id = node_id,
+            .remote_node_id = 0,
             .outbox = outbox,
             .parsed_messages = try std.ArrayList(Message).initCapacity(
                 allocator,
@@ -387,20 +392,23 @@ pub const Connection = struct {
             return;
         }
 
-        // Process messages
         for (message_ptrs, self.parsed_messages.items) |message_ptr, message| {
-            if (self.connection_type == .outbound and message.headers.message_type == .accept) {
-                assert(self.connection_id == 0);
+            // // Process the handshake message for an accept message
+            // if (self.connection_type == .outbound and message.headers.message_type == .accept) {
+            //     assert(self.connection_id == 0);
 
-                const accept_headers: *const Accept = message.headers.intoConst(.accept).?;
+            //     const accept_headers: *const Accept = message.headers.intoConst(.accept).?;
 
-                assert(accept_headers.connection_id != accept_headers.accepted_connection_id);
-                self.connection_id = accept_headers.accepted_connection_id;
+            //     assert(self.remote_node_id != accept_headers.node_id);
+            //     assert(self.connection_id != accept_headers.connection_id);
 
-                // update the state of this connection to fully connected.
-                self.state = .connected;
-                log.info("connection connection_id is set {}", .{self.connection_id});
-            }
+            //     self.connection_id = accept_headers.connection_id;
+            //     self.node_id = accept_headers.node_id;
+
+            //     // update the state of this connection to fully connected.
+            //     self.state = .connected;
+            //     log.info("connection connection_id is set {}", .{self.connection_id});
+            // }
 
             message_ptr.* = message;
             message_ptr.ref();

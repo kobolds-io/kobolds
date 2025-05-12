@@ -210,6 +210,7 @@ pub const Worker = struct {
         const conn_id = uuid.v7.new();
         connection.* = try Connection.init(
             conn_id,
+            self.node.id,
             .inbound,
             self.io,
             socket,
@@ -237,10 +238,10 @@ pub const Worker = struct {
         accept_message.ref();
 
         var accept_headers: *Accept = accept_message.headers.into(.accept).?;
-        accept_headers.accepted_connection_id = conn_id;
-        accept_headers.connection_id = self.node.id;
+        accept_headers.connection_id = conn_id;
+        accept_headers.node_id = self.node.id;
 
-        connection.state = .connected;
+        // connection.state = .connected;
 
         try connection.outbox.enqueue(accept_message);
 
@@ -266,6 +267,7 @@ pub const Worker = struct {
         const tmp_conn_id = uuid.v7.new();
         conn.* = try Connection.init(
             0,
+            self.node.id,
             .outbound,
             self.io,
             socket,
@@ -380,6 +382,50 @@ pub const Worker = struct {
                 if (message.refs() == 0) self.node.memory_pool.destroy(message);
             }
             switch (message.headers.message_type) {
+                .accept => {
+                    // ensure that this connection is not fully connected
+                    assert(conn.state != .connected);
+
+                    switch (conn.connection_type) {
+                        .outbound => {
+                            assert(conn.connection_id == 0);
+                            // An error here would be a protocol error
+                            assert(conn.remote_node_id != message.headers.node_id);
+                            assert(conn.connection_id != message.headers.connection_id);
+
+                            conn.connection_id = message.headers.connection_id;
+                            conn.remote_node_id = message.headers.node_id;
+
+                            // enqueue a message to immediately convey the node id of this Node
+                            message.headers.node_id = conn.node_id;
+                            message.headers.connection_id = conn.connection_id;
+
+                            message.ref();
+                            try conn.outbox.enqueue(message);
+
+                            assert(conn.connection_type == .outbound);
+
+                            conn.state = .connected;
+                            log.info("outbound_connection - node_id: {}, connection_id: {}, remote_node_id: {}", .{
+                                conn.node_id,
+                                conn.connection_id,
+                                conn.remote_node_id,
+                            });
+                        },
+                        .inbound => {
+                            assert(conn.connection_id == message.headers.connection_id);
+                            assert(conn.node_id != message.headers.node_id);
+
+                            conn.remote_node_id = message.headers.node_id;
+                            conn.state = .connected;
+                            log.info("inbound_connection - node_id: {}, connection_id: {}, remote_node_id: {}", .{
+                                conn.node_id,
+                                conn.connection_id,
+                                conn.remote_node_id,
+                            });
+                        },
+                    }
+                },
                 .ping => {
                     // Since this is a `ping` we don't need to do any extra work to figure out how to respond
                     message.headers.message_type = .pong;

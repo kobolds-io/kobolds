@@ -12,7 +12,6 @@ comptime {
     _ = @import("./io/test.zig");
     _ = @import("./node/listener.zig");
     _ = @import("./node/node.zig");
-    _ = @import("./node/worker2.zig");
     _ = @import("./node/worker.zig");
     _ = @import("./protocol/message_test.zig");
     _ = @import("./protocol/parser_test.zig");
