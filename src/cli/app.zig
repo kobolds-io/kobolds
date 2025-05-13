@@ -6,6 +6,7 @@ const log = std.log.scoped(.CLI);
 
 const constants = @import("../constants.zig");
 const Mailbox = @import("../data_structures/mailbox.zig").Mailbox;
+const Connection = @import("../protocol/connection.zig").Connection;
 const Message = @import("../protocol/message.zig").Message;
 const Channel = @import("../data_structures/channel.zig").Channel;
 const Topic = @import("../pubsub/topic.zig").Topic;
@@ -318,6 +319,28 @@ pub fn nodePing() !void {
 
     try node.start();
     defer node.close();
+
+    var outbound_connections: []*Connection = undefined;
+    while (true) {
+        outbound_connections = try node.getOutboundConnections(allocator);
+        if (outbound_connections.len == node.config.outbound_configs.?.len) break;
+        std.time.sleep(10 * std.time.ns_per_us);
+    }
+    defer allocator.free(outbound_connections);
+
+    const message = try node.memory_pool.create();
+
+    message.* = Message.new();
+    message.headers.message_type = .ping;
+    message.setTransactionId(69);
+    message.ref();
+
+    for (outbound_connections) |conn| {
+        log.debug("outbound connection remote node id {}", .{conn.remote_node_id});
+
+        try conn.outbox.enqueue(message);
+    }
+    std.time.sleep(500 * std.time.ns_per_ms);
 
     registerSigintHandler();
 

@@ -301,6 +301,9 @@ pub const Connection = struct {
                     }
                     const message_size = message.size();
 
+                    message.headers.node_id = self.node_id;
+                    message.headers.connection_id = self.connection_id;
+
                     message.encode(buf[0..message_size]);
 
                     // add the maximum number of bytes possible to the send buffer

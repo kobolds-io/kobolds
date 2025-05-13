@@ -401,6 +401,32 @@ pub const Node = struct {
 
         try worker.addOutboundConnection(config);
     }
+
+    pub fn getOutboundConnections(self: *Self, allocator: std.mem.Allocator) ![]*Connection {
+        // const list = try allocator.create(std.ArrayList(*Connection));
+        // errdefer allocator.destroy(list);
+
+        var list = std.ArrayList(*Connection).init(allocator);
+        errdefer list.deinit();
+
+        var workers_interator = self.workers.valueIterator();
+        while (workers_interator.next()) |worker_entry| {
+            const worker = worker_entry.*;
+
+            worker.connections_mutex.lock();
+            defer worker.connections_mutex.unlock();
+
+            var connections_iterator = worker.connections.valueIterator();
+            while (connections_iterator.next()) |connection_entry| {
+                const connection: *Connection = connection_entry.*;
+                if (connection.state == .connected and connection.connection_type == .outbound) {
+                    try list.append(connection);
+                }
+            }
+        }
+
+        return list.toOwnedSlice();
+    }
 };
 
 test "init/deinit" {

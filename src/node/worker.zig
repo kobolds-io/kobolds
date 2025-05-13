@@ -421,6 +421,10 @@ pub const Worker = struct {
                     }
                 },
                 .ping => {
+                    log.debug("received ping from node_id: {}, connection_id: {}", .{
+                        message.headers.node_id,
+                        message.headers.connection_id,
+                    });
                     // Since this is a `ping` we don't need to do any extra work to figure out how to respond
                     message.headers.message_type = .pong;
                     message.headers.connection_id = self.node.id;
@@ -433,6 +437,13 @@ pub const Worker = struct {
                         log.err("Failed to enqueue message to outbox: {}", .{err});
                         message.deref(); // Undo reference if enqueue fails
                     }
+                    message.ref();
+                },
+                .pong => {
+                    log.debug("received pong from node_id: {}, connection_id: {}", .{
+                        message.headers.node_id,
+                        message.headers.connection_id,
+                    });
                 },
                 .publish => {
                     // // get the publisher's key
