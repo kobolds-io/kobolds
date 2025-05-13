@@ -427,7 +427,8 @@ pub const Worker = struct {
                     });
                     // Since this is a `ping` we don't need to do any extra work to figure out how to respond
                     message.headers.message_type = .pong;
-                    message.headers.connection_id = self.node.id;
+                    message.headers.node_id = self.node.id;
+                    message.headers.connection_id = conn.connection_id;
                     message.setTransactionId(message.transactionId());
                     message.setErrorCode(.ok);
 
