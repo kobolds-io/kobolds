@@ -26,6 +26,14 @@ const ParserBenchmark = struct {
     }
 };
 
+fn afterEach() void {
+    // reset the messages array list so we don't eat through all the memory on the machine
+    // drop the len completely
+    parser_messages.items.len = 0;
+}
+
+var parser_messages: std.ArrayList(Message) = undefined;
+
 test "Parser benchmarks" {
     var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = std.math.maxInt(u16) });
     defer bench.deinit();
@@ -34,7 +42,7 @@ test "Parser benchmarks" {
     defer _ = parser_messages_gpa.deinit();
     const parser_messages_allocator = parser_messages_gpa.allocator();
 
-    var parser_messages = std.ArrayList(Message).initCapacity(parser_messages_allocator, std.math.maxInt(u16)) catch unreachable;
+    parser_messages = std.ArrayList(Message).initCapacity(parser_messages_allocator, std.math.maxInt(u16)) catch unreachable;
     defer parser_messages.deinit();
 
     var parser_gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -50,6 +58,17 @@ test "Parser benchmarks" {
     const bytes_1 = headers_1 ++ body;
     const bytes_2 = bytes_1 ++ headers_1 ++ body;
     const bytes_3 = bytes_2 ++ headers_1 ++ body;
+
+    const recv_buffer = try parser_messages_allocator.alloc(u8, constants.connection_recv_buffer_size);
+    defer parser_messages_allocator.free(recv_buffer);
+
+    // write as many messages as possible into the recv_buffer. This is the closest represenation of what the parser
+    // would have to deal with for each connection
+    var recv_buffer_index: usize = 0;
+    while (recv_buffer[recv_buffer_index..].len >= bytes_1.len) {
+        @memcpy(recv_buffer[recv_buffer_index .. recv_buffer_index + bytes_1.len], &bytes_1);
+        recv_buffer_index += bytes_1.len;
+    }
 
     const parser_parse_1_title = try std.fmt.allocPrint(
         parser_messages_allocator,
@@ -88,10 +107,58 @@ test "Parser benchmarks" {
     );
     defer parser_messages_allocator.free(parser_parse_4_title);
 
-    try bench.addParam(parser_parse_4_title, &ParserBenchmark.new(&parser_messages, &parser, bytes_4), .{});
-    try bench.addParam(parser_parse_1_title, &ParserBenchmark.new(&parser_messages, &parser, &bytes_1), .{});
-    try bench.addParam(parser_parse_2_title, &ParserBenchmark.new(&parser_messages, &parser, &bytes_2), .{});
-    try bench.addParam(parser_parse_3_title, &ParserBenchmark.new(&parser_messages, &parser, &bytes_3), .{});
+    const parser_parse_5_title = try std.fmt.allocPrint(
+        parser_messages_allocator,
+        "parse {} bytes",
+        .{recv_buffer[0..recv_buffer_index].len},
+    );
+    defer parser_messages_allocator.free(parser_parse_5_title);
+
+    try bench.addParam(
+        parser_parse_4_title,
+        &ParserBenchmark.new(&parser_messages, &parser, bytes_4),
+        .{
+            .hooks = .{
+                .after_each = afterEach,
+            },
+        },
+    );
+    try bench.addParam(
+        parser_parse_1_title,
+        &ParserBenchmark.new(&parser_messages, &parser, &bytes_1),
+        .{
+            .hooks = .{
+                .after_each = afterEach,
+            },
+        },
+    );
+    try bench.addParam(
+        parser_parse_2_title,
+        &ParserBenchmark.new(&parser_messages, &parser, &bytes_2),
+        .{
+            .hooks = .{
+                .after_each = afterEach,
+            },
+        },
+    );
+    try bench.addParam(
+        parser_parse_3_title,
+        &ParserBenchmark.new(&parser_messages, &parser, &bytes_3),
+        .{
+            .hooks = .{
+                .after_each = afterEach,
+            },
+        },
+    );
+    try bench.addParam(
+        parser_parse_5_title,
+        &ParserBenchmark.new(&parser_messages, &parser, recv_buffer[0..recv_buffer_index]),
+        .{
+            .hooks = .{
+                .after_each = afterEach,
+            },
+        },
+    );
 
     const stderr = std.io.getStdErr().writer();
     try stderr.writeAll("\n");

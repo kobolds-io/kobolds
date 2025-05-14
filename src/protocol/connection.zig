@@ -112,8 +112,8 @@ pub const Connection = struct {
     config: ConnectionConfig,
     connect_completion: *IO.Completion,
     connection_id: uuid.Uuid,
-    node_id: uuid.Uuid,
-    remote_node_id: uuid.Uuid,
+    origin_id: uuid.Uuid,
+    remote_id: uuid.Uuid,
     connection_type: ConnectionType,
     connect_submitted: bool,
     inbox: *RingBuffer(*Message),
@@ -138,7 +138,7 @@ pub const Connection = struct {
 
     pub fn init(
         id: uuid.Uuid,
-        node_id: uuid.Uuid,
+        origin_id: uuid.Uuid,
         connection_type: ConnectionType,
         io: *IO,
         socket: posix.socket_t,
@@ -191,8 +191,8 @@ pub const Connection = struct {
             .messages_recv = 0,
             .messages_sent = 0,
             .connection_id = id,
-            .node_id = node_id,
-            .remote_node_id = 0,
+            .origin_id = origin_id,
+            .remote_id = 0,
             .outbox = outbox,
             .parsed_messages = try std.ArrayList(Message).initCapacity(
                 allocator,
@@ -326,7 +326,7 @@ pub const Connection = struct {
                     }
                     const message_size = message.size();
 
-                    message.headers.node_id = self.node_id;
+                    message.headers.origin_id = self.origin_id;
                     message.headers.connection_id = self.connection_id;
 
                     message.encode(buf[0..message_size]);

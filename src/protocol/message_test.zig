@@ -23,7 +23,7 @@ test "encoding" {
     const topic = "/hello/world";
     var message = Message.new();
     message.headers.message_type = .publish;
-    message.headers.node_id = 123456789012345678901234567890;
+    message.headers.origin_id = 123456789012345678901234567890;
     message.headers.connection_id = 332665699182789392398147937282310771713;
     message.setBody(body);
     message.setTopicName(topic);

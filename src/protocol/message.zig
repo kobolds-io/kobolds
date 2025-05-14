@@ -488,7 +488,7 @@ pub const Headers = extern struct {
     pub const padding_len: comptime_int = 8;
     pub const reserved_len: comptime_int = 64;
 
-    node_id: u128 = 0,
+    origin_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -543,7 +543,7 @@ pub const Headers = extern struct {
         const body_checksum = utils.bytesToU64(bytes[i..][0..8]);
         i += 8;
 
-        const node_id = utils.bytesToU128(bytes[i..][0..16]);
+        const origin_id = utils.bytesToU128(bytes[i..][0..16]);
         i += 16;
 
         const connection_id = utils.bytesToU128(bytes[i..][0..16]);
@@ -599,7 +599,7 @@ pub const Headers = extern struct {
         return Headers{
             .headers_checksum = headers_checksum,
             .body_checksum = body_checksum,
-            .node_id = node_id,
+            .origin_id = origin_id,
             .connection_id = connection_id,
             .body_length = body_length,
             .protocol_version = protocol_version,
@@ -631,7 +631,7 @@ pub const Headers = extern struct {
 
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(headers_checksum));
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(body_checksum));
-        list.appendSliceAssumeCapacity(&utils.u128ToBytes(self.node_id));
+        list.appendSliceAssumeCapacity(&utils.u128ToBytes(self.origin_id));
         list.appendSliceAssumeCapacity(&utils.u128ToBytes(self.connection_id));
         list.appendSliceAssumeCapacity(&utils.u32ToBytes(self.body_length));
         list.appendAssumeCapacity(@intFromEnum(self.protocol_version));
@@ -656,7 +656,7 @@ pub const Request = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    node_id: u128 = 0,
+    origin_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -697,7 +697,7 @@ pub const Reply = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    node_id: u128 = 0,
+    origin_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -742,7 +742,7 @@ pub const Ping = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    node_id: u128 = 0,
+    origin_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -780,7 +780,7 @@ pub const Pong = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    node_id: u128 = 0,
+    origin_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -820,7 +820,7 @@ pub const Accept = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    node_id: u128 = 0,
+    origin_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -840,8 +840,8 @@ pub const Accept = extern struct {
         if (self.protocol_version == .unsupported) return "invalid protocol_version";
         for (self.padding) |b| if (b != 0) return "invalid padding";
 
-        // ensure the node_id is valid
-        if (self.node_id == 0) return "invalid node_id";
+        // ensure the origin_id is valid
+        if (self.origin_id == 0) return "invalid origin_id";
 
         // ensure the connection_id is valid
         if (self.connection_id == 0) return "invalid connection_id";
@@ -857,7 +857,7 @@ pub const Advertise = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    node_id: u128 = 0,
+    origin_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -902,7 +902,7 @@ pub const Unadvertise = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    node_id: u128 = 0,
+    origin_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -947,7 +947,7 @@ pub const Publish = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    node_id: u128 = 0,
+    origin_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -985,7 +985,7 @@ pub const Subscribe = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    node_id: u128 = 0,
+    origin_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
@@ -1027,7 +1027,7 @@ pub const Unsubscribe = extern struct {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
 
-    node_id: u128 = 0,
+    origin_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
