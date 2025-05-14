@@ -46,6 +46,7 @@ pub const Client = struct {
     connections_mutex: std.Thread.Mutex,
     connections: std.AutoHashMap(uuid.Uuid, *Connection),
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
+    transactions: std.AutoHashMap(uuid.Uuid, *Transaction),
 
     pub fn init(allocator: std.mem.Allocator, config: ClientConfig) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -83,6 +84,7 @@ pub const Client = struct {
             .connections_mutex = std.Thread.Mutex{},
             .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
+            .transactions = std.AutoHashMap(uuid.Uuid, *Transaction).init(allocator),
         };
     }
 
@@ -107,10 +109,19 @@ pub const Client = struct {
             self.allocator.destroy(connection);
         }
 
+        var transactions_iterator = self.transactions.valueIterator();
+        while (transactions_iterator.next()) |entry| {
+            const transaction = entry.*;
+
+            transaction.deinit();
+            self.allocator.destroy(transaction);
+        }
+
         self.io.deinit();
         self.memory_pool.deinit();
         self.connections.deinit();
         self.uninitialized_connections.deinit();
+        self.transactions.deinit();
 
         self.allocator.destroy(self.memory_pool);
         self.allocator.destroy(self.io);
@@ -147,6 +158,7 @@ pub const Client = struct {
                 .running => {
                     self.tick() catch unreachable;
 
+                    // self.io.run_for_ns(100 * std.time.ns_per_us) catch |err| {
                     self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch |err| {
                         log.err("client failed to run io {any}", .{err});
                     };
@@ -327,31 +339,43 @@ pub const Client = struct {
                         conn.remote_id,
                     });
                 },
-                .ping => {
-                    log.debug("received ping from origin_id: {}, connection_id: {}", .{
-                        message.headers.origin_id,
-                        message.headers.connection_id,
-                    });
-                    // Since this is a `ping` we don't need to do any extra work to figure out how to respond
-                    message.headers.message_type = .pong;
-                    message.headers.origin_id = self.id;
-                    message.headers.connection_id = conn.connection_id;
-                    message.setTransactionId(message.transactionId());
-                    message.setErrorCode(.ok);
+                // .ping => {
+                //     log.debug("received ping from origin_id: {}, connection_id: {}", .{
+                //         message.headers.origin_id,
+                //         message.headers.connection_id,
+                //     });
+                //     // Since this is a `ping` we don't need to do any extra work to figure out how to respond
+                //     message.headers.message_type = .pong;
+                //     message.headers.origin_id = self.id;
+                //     message.headers.connection_id = conn.connection_id;
+                //     message.setTransactionId(message.transactionId());
+                //     message.setErrorCode(.ok);
 
-                    assert(message.refs() == 1);
+                //     assert(message.refs() == 1);
 
-                    if (conn.outbox.enqueue(message)) |_| {} else |err| {
-                        log.err("Failed to enqueue message to outbox: {}", .{err});
-                        message.deref(); // Undo reference if enqueue fails
-                    }
-                    message.ref();
-                },
+                //     if (conn.outbox.enqueue(message)) |_| {} else |err| {
+                //         log.err("Failed to enqueue message to outbox: {}", .{err});
+                //         message.deref(); // Undo reference if enqueue fails
+                //     }
+                //     message.ref();
+                // },
                 .pong => {
-                    log.debug("received pong from origin_id: {}, connection_id: {}", .{
-                        message.headers.origin_id,
-                        message.headers.connection_id,
-                    });
+                    self.mutex.lock();
+                    defer self.mutex.unlock();
+
+                    // check if this pong message is part of transaction
+                    if (self.transactions.get(message.transactionId())) |transaction| {
+                        message.ref();
+                        // log.info("message.refs() {}", .{message.refs()});
+                        transaction.channel.send(message);
+                        transaction.deinit();
+                        _ = self.transactions.remove(message.transactionId());
+                    }
+
+                    // log.debug("received pong from origin_id: {}, connection_id: {}", .{
+                    //     message.headers.origin_id,
+                    //     message.headers.connection_id,
+                    // });
                 },
                 .publish => {
                     // // get the publisher's key
@@ -441,6 +465,30 @@ pub const Client = struct {
         }
 
         return all_connections_closed;
+    }
+};
+
+pub const Transaction = struct {
+    const Self = @This();
+    id: uuid.Uuid,
+    channel: *UnbufferedChannel(*Message),
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, id: uuid.Uuid) !Self {
+        const channel = try allocator.create(UnbufferedChannel(*Message));
+        errdefer allocator.destroy(channel);
+
+        channel.* = UnbufferedChannel(*Message).new();
+
+        return Self{
+            .allocator = allocator,
+            .id = id,
+            .channel = channel,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.allocator.destroy(self.channel);
     }
 };
 

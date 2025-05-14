@@ -18,6 +18,7 @@ const Node = @import("../node/node.zig").Node;
 const NodeConfig = @import("../node/node.zig").NodeConfig;
 const Client = @import("../client/client.zig").Client;
 const ClientConfig = @import("../client/client.zig").ClientConfig;
+const Transaction = @import("../client/client.zig").Transaction;
 const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
 const AllowedInboundConnectionConfig = @import("../node/listener.zig").AllowedInboundConnectionConfig;
@@ -358,7 +359,45 @@ pub fn nodePing() !void {
         },
     };
 
-    _ = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
+    const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
+    var timer = try std.time.Timer.start();
+    var start = timer.read();
+
+    var i: usize = 0;
+    while (i < 1_000) : (i += 1) {
+        const message = try client.memory_pool.create();
+        message.* = Message.new();
+        message.headers.message_type = .ping;
+        message.setTransactionId(@intCast(i + 1));
+        message.ref();
+
+        const transaction = try allocator.create(Transaction);
+        defer allocator.destroy(transaction);
+
+        {
+            client.mutex.lock();
+            defer client.mutex.unlock();
+            transaction.* = try Transaction.init(allocator, message.transactionId());
+            try client.transactions.put(message.transactionId(), transaction);
+        }
+
+        start = timer.read();
+
+        {
+            client.connections_mutex.lock();
+            defer client.connections_mutex.unlock();
+
+            try conn.outbox.enqueue(message);
+        }
+
+        const rep = transaction.channel.receive();
+        _ = rep;
+        // defer rep.deref();
+        // defer client.memory_pool.destroy(rep);
+
+        log.err("round trip time took {}ms", .{(timer.read() - start) / std.time.ns_per_ms});
+        // std.time.sleep(100 * std.time.ns_per_ms);
+    }
 
     registerSigintHandler();
 
