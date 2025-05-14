@@ -96,6 +96,34 @@ pub fn run() !void {
         .target = .{ .action = .{ .exec = nodeListen } },
     };
 
+    const node_connect_command = cli.Command{
+        .name = "connect",
+        .description = cli.Description{
+            .one_line = "connect a node to another node",
+            .detailed = "connect a node to another node, this is purely for debugging",
+        },
+
+        .options = &.{
+            // .{
+            //     .long_name = "host",
+            //     .help = "host to listen on",
+            //     .value_ref = app_runner.mkRef(&node_config.host),
+            // },
+            // .{
+            //     .long_name = "port",
+            //     .help = "port to bind to",
+            //     .value_ref = app_runner.mkRef(&node_config.port),
+            // },
+            .{
+                .long_name = "worker-threads",
+                .help = "worker threads to be spawned",
+                .value_ref = app_runner.mkRef(&node_config.worker_threads),
+            },
+        },
+
+        .target = .{ .action = .{ .exec = nodeConnect } },
+    };
+
     const node_ping_command = cli.Command{
         .name = "ping",
         .description = cli.Description{ .one_line = "ping a node" },
@@ -238,6 +266,7 @@ pub fn run() !void {
         .target = .{
             .subcommands = &.{
                 node_listen_command,
+                node_connect_command,
                 node_ping_command,
                 // node_request_command,
                 // node_bench_command,
@@ -336,6 +365,34 @@ pub fn nodePing() !void {
     while (!sigint_received) {
         std.time.sleep(1 * std.time.ns_per_ms);
     }
+}
+
+pub fn nodeConnect() !void {
+    // creating a client to communicate with the node
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+
+    const outbound_connection_config = OutboundConnectionConfig{
+        .host = "127.0.0.1",
+        .port = 8000,
+        .transport = .tcp,
+    };
+    const outbound_connection_configs = [_]OutboundConnectionConfig{outbound_connection_config};
+    node_config.outbound_configs = &outbound_connection_configs;
+
+    var node = try Node.init(allocator, node_config);
+    defer node.deinit();
+
+    try node.start();
+    defer node.close();
+
+    registerSigintHandler();
+
+    while (!sigint_received) {
+        std.time.sleep(1 * std.time.ns_per_ms);
+    }
+    log.warn("sigint received", .{});
 }
 
 // pub fn nodeReply() !void {
@@ -510,7 +567,6 @@ var sigint_received: bool = false;
 fn registerSigintHandler() void {
     const onSigint = struct {
         fn onSigint(_: i32) callconv(.C) void {
-            log.warn("sigint received", .{});
             sigint_received = true;
         }
     }.onSigint;

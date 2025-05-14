@@ -55,7 +55,7 @@ pub const KeepAliveConfig = struct {
 
     pub fn validate(self: KeepAliveConfig) ?[]const u8 {
         if (!self.enabled) return null;
-        if (self.interval_ms < 1_000) return "KeepAliveConfig `interval` invalid. must be greater than 1_000ms";
+        if (self.interval_ms < 1) return "KeepAliveConfig `interval` invalid. must be greater than 1ms";
 
         return null;
     }
