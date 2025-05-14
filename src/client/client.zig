@@ -131,8 +131,9 @@ pub const Client = struct {
                 .running => {
                     self.tick() catch unreachable;
 
-                    // FIX: this should us io uring or something much nicer
-                    // std.time.sleep(100 * std.time.ns_per_ms);
+                    self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch |err| {
+                        log.err("client failed to run io {any}", .{err});
+                    };
                 },
                 .closing => {
                     log.info("client {}: closed", .{self.id});
@@ -157,6 +158,18 @@ pub const Client = struct {
         }
 
         _ = self.done_channel.receive();
+    }
+
+    pub fn connect(self: *Self, config: OutboundConnectionConfig, timeout_ns: u64) !*Connection {
+        _ = self;
+        if (config.validate()) |msg| {
+            log.err("{s}", .{msg});
+            return error.InvalidConfig;
+        }
+        // validate the config
+        _ = timeout_ns;
+
+        return error.NotImplemented;
     }
 
     fn tick(self: *Self) !void {

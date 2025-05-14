@@ -33,16 +33,32 @@ pub const OutboundConnectionConfig = struct {
     /// The reconnection configuration to be used. If `null`, no reconnection attempts will be performed.
     reconnect_config: ?ReconnectionConfig = null,
     keep_alive_config: ?KeepAliveConfig = null,
+
+    pub fn validate(self: OutboundConnectionConfig) ?[]const u8 {
+        if (self.host.len == 0) return "OutboundConnectionConfig `host` invalid length must be > 0";
+        if (self.port == 0) return "OutboundConnectionConfig `port` invalid port must be > 0";
+
+        if (self.reconnect_config) |reconnect_config| {
+            if (reconnect_config.validate()) |e| return e;
+        }
+        if (self.keep_alive_config) |keep_alive_config| {
+            if (keep_alive_config.validate()) |e| return e;
+        }
+
+        return null;
+    }
 };
 
 pub const KeepAliveConfig = struct {
     enabled: bool = true,
-    interval: u64 = 10 * std.time.ns_per_ms,
-};
+    interval_ms: u64 = 1_000,
 
-pub const ReconnectionStrategy = enum {
-    timed,
-    exponential_backoff,
+    pub fn validate(self: KeepAliveConfig) ?[]const u8 {
+        if (!self.enabled) return null;
+        if (self.interval_ms < 1_000) return "KeepAliveConfig `interval` invalid. must be greater than 1_000ms";
+
+        return null;
+    }
 };
 
 pub const ReconnectionConfig = struct {
@@ -53,6 +69,15 @@ pub const ReconnectionConfig = struct {
     max_attempts: u32 = 0,
     /// The connection retry strategy to be used for reconnection attempts
     reconnection_strategy: ReconnectionStrategy = .timed,
+
+    pub fn validate(_: ReconnectionConfig) ?[]const u8 {
+        return null;
+    }
+};
+
+pub const ReconnectionStrategy = enum {
+    timed,
+    exponential_backoff,
 };
 
 pub const Transport = enum {

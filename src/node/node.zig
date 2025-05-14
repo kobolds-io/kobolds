@@ -32,12 +32,12 @@ pub const NodeConfig = struct {
             const msg = "could not getCpuCount";
             @panic(msg);
         };
-        if (self.worker_threads > cpu_core_count) return "`worker_threads` exceeds cpu core count";
-        if (self.max_connections > 5_000) return "`max_connections` exceeds arbitrary limit";
-        if (self.memory_pool_capacity > 500_000) return "`memory_pool_capacity` exceeds arbitrary limit";
+        if (self.worker_threads > cpu_core_count) return "NodeConfig `worker_threads` exceeds cpu core count";
+        if (self.max_connections > 5_000) return "NodeConfig `max_connections` exceeds arbitrary limit";
+        if (self.memory_pool_capacity > 500_000) return "NodeConfig `memory_pool_capacity` exceeds arbitrary limit";
 
         if (self.listener_configs) |listener_configs| {
-            if (listener_configs.len == 0) return "`listener_configs` is non null but contains no entries";
+            if (listener_configs.len == 0) return "NodeConfig `listener_configs` is non null but contains no entries";
             for (listener_configs) |listener_config| {
                 switch (listener_config.transport) {
                     .tcp => {},
@@ -45,7 +45,7 @@ pub const NodeConfig = struct {
             }
         }
         if (self.outbound_configs) |outbound_configs| {
-            if (outbound_configs.len == 0) return "`outbound_configs` is non null but contains no entries";
+            if (outbound_configs.len == 0) return "NodeConfig `outbound_configs` is non null but contains no entries";
             for (outbound_configs) |outbound_config| {
                 switch (outbound_config.transport) {
                     .tcp => {},

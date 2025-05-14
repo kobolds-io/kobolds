@@ -314,6 +314,23 @@ pub fn nodePing() !void {
     try client.start();
     defer client.close();
 
+    const outbound_connection_config = OutboundConnectionConfig{
+        .host = "127.0.0.1",
+        .port = 8000,
+        .transport = .tcp,
+        .reconnect_config = .{
+            .enabled = true,
+            .max_attempts = 0,
+            .reconnection_strategy = .timed,
+        },
+        .keep_alive_config = .{
+            .enabled = true,
+            .interval_ms = 300,
+        },
+    };
+
+    _ = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
+
     registerSigintHandler();
 
     while (!sigint_received) {
