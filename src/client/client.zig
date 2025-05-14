@@ -166,8 +166,10 @@ pub const Client = struct {
         switch (self.state) {
             .closed, .closing => return,
             else => {
-                self.mutex.lock();
-                defer self.mutex.unlock();
+                self.connections_mutex.lock();
+                defer self.connections_mutex.unlock();
+
+                while (!self.closeAllConnections()) {}
 
                 self.close_channel.send(true);
             },
@@ -198,7 +200,7 @@ pub const Client = struct {
         const tmp_conn_id = uuid.v7.new();
         conn.* = try Connection.init(
             0,
-            0, // we don't know what node this is going to connect to since this isn't a node
+            self.id, // we don't know what node this is going to connect to since this isn't a node
             .outbound,
             self.io,
             socket,
@@ -228,7 +230,7 @@ pub const Client = struct {
 
         _ = timeout_ns;
 
-        while (conn.state != .connected) {}
+        // while (conn.state != .connected) {}
         return conn;
     }
 
@@ -393,6 +395,52 @@ pub const Client = struct {
         }
 
         assert(conn.inbox.count == 0);
+    }
+
+    fn closeAllConnections(self: *Self) bool {
+        var all_connections_closed = true;
+
+        var uninitialized_connections_iter = self.uninitialized_connections.valueIterator();
+        while (uninitialized_connections_iter.next()) |entry| {
+            var conn = entry.*;
+            switch (conn.state) {
+                .closed => continue,
+                .closing => {
+                    all_connections_closed = false;
+                },
+                else => {
+                    conn.state = .closing;
+                    all_connections_closed = false;
+                },
+            }
+
+            conn.tick() catch |err| {
+                log.err("client uninitialized_connection tick err {any}", .{err});
+                unreachable;
+            };
+        }
+
+        var connections_iter = self.connections.valueIterator();
+        while (connections_iter.next()) |entry| {
+            var conn = entry.*;
+            switch (conn.state) {
+                .closed => continue,
+                .closing => {
+                    all_connections_closed = false;
+                },
+                else => {
+                    conn.state = .closing;
+                    all_connections_closed = false;
+                },
+            }
+
+            conn.tick() catch |err| {
+                log.err("client connection tick err {any}", .{err});
+                unreachable;
+            };
+        }
+
+        return all_connections_closed;
     }
 };
 
