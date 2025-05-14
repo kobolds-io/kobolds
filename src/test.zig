@@ -4,6 +4,7 @@ comptime {
     _ = @import("./bus/bus.zig");
     _ = @import("./bus/publisher.zig");
     _ = @import("./bus/subscriber.zig");
+    _ = @import("./client/client.zig");
     _ = @import("./data_structures/channel.zig");
     _ = @import("./data_structures/connection_messages.zig");
     _ = @import("./data_structures/event_emitter.zig");

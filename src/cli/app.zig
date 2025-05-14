@@ -16,11 +16,17 @@ const IO = @import("../io.zig").IO;
 
 const Node = @import("../node/node.zig").Node;
 const NodeConfig = @import("../node/node.zig").NodeConfig;
+const Client = @import("../client/client.zig").Client;
+const ClientConfig = @import("../client/client.zig").ClientConfig;
 const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
 const AllowedInboundConnectionConfig = @import("../node/listener.zig").AllowedInboundConnectionConfig;
 
 var node_config = NodeConfig{
+    .max_connections = 5,
+};
+
+var client_config = ClientConfig{
     .max_connections = 5,
 };
 
@@ -302,45 +308,11 @@ pub fn nodePing() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    // remote node to connect to
-    const outbound_config = OutboundConnectionConfig{
-        .host = "127.0.0.1",
-        .port = 8000,
-        .transport = .tcp,
-    };
+    var client = try Client.init(allocator, client_config);
+    defer client.deinit();
 
-    const outbound_configs = [_]OutboundConnectionConfig{outbound_config};
-
-    node_config.worker_threads = 1;
-    node_config.outbound_configs = &outbound_configs;
-
-    var node = try Node.init(allocator, node_config);
-    defer node.deinit();
-
-    try node.start();
-    defer node.close();
-
-    var outbound_connections: []*Connection = undefined;
-    while (true) {
-        outbound_connections = try node.getOutboundConnections(allocator);
-        if (outbound_connections.len == node.config.outbound_configs.?.len) break;
-        std.time.sleep(10 * std.time.ns_per_us);
-    }
-    defer allocator.free(outbound_connections);
-
-    const message = try node.memory_pool.create();
-
-    message.* = Message.new();
-    message.headers.message_type = .ping;
-    message.setTransactionId(69);
-    message.ref();
-
-    for (outbound_connections) |conn| {
-        log.debug("outbound connection remote node id {}", .{conn.remote_node_id});
-
-        try conn.outbox.enqueue(message);
-    }
-    std.time.sleep(500 * std.time.ns_per_ms);
+    try client.start();
+    defer client.close();
 
     registerSigintHandler();
 
