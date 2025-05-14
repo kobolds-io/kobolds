@@ -305,14 +305,14 @@ pub const Client = struct {
 
                     assert(conn.connection_id == 0);
                     // An error here would be a protocol error
-                    assert(conn.remote_node_id != message.headers.node_id);
+                    assert(conn.remote_id != message.headers.origin_id);
                     assert(conn.connection_id != message.headers.connection_id);
 
                     conn.connection_id = message.headers.connection_id;
-                    conn.remote_node_id = message.headers.node_id;
+                    conn.remote_id = message.headers.origin_id;
 
                     // enqueue a message to immediately convey the node id of this Node
-                    message.headers.node_id = conn.node_id;
+                    message.headers.origin_id = conn.origin_id;
                     message.headers.connection_id = conn.connection_id;
 
                     message.ref();
@@ -321,20 +321,20 @@ pub const Client = struct {
                     assert(conn.connection_type == .outbound);
 
                     conn.state = .connected;
-                    log.info("outbound_connection - node_id: {}, connection_id: {}, remote_node_id: {}", .{
-                        conn.node_id,
+                    log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
+                        conn.origin_id,
                         conn.connection_id,
-                        conn.remote_node_id,
+                        conn.remote_id,
                     });
                 },
                 .ping => {
-                    log.debug("received ping from node_id: {}, connection_id: {}", .{
-                        message.headers.node_id,
+                    log.debug("received ping from origin_id: {}, connection_id: {}", .{
+                        message.headers.origin_id,
                         message.headers.connection_id,
                     });
                     // Since this is a `ping` we don't need to do any extra work to figure out how to respond
                     message.headers.message_type = .pong;
-                    message.headers.node_id = self.id;
+                    message.headers.origin_id = self.id;
                     message.headers.connection_id = conn.connection_id;
                     message.setTransactionId(message.transactionId());
                     message.setErrorCode(.ok);
@@ -348,8 +348,8 @@ pub const Client = struct {
                     message.ref();
                 },
                 .pong => {
-                    log.debug("received pong from node_id: {}, connection_id: {}", .{
-                        message.headers.node_id,
+                    log.debug("received pong from origin_id: {}, connection_id: {}", .{
+                        message.headers.origin_id,
                         message.headers.connection_id,
                     });
                 },
