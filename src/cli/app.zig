@@ -338,66 +338,83 @@ pub fn nodePing() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var client = try Client.init(allocator, client_config);
-    defer client.deinit();
-
-    try client.start();
-    defer client.close();
-
     const outbound_connection_config = OutboundConnectionConfig{
         .host = "127.0.0.1",
         .port = 8000,
         .transport = .tcp,
-        .reconnect_config = .{
-            .enabled = true,
-            .max_attempts = 0,
-            .reconnection_strategy = .timed,
-        },
-        .keep_alive_config = .{
-            .enabled = true,
-            .interval_ms = 300,
-        },
     };
 
-    const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
-    var timer = try std.time.Timer.start();
-    var start = timer.read();
+    const outbound_configs = [_]OutboundConnectionConfig{outbound_connection_config};
 
-    var i: usize = 0;
-    while (i < 1_000) : (i += 1) {
-        const message = try client.memory_pool.create();
-        message.* = Message.new();
-        message.headers.message_type = .ping;
-        message.setTransactionId(@intCast(i + 1));
-        message.ref();
+    var node = try Node.init(allocator, .{
+        .outbound_configs = &outbound_configs,
+    });
+    defer node.deinit();
 
-        const transaction = try allocator.create(Transaction);
-        defer allocator.destroy(transaction);
+    try node.start();
+    defer node.close();
 
-        {
-            client.mutex.lock();
-            defer client.mutex.unlock();
-            transaction.* = try Transaction.init(allocator, message.transactionId());
-            try client.transactions.put(message.transactionId(), transaction);
-        }
+    // var client = try Client.init(allocator, client_config);
+    // defer client.deinit();
 
-        start = timer.read();
+    // try client.start();
+    // defer client.close();
 
-        {
-            client.connections_mutex.lock();
-            defer client.connections_mutex.unlock();
+    // const outbound_connection_config = OutboundConnectionConfig{
+    //     .host = "127.0.0.1",
+    //     .port = 8000,
+    //     .transport = .tcp,
+    //     .reconnect_config = .{
+    //         .enabled = true,
+    //         .max_attempts = 0,
+    //         .reconnection_strategy = .timed,
+    //     },
+    //     .keep_alive_config = .{
+    //         .enabled = true,
+    //         .interval_ms = 300,
+    //     },
+    // };
 
-            try conn.outbox.enqueue(message);
-        }
+    // const node_id = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
+    // log.info("node_id {}", .{node_id});
+    // var timer = try std.time.Timer.start();
+    // var start = timer.read();
 
-        const rep = transaction.channel.receive();
-        _ = rep;
-        // defer rep.deref();
-        // defer client.memory_pool.destroy(rep);
+    // var i: usize = 0;
+    // while (i < 1_000) : (i += 1) {
+    //     const message = try client.memory_pool.create();
+    //     message.* = Message.new();
+    //     message.headers.message_type = .ping;
+    //     message.setTransactionId(@intCast(i + 1));
+    //     message.ref();
 
-        log.err("round trip time took {}ms", .{(timer.read() - start) / std.time.ns_per_ms});
-        // std.time.sleep(100 * std.time.ns_per_ms);
-    }
+    //     const transaction = try allocator.create(Transaction);
+    //     defer allocator.destroy(transaction);
+
+    //     {
+    //         client.mutex.lock();
+    //         defer client.mutex.unlock();
+    //         transaction.* = try Transaction.init(allocator, message.transactionId());
+    //         try client.transactions.put(message.transactionId(), transaction);
+    //     }
+
+    //     start = timer.read();
+
+    //     {
+    //         client.connections_mutex.lock();
+    //         defer client.connections_mutex.unlock();
+
+    //         try conn.outbox.enqueue(message);
+    //     }
+
+    //     const rep = transaction.channel.receive();
+    //     _ = rep;
+    //     // defer rep.deref();
+    //     // defer client.memory_pool.destroy(rep);
+
+    //     log.err("round trip time took {}ms", .{(timer.read() - start) / std.time.ns_per_ms});
+    // std.time.sleep(100 * std.time.ns_per_ms);
+    // }
 
     registerSigintHandler();
 

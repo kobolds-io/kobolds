@@ -555,6 +555,10 @@ pub const Worker = struct {
         assert(conn.inbox.count == 0);
     }
 
+    pub fn process(self: *Self) !void {
+        _ = self;
+    }
+
     fn closeAllConnections(self: *Self) bool {
         var all_connections_closed = true;
 

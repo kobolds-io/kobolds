@@ -190,7 +190,7 @@ pub const Client = struct {
         _ = self.done_channel.receive();
     }
 
-    pub fn connect(self: *Self, config: OutboundConnectionConfig, timeout_ns: u64) !*Connection {
+    pub fn connect(self: *Self, config: OutboundConnectionConfig, timeout_ns: u64) !uuid.Uuid {
         if (config.validate()) |msg| {
             log.err("{s}", .{msg});
             return error.InvalidConfig;
@@ -242,8 +242,13 @@ pub const Client = struct {
 
         _ = timeout_ns;
 
-        // while (conn.state != .connected) {}
-        return conn;
+        while (conn.state != .connected) {
+            try conn.tick();
+            try self.gather(conn);
+            try self.io.run_for_ns(1_000_000);
+        }
+
+        return conn.remote_id;
     }
 
     fn tick(self: *Self) !void {
@@ -465,6 +470,11 @@ pub const Client = struct {
         }
 
         return all_connections_closed;
+    }
+
+    pub fn ping(self: *Self, node_id: uuid.Uuid) !void {
+        _ = self;
+        _ = node_id;
     }
 };
 
