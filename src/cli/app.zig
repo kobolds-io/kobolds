@@ -344,21 +344,36 @@ pub fn nodePing() !void {
         .transport = .tcp,
     };
 
-    const outbound_configs = [_]OutboundConnectionConfig{outbound_connection_config};
+    // const outbound_configs = [_]OutboundConnectionConfig{outbound_connection_config};
 
-    var node = try Node.init(allocator, .{
-        .outbound_configs = &outbound_configs,
-    });
-    defer node.deinit();
+    // var node = try Node.init(allocator, .{
+    //     .outbound_configs = &outbound_configs,
+    // });
+    // defer node.deinit();
 
-    try node.start();
-    defer node.close();
+    // try node.start();
+    // defer node.close();
 
-    // var client = try Client.init(allocator, client_config);
-    // defer client.deinit();
+    // std.time.sleep(1 * std.time.ns_per_s);
 
-    // try client.start();
-    // defer client.close();
+    // var remotes_iterator = node.remotes.valueIterator();
+    // while (remotes_iterator.next()) |remote_entry| {
+    //     const remote = remote_entry.*;
+    //     var connections_iterator = remote.connections.valueIterator();
+    //     while (connections_iterator.next()) |connection_entry| {
+    //         const connection: *Connection = connection_entry.*;
+    //     }
+    // }
+
+    var client = try Client.init(allocator, client_config);
+    defer client.deinit();
+
+    try client.start();
+    defer client.close();
+
+    const conn_1 = try client.connect(outbound_connection_config, 1_000 * std.time.ns_per_ms);
+    _ = conn_1;
+    // defer client.disconnect(conn_1);
 
     // const outbound_connection_config = OutboundConnectionConfig{
     //     .host = "127.0.0.1",

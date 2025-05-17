@@ -130,7 +130,7 @@ pub const Client = struct {
     }
 
     pub fn start(self: *Self) !void {
-        // Start the core thread
+        // Start the client thread
         var ready_channel = UnbufferedChannel(bool).new();
         const client_thread = try std.Thread.spawn(.{}, Client.run, .{ self, &ready_channel });
         client_thread.detach();
@@ -190,7 +190,7 @@ pub const Client = struct {
         _ = self.done_channel.receive();
     }
 
-    pub fn connect(self: *Self, config: OutboundConnectionConfig, timeout_ns: u64) !uuid.Uuid {
+    pub fn connect(self: *Self, config: OutboundConnectionConfig, timeout_ns: i128) !*Connection {
         if (config.validate()) |msg| {
             log.err("{s}", .{msg});
             return error.InvalidConfig;
@@ -209,10 +209,9 @@ pub const Client = struct {
 
         // create a temporary id that will be used to identify this connection until it receives a proper
         // connection_id from the remote node
-        const tmp_conn_id = uuid.v7.new();
         conn.* = try Connection.init(
             0,
-            self.id, // we don't know what node this is going to connect to since this isn't a node
+            self.id,
             .outbound,
             self.io,
             socket,
@@ -227,9 +226,9 @@ pub const Client = struct {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
+        const tmp_conn_id = uuid.v7.new();
         try self.uninitialized_connections.put(tmp_conn_id, conn);
         errdefer _ = self.uninitialized_connections.remove(tmp_conn_id);
-
         self.io.connect(
             *Connection,
             conn,
@@ -240,15 +239,29 @@ pub const Client = struct {
         );
         conn.connect_submitted = true;
 
+        // const deadline = std.time.nanoTimestamp() + timeout_ns;
+        // var i: usize = 0;
+        // while (deadline > std.time.nanoTimestamp()) : (i += 1) {
+        // std.time.sleep(100 * std.time.ns_per_ms);
+        // log.debug("iters {}", .{i});
+        // try conn.tick();
+        // try self.gather(conn);
+        // try self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms);
+        // if (conn.state == .connected) return conn;
+        // }
         _ = timeout_ns;
+        return conn;
 
-        while (conn.state != .connected) {
-            try conn.tick();
-            try self.gather(conn);
-            try self.io.run_for_ns(1_000_000);
+        // return error.Timeout;
+    }
+
+    pub fn awaitConnected(self: *Self, conn: *Connection, timeout_ns: i128) !void {
+        _ = self;
+        const deadline = std.time.nanoTimestamp() + timeout_ns;
+
+        while (deadline > std.time.nanoTimestamp()) {
+            _ = conn;
         }
-
-        return conn.remote_id;
     }
 
     fn tick(self: *Self) !void {
@@ -281,6 +294,8 @@ pub const Client = struct {
 
                     // remove the connection from the uninitialized_connections map
                     assert(self.uninitialized_connections.remove(tmp_id));
+
+                    // conn.events.send(.connected);
                 }
             }
 

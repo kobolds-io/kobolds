@@ -172,6 +172,9 @@ pub const Worker = struct {
 
                     // remove the connection from the uninitialized_connections map
                     assert(self.uninitialized_connections.remove(tmp_id));
+
+                    // we also want to put this connection id into the node.remotes group
+                    try self.node.addRemote(conn.remote_id, conn);
                 }
             }
 
@@ -556,6 +559,9 @@ pub const Worker = struct {
     }
 
     pub fn process(self: *Self) !void {
+        // self.process_mutex.lock();
+        // defer self.process_mutex.unlock();
+
         _ = self;
     }
 

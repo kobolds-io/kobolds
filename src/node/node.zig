@@ -9,6 +9,7 @@ const uuid = @import("uuid");
 const Worker = @import("./worker.zig").Worker;
 const Listener = @import("./listener.zig").Listener;
 const ListenerConfig = @import("./listener.zig").ListenerConfig;
+const Remote = @import("./remote.zig").Remote;
 const InboundConnectionConfig = @import("../protocol/connection.zig").InboundConnectionConfig;
 const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 
@@ -75,6 +76,7 @@ pub const Node = struct {
     state: NodeState,
     workers: *std.AutoHashMap(usize, *Worker),
     memory_pool: *MemoryPool(Message),
+    remotes: *std.AutoHashMap(uuid.Uuid, *Remote),
     mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
@@ -109,6 +111,12 @@ pub const Node = struct {
         memory_pool.* = try MemoryPool(Message).init(allocator, config.memory_pool_capacity);
         errdefer memory_pool.deinit();
 
+        const remotes = try allocator.create(std.AutoHashMap(uuid.Uuid, *Remote));
+        errdefer allocator.destroy(remotes);
+
+        remotes.* = std.AutoHashMap(uuid.Uuid, *Remote).init(allocator);
+        errdefer remotes.deinit();
+
         const listeners = try allocator.create(std.AutoHashMap(usize, *Listener));
         errdefer allocator.destroy(listeners);
 
@@ -124,6 +132,7 @@ pub const Node = struct {
             .state = .closed,
             .workers = workers,
             .memory_pool = memory_pool,
+            .remotes = remotes,
             .listeners = listeners,
             .mutex = std.Thread.Mutex{},
         };
@@ -144,10 +153,19 @@ pub const Node = struct {
             self.allocator.destroy(worker);
         }
 
+        var remotes_iterator = self.remotes.valueIterator();
+        while (remotes_iterator.next()) |entry| {
+            const remote = entry.*;
+            remote.deinit();
+            self.allocator.destroy(remote);
+        }
+
         self.listeners.deinit();
         self.workers.deinit();
+        self.remotes.deinit();
         self.memory_pool.deinit();
 
+        self.allocator.destroy(self.remotes);
         self.allocator.destroy(self.listeners);
         self.allocator.destroy(self.workers);
         self.allocator.destroy(self.memory_pool);
@@ -198,7 +216,7 @@ pub const Node = struct {
                     self.tick() catch unreachable;
 
                     // FIX: this should us io uring or something much nicer
-                    std.time.sleep(100 * std.time.ns_per_ms);
+                    std.time.sleep(100 * std.time.ns_per_us);
                 },
                 .closing => {
                     log.info("node {}: closed", .{self.id});
@@ -402,10 +420,10 @@ pub const Node = struct {
         try worker.addOutboundConnection(config);
     }
 
+    // pub fn getRemotes(self: *Self, allocator: std.mem.Allocator) ![]Remote {
+    //     // loop over all the remotes
+    // }
     pub fn getOutboundConnections(self: *Self, allocator: std.mem.Allocator) ![]*Connection {
-        // const list = try allocator.create(std.ArrayList(*Connection));
-        // errdefer allocator.destroy(list);
-
         var list = std.ArrayList(*Connection).init(allocator);
         errdefer list.deinit();
 
@@ -426,6 +444,28 @@ pub const Node = struct {
         }
 
         return list.toOwnedSlice();
+    }
+
+    pub fn addRemote(self: *Self, remote_id: uuid.Uuid, conn: *Connection) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.remotes.get(remote_id)) |remote| {
+            if (remote.connections.get(conn.connection_id)) |_| {
+                return error.DuplicateConnectionForRemote;
+            } else {
+                try remote.connections.put(conn.connection_id, conn);
+            }
+        } else {
+            const remote = try self.allocator.create(Remote);
+            errdefer self.allocator.destroy(remote);
+
+            remote.* = Remote.init(self.allocator, remote_id);
+            errdefer remote.deinit();
+
+            try remote.connections.put(conn.connection_id, conn);
+            try self.remotes.put(remote_id, remote);
+        }
     }
 };
 

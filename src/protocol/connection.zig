@@ -18,6 +18,7 @@ const ProtocolError = @import("../errors.zig").ProtocolError;
 // data structures
 const RingBuffer = @import("stdx").RingBuffer;
 const MemoryPool = @import("stdx").MemoryPool;
+const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 
 pub const InboundConnectionConfig = struct {
     host: []const u8 = "0.0.0.0",
@@ -481,5 +482,20 @@ pub const Connection = struct {
             log.err("onConnect err closing conn {any}", .{err});
             self.state = .closing;
         };
+    }
+
+    pub fn onConnectCallback(
+        ready_channel: *UnbufferedChannel(bool),
+        completion: *IO.Completion,
+        result: IO.ConnectError!void,
+    ) void {
+        _ = completion;
+        result catch |err| {
+            log.err("onConnect err closing conn {any}", .{err});
+            ready_channel.send(false);
+            return;
+        };
+
+        ready_channel.send(true);
     }
 };
