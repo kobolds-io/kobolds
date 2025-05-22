@@ -6,7 +6,6 @@ comptime {
     _ = @import("./bus/subscriber.zig");
     _ = @import("./client/client.zig");
     _ = @import("./data_structures/connection_messages.zig");
-    _ = @import("./data_structures/event_emitter.zig");
     // _ = @import("./data_structures/message_pool.zig");
     _ = @import("./hash.zig");
     _ = @import("./io/test.zig");

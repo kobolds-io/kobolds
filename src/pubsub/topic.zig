@@ -4,7 +4,8 @@ const testing = std.testing;
 const assert = std.debug.assert();
 
 const RingBuffer = @import("stdx").RingBuffer;
-const EventEmitter = @import("../data_structures/event_emitter.zig").EventEmitter;
+const EventEmitter = @import("stdx").EventEmitter;
+
 const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
 
 const Message = @import("../protocol/message.zig").Message;

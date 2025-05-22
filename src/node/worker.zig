@@ -9,6 +9,7 @@ const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
+const RingBuffer = @import("stdx").RingBuffer;
 
 const IO = @import("../io.zig").IO;
 const Node = @import("./node.zig").Node;
@@ -30,14 +31,16 @@ pub const Worker = struct {
 
     allocator: std.mem.Allocator,
     close_channel: *UnbufferedChannel(bool),
-    done_channel: *UnbufferedChannel(bool),
-    state: WorkerState,
-    id: usize,
-    node: *Node,
-    io: *IO,
     connections_mutex: std.Thread.Mutex,
     connections: std.AutoHashMap(uuid.Uuid, *Connection),
+    done_channel: *UnbufferedChannel(bool),
+    id: usize,
+    io: *IO,
+    node: *Node,
+    state: WorkerState,
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
+    connection_outbox_buffers: std.AutoHashMap(u128, *RingBuffer(*Message)),
+    connection_outbox_buffers_mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, id: usize, node: *Node) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -57,16 +60,18 @@ pub const Worker = struct {
         errdefer io.deinit();
 
         return Self{
-            .id = id,
             .allocator = allocator,
             .close_channel = close_channel,
-            .done_channel = done_channel,
-            .state = .closed,
-            .node = node,
-            .io = io,
-            .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
-            .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .connections_mutex = std.Thread.Mutex{},
+            .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
+            .done_channel = done_channel,
+            .id = id,
+            .io = io,
+            .node = node,
+            .state = .closed,
+            .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
+            .connection_outbox_buffers = std.AutoHashMap(u128, *RingBuffer(*Message)).init(allocator),
+            .connection_outbox_buffers_mutex = std.Thread.Mutex{},
         };
     }
 
@@ -86,14 +91,27 @@ pub const Worker = struct {
             connection.deinit();
             self.allocator.destroy(connection);
         }
+        var connection_outbox_buffers_iter = self.connection_outbox_buffers.valueIterator();
+        while (connection_outbox_buffers_iter.next()) |entry| {
+            const ring_buffer = entry.*;
 
+            while (ring_buffer.dequeue()) |message| {
+                message.deref();
+                if (message.refs() == 0) self.node.memory_pool.destroy(message);
+            }
+
+            ring_buffer.deinit();
+            self.allocator.destroy(ring_buffer);
+        }
+
+        self.connection_outbox_buffers.deinit();
         self.connections.deinit();
-        self.uninitialized_connections.deinit();
         self.io.deinit();
+        self.uninitialized_connections.deinit();
 
-        self.allocator.destroy(self.io);
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
+        self.allocator.destroy(self.io);
     }
 
     pub fn run(self: *Self, ready_channel: *UnbufferedChannel(bool)) void {
@@ -172,9 +190,6 @@ pub const Worker = struct {
 
                     // remove the connection from the uninitialized_connections map
                     assert(self.uninitialized_connections.remove(tmp_id));
-
-                    // we also want to put this connection id into the node.remotes group
-                    try self.node.addRemote(conn.remote_id, conn);
                 }
             }
 
@@ -195,6 +210,7 @@ pub const Worker = struct {
                 };
 
                 try self.gather(conn);
+                // try self.distribute(conn);
             }
         }
 
@@ -252,7 +268,7 @@ pub const Worker = struct {
 
     // TODO: the config should be passed to the connection so it can be tracked
     //     the connection needs to be able to reconnect if the config says it should
-    pub fn addOutboundConnection(self: *Self, config: OutboundConnectionConfig) !void {
+    pub fn addOutboundConnection(self: *Self, config: OutboundConnectionConfig) !*Connection {
         // create the socket
         const address = try std.net.Address.parseIp4(config.host, config.port);
         const socket_type: u32 = posix.SOCK.STREAM;
@@ -296,6 +312,8 @@ pub const Worker = struct {
             address,
         );
         conn.connect_submitted = true;
+
+        return conn;
     }
 
     fn removeConnection(self: *Self, conn: *Connection) void {
@@ -556,6 +574,20 @@ pub const Worker = struct {
         }
 
         assert(conn.inbox.count == 0);
+    }
+
+    pub fn distribute(self: *Self, conn: *Connection) !void {
+        // self.mutex.lock();
+        // defer self.mutex.unlock();
+
+        _ = self;
+        _ = conn;
+
+        // self.mutex.lock();
+        // defer self.mutex.unlock();
+        // if (worker.connection_messages.get(conn.connection_id)) |messages| {
+        //     conn.outbox.concatenateAvailable(messages);
+        // }
     }
 
     pub fn process(self: *Self) !void {

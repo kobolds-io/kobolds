@@ -255,6 +255,13 @@ pub const Client = struct {
         // return error.Timeout;
     }
 
+    pub fn disconnect(self: *Self, conn: *Connection) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        conn.state = .close;
+    }
+
     pub fn awaitConnected(self: *Self, conn: *Connection, timeout_ns: i128) !void {
         _ = self;
         const deadline = std.time.nanoTimestamp() + timeout_ns;
@@ -276,7 +283,7 @@ pub const Client = struct {
 
                 // check if this connection was closed for whatever reason
                 if (conn.state == .closed) {
-                    // try self.cleanupUninitializedConnection(tmp_id, conn);
+                    try self.cleanupUninitializedConnection(tmp_id, conn);
                     break;
                 }
 
@@ -294,8 +301,6 @@ pub const Client = struct {
 
                     // remove the connection from the uninitialized_connections map
                     assert(self.uninitialized_connections.remove(tmp_id));
-
-                    // conn.events.send(.connected);
                 }
             }
 
@@ -306,7 +311,7 @@ pub const Client = struct {
 
                 // check if this connection was closed for whatever reason
                 if (conn.state == .closed) {
-                    // try self.cleanupConnection(conn);
+                    try self.cleanupConnection(conn);
                     continue;
                 }
 
@@ -439,6 +444,20 @@ pub const Client = struct {
         }
 
         assert(conn.inbox.count == 0);
+    }
+
+    fn cleanupUninitializedConnection(self: *Self, tmp_id: uuid.Uuid, conn: *Connection) !void {
+        log.debug("remove uninitialized connection called", .{});
+
+        _ = self.uninitialized_connections.remove(tmp_id);
+        log.info("worker: {} removed uninitialized_connection {}", .{ self.id, conn.connection_id });
+
+        conn.deinit();
+        self.allocator.destroy(conn);
+    }
+
+    fn cleanupConnection(self: *Self, conn: *Connection) !void {
+        self.removeConnection(conn);
     }
 
     fn closeAllConnections(self: *Self) bool {

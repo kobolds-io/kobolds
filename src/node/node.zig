@@ -5,6 +5,7 @@ const log = std.log.scoped(.Node);
 const posix = std.posix;
 
 const uuid = @import("uuid");
+const constants = @import("../constants.zig");
 
 const Worker = @import("./worker.zig").Worker;
 const Listener = @import("./listener.zig").Listener;
@@ -18,6 +19,8 @@ const MemoryPool = @import("stdx").MemoryPool;
 
 const Message = @import("../protocol/message.zig").Message;
 const Connection = @import("../protocol/connection.zig").Connection;
+
+pub const PingOptions = struct {};
 
 pub const NodeConfig = struct {
     const Self = @This();
@@ -259,6 +262,31 @@ pub const Node = struct {
         _ = self.done_channel.receive();
     }
 
+    pub fn connect(self: *Self, config: OutboundConnectionConfig, timeout_ns: i64) !ConnectionHandle {
+        const ch = try self.addOutboundConnectionToNextWorker(config);
+        const deadline = std.time.nanoTimestamp() + timeout_ns;
+        while (deadline > std.time.nanoTimestamp()) {
+            if (ch.connection.state == .connected) return ch;
+
+            std.time.sleep(constants.io_tick_ms * std.time.ns_per_ms);
+        } else {
+            return error.DeadlineExceeded;
+        }
+    }
+
+    pub fn disconnect(self: *Self, conn: *Connection) void {
+        _ = self;
+        conn.state = .closing;
+    }
+
+    pub fn ping(self: *Self, conn: *Connection, opts: PingOptions, timeout_ns: i64) !*Message {
+        _ = self;
+        _ = conn;
+        _ = opts;
+        _ = timeout_ns;
+        return error.NotImplemented;
+    }
+
     fn tick(self: *Self) !void {
         try self.maybeAddInboundConnections();
     }
@@ -342,7 +370,9 @@ pub const Node = struct {
             for (outbound_configs) |outbound_config| {
                 switch (outbound_config.transport) {
                     .tcp => {
-                        try self.addOutboundConnectionToWorker(outbound_config);
+                        // These connections are not directly handled by a client and therefore
+                        // do not need to be handled here. Instead the node will work on them organically
+                        _ = try self.addOutboundConnectionToNextWorker(outbound_config);
                     },
                 }
             }
@@ -360,13 +390,13 @@ pub const Node = struct {
 
                 // try to add the connections
                 while (listener.sockets.pop()) |socket| {
-                    try self.addConnectionToNextWorker(socket);
+                    try self.addInboundConnectionToNextWorker(socket);
                 }
             }
         }
     }
 
-    fn addConnectionToNextWorker(self: *Self, socket: posix.socket_t) !void {
+    fn addInboundConnectionToNextWorker(self: *Self, socket: posix.socket_t) !void {
         // we are just gonna try to close this socket if anything blows up
         errdefer posix.close(socket);
 
@@ -395,7 +425,7 @@ pub const Node = struct {
         try worker.addInboundConnection(socket);
     }
 
-    fn addOutboundConnectionToWorker(self: *Self, config: OutboundConnectionConfig) !void {
+    fn addOutboundConnectionToNextWorker(self: *Self, config: OutboundConnectionConfig) !ConnectionHandle {
         var worker_iter = self.workers.valueIterator();
         var worker_with_min_connections: ?*Worker = null;
         var min_connections: u32 = 0;
@@ -417,54 +447,46 @@ pub const Node = struct {
         if (worker_with_min_connections == null) unreachable;
         const worker = worker_with_min_connections.?;
 
-        try worker.addOutboundConnection(config);
+        const connection = try worker.addOutboundConnection(config);
+
+        const ch = ConnectionHandle{
+            .connection = connection,
+            .worker = worker,
+        };
+
+        return ch;
+    }
+};
+
+pub const ConnectionHandle = struct {
+    const Self = @This();
+
+    connection: *Connection,
+    worker: *Worker,
+
+    pub fn ping(self: Self) !void {
+        self.worker.connections_mutex.lock();
+        defer self.worker.connections_mutex.unlock();
+
+        log.debug("worker id {}", .{self.worker.id});
+        log.debug("connection id {}", .{self.connection.connection_id});
+
+        // ensure that the worker is in charge of this conneciton
+        assert(self.worker.connections.contains(self.connection.connection_id));
+
+        // try worker.enqueueMessageForConnection(connection, .{});
+
+        // worker.
+        // worker.connections.get(connection.connection_id) ||
     }
 
-    // pub fn getRemotes(self: *Self, allocator: std.mem.Allocator) ![]Remote {
-    //     // loop over all the remotes
-    // }
-    pub fn getOutboundConnections(self: *Self, allocator: std.mem.Allocator) ![]*Connection {
-        var list = std.ArrayList(*Connection).init(allocator);
-        errdefer list.deinit();
-
-        var workers_interator = self.workers.valueIterator();
-        while (workers_interator.next()) |worker_entry| {
-            const worker = worker_entry.*;
-
-            worker.connections_mutex.lock();
-            defer worker.connections_mutex.unlock();
-
-            var connections_iterator = worker.connections.valueIterator();
-            while (connections_iterator.next()) |connection_entry| {
-                const connection: *Connection = connection_entry.*;
-                if (connection.state == .connected and connection.connection_type == .outbound) {
-                    try list.append(connection);
-                }
-            }
-        }
-
-        return list.toOwnedSlice();
-    }
-
-    pub fn addRemote(self: *Self, remote_id: uuid.Uuid, conn: *Connection) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        if (self.remotes.get(remote_id)) |remote| {
-            if (remote.connections.get(conn.connection_id)) |_| {
-                return error.DuplicateConnectionForRemote;
-            } else {
-                try remote.connections.put(conn.connection_id, conn);
-            }
-        } else {
-            const remote = try self.allocator.create(Remote);
-            errdefer self.allocator.destroy(remote);
-
-            remote.* = Remote.init(self.allocator, remote_id);
-            errdefer remote.deinit();
-
-            try remote.connections.put(conn.connection_id, conn);
-            try self.remotes.put(remote_id, remote);
+    pub fn close(self: Self) void {
+        assert(self.worker.state == .running);
+        switch (self.connection.state) {
+            .closed, .closing => {},
+            else => {
+                self.connection.state = .closing;
+            },
         }
     }
 };
