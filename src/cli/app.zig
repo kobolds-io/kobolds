@@ -458,10 +458,10 @@ pub fn nodePing() !void {
         },
     };
 
-    const ch = try node.connect(outbound_connection_config, 1_000 * std.time.ns_per_ms);
-    defer node.disconnect(ch.connection);
+    const conn_handle = try node.connect(outbound_connection_config, 1_000 * std.time.ns_per_ms);
+    defer node.disconnect(conn_handle.connection);
 
-    try ch.ping();
+    try conn_handle.ping();
     // node.request(topic_name, connection)
     // node.nodeRequest(topic_name, connection)
 
