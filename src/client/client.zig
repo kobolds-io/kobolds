@@ -311,7 +311,7 @@ pub const Client = struct {
 
                 // check if this connection was closed for whatever reason
                 if (conn.state == .closed) {
-                    try self.cleanupConnection(conn);
+                    // try self.cleanupConnection(conn);
                     continue;
                 }
 
