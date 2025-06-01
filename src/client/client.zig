@@ -196,70 +196,24 @@ pub const Client = struct {
             return error.InvalidConfig;
         }
 
-        // create the socket
-        const address = try std.net.Address.parseIp4(config.host, config.port);
-        const socket_type: u32 = posix.SOCK.STREAM;
-        const protocol = posix.IPPROTO.TCP;
-        const socket = try posix.socket(address.any.family, socket_type, protocol);
-        errdefer posix.close(socket);
+        const conn = try self.addOutboundConnection(config);
+        errdefer self.disconnect(conn);
 
-        // initialize the connection
-        const conn = try self.allocator.create(Connection);
-        errdefer self.allocator.destroy(conn);
+        const deadline = std.time.nanoTimestamp() + timeout_ns;
+        while (deadline > std.time.nanoTimestamp()) {
+            if (conn.state == .connected) return conn;
 
-        // create a temporary id that will be used to identify this connection until it receives a proper
-        // connection_id from the remote node
-        conn.* = try Connection.init(
-            0,
-            self.id,
-            .outbound,
-            self.io,
-            socket,
-            self.allocator,
-            self.memory_pool,
-            .{ .outbound = config },
-        );
-        errdefer conn.deinit();
-
-        conn.state = .connecting;
-
-        self.connections_mutex.lock();
-        defer self.connections_mutex.unlock();
-
-        const tmp_conn_id = uuid.v7.new();
-        try self.uninitialized_connections.put(tmp_conn_id, conn);
-        errdefer _ = self.uninitialized_connections.remove(tmp_conn_id);
-        self.io.connect(
-            *Connection,
-            conn,
-            Connection.onConnect,
-            conn.connect_completion,
-            socket,
-            address,
-        );
-        conn.connect_submitted = true;
-
-        // const deadline = std.time.nanoTimestamp() + timeout_ns;
-        // var i: usize = 0;
-        // while (deadline > std.time.nanoTimestamp()) : (i += 1) {
-        // std.time.sleep(100 * std.time.ns_per_ms);
-        // log.debug("iters {}", .{i});
-        // try conn.tick();
-        // try self.gather(conn);
-        // try self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms);
-        // if (conn.state == .connected) return conn;
-        // }
-        _ = timeout_ns;
-        return conn;
-
-        // return error.Timeout;
+            std.time.sleep(constants.io_tick_ms * std.time.ns_per_ms);
+        } else {
+            return error.DeadlineExceeded;
+        }
     }
 
-    pub fn disconnect(self: *Self, conn: *Connection) !void {
+    pub fn disconnect(self: *Self, conn: *Connection) void {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
-        conn.state = .close;
+        conn.state = .closing;
     }
 
     pub fn awaitConnected(self: *Self, conn: *Connection, timeout_ns: i128) !void {
@@ -504,6 +458,54 @@ pub const Client = struct {
         }
 
         return all_connections_closed;
+    }
+
+    fn addOutboundConnection(self: *Self, config: OutboundConnectionConfig) !*Connection {
+        // create the socket
+        const address = try std.net.Address.parseIp4(config.host, config.port);
+        const socket_type: u32 = posix.SOCK.STREAM;
+        const protocol = posix.IPPROTO.TCP;
+        const socket = try posix.socket(address.any.family, socket_type, protocol);
+        errdefer posix.close(socket);
+
+        // initialize the connection
+        const conn = try self.allocator.create(Connection);
+        errdefer self.allocator.destroy(conn);
+
+        // create a temporary id that will be used to identify this connection until it receives a proper
+        // connection_id from the remote node
+        const tmp_conn_id = uuid.v7.new();
+        conn.* = try Connection.init(
+            0,
+            self.id,
+            .outbound,
+            self.io,
+            socket,
+            self.allocator,
+            self.memory_pool,
+            .{ .outbound = config },
+        );
+        errdefer conn.deinit();
+
+        conn.state = .connecting;
+
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        try self.uninitialized_connections.put(tmp_conn_id, conn);
+        errdefer _ = self.uninitialized_connections.remove(tmp_conn_id);
+
+        self.io.connect(
+            *Connection,
+            conn,
+            Connection.onConnect,
+            conn.connect_completion,
+            socket,
+            address,
+        );
+        conn.connect_submitted = true;
+
+        return conn;
     }
 
     pub fn ping(self: *Self, node_id: uuid.Uuid) !void {

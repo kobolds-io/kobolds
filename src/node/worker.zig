@@ -9,6 +9,7 @@ const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
+const BufferedChannel = @import("stdx").BufferedChannel;
 const RingBuffer = @import("stdx").RingBuffer;
 
 const IO = @import("../io.zig").IO;
@@ -26,21 +27,29 @@ const WorkerState = enum {
     closed,
 };
 
+const Envelope = struct {
+    connection_id: u128,
+    message: *Message,
+};
+
 pub const Worker = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
     close_channel: *UnbufferedChannel(bool),
+    connection_messages: std.AutoHashMap(u128, *RingBuffer(*Message)),
+    connection_outbox_buffers_mutex: std.Thread.Mutex,
+    connection_outbox_buffers: std.AutoHashMap(u128, *RingBuffer(*Message)),
     connections_mutex: std.Thread.Mutex,
     connections: std.AutoHashMap(uuid.Uuid, *Connection),
     done_channel: *UnbufferedChannel(bool),
     id: usize,
     io: *IO,
     node: *Node,
+    outbox_channel: *BufferedChannel(Envelope),
     state: WorkerState,
+    transactions: std.AutoHashMap(u128, *UnbufferedChannel(*Message)),
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
-    connection_outbox_buffers: std.AutoHashMap(u128, *RingBuffer(*Message)),
-    connection_outbox_buffers_mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, id: usize, node: *Node) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -52,6 +61,12 @@ pub const Worker = struct {
         errdefer allocator.destroy(done_channel);
 
         done_channel.* = UnbufferedChannel(bool).new();
+
+        const outbox_channel = try allocator.create(BufferedChannel(Envelope));
+        errdefer allocator.destroy(outbox_channel);
+
+        outbox_channel.* = try BufferedChannel(Envelope).init(allocator, 5_000);
+        errdefer outbox_channel.deinit();
 
         const io = try allocator.create(IO);
         errdefer allocator.destroy(io);
@@ -72,6 +87,9 @@ pub const Worker = struct {
             .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .connection_outbox_buffers = std.AutoHashMap(u128, *RingBuffer(*Message)).init(allocator),
             .connection_outbox_buffers_mutex = std.Thread.Mutex{},
+            .outbox_channel = outbox_channel,
+            .connection_messages = std.AutoHashMap(u128, *RingBuffer(*Message)).init(allocator),
+            .transactions = std.AutoHashMap(u128, *UnbufferedChannel(*Message)).init(allocator),
         };
     }
 
@@ -104,13 +122,25 @@ pub const Worker = struct {
             self.allocator.destroy(ring_buffer);
         }
 
+        // drain the outbox channel if it isn't empty
+        if (!self.outbox_channel.isEmpty()) {
+            while (self.outbox_channel.buffer.dequeue()) |envelope| {
+                const message = envelope.message;
+                message.deref();
+                if (message.refs() == 0) self.node.memory_pool.destroy(message);
+            }
+        }
+
+        self.outbox_channel.deinit();
         self.connection_outbox_buffers.deinit();
         self.connections.deinit();
         self.io.deinit();
         self.uninitialized_connections.deinit();
+        self.transactions.deinit();
 
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
+        self.allocator.destroy(self.outbox_channel);
         self.allocator.destroy(self.io);
     }
 
@@ -213,6 +243,10 @@ pub const Worker = struct {
                 // try self.distribute(conn);
             }
         }
+
+        // while (true) {
+        //     const outbound_message = self.outbox_channel.tryReceive(0, null) catch break;
+        // }
 
         // try self.process();
     }

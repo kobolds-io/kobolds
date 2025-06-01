@@ -332,116 +332,10 @@ pub fn nodeListen() !void {
 }
 
 pub fn nodePing() !void {
-    //     // creating a client to communicate with the node
-    //     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    //     const allocator = gpa.allocator();
-    //     defer _ = gpa.deinit();
-
-    //     const outbound_connection_config = OutboundConnectionConfig{
-    //         .host = "127.0.0.1",
-    //         .port = 8000,
-    //         .transport = .tcp,
-    //     };
-
-    //     var client = try Client.init(allocator, client_config);
-    //     defer client.deinit();
-
-    //     try client.start();
-    //     defer client.close();
-
-    //     const conn_1 = try client.connect(outbound_connection_config, 1_000 * std.time.ns_per_ms);
-    //     defer client.disconnect(conn_1);
-    //     // _ = conn_1;
-    //     // defer client.disconnect(conn_1);
-
-    //     // const outbound_connection_config = OutboundConnectionConfig{
-    //     //     .host = "127.0.0.1",
-    //     //     .port = 8000,
-    //     //     .transport = .tcp,
-    //     //     .reconnect_config = .{
-    //     //         .enabled = true,
-    //     //         .max_attempts = 0,
-    //     //         .reconnection_strategy = .timed,
-    //     //     },
-    //     //     .keep_alive_config = .{
-    //     //         .enabled = true,
-    //     //         .interval_ms = 300,
-    //     //     },
-    //     // };
-
-    //     // const node_id = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
-    //     // log.info("node_id {}", .{node_id});
-    //     // var timer = try std.time.Timer.start();
-    //     // var start = timer.read();
-
-    //     // var i: usize = 0;
-    //     // while (i < 1_000) : (i += 1) {
-    //     //     const message = try client.memory_pool.create();
-    //     //     message.* = Message.new();
-    //     //     message.headers.message_type = .ping;
-    //     //     message.setTransactionId(@intCast(i + 1));
-    //     //     message.ref();
-
-    //     //     const transaction = try allocator.create(Transaction);
-    //     //     defer allocator.destroy(transaction);
-
-    //     //     {
-    //     //         client.mutex.lock();
-    //     //         defer client.mutex.unlock();
-    //     //         transaction.* = try Transaction.init(allocator, message.transactionId());
-    //     //         try client.transactions.put(message.transactionId(), transaction);
-    //     //     }
-
-    //     //     start = timer.read();
-
-    //     //     {
-    //     //         client.connections_mutex.lock();
-    //     //         defer client.connections_mutex.unlock();
-
-    //     //         try conn.outbox.enqueue(message);
-    //     //     }
-
-    //     //     const rep = transaction.channel.receive();
-    //     //     _ = rep;
-    //     //     // defer rep.deref();
-    //     //     // defer client.memory_pool.destroy(rep);
-
-    //     //     log.err("round trip time took {}ms", .{(timer.read() - start) / std.time.ns_per_ms});
-    //     // std.time.sleep(100 * std.time.ns_per_ms);
-    //     // }
-
-    //     registerSigintHandler();
-
-    //     while (!sigint_received) {
-    //         std.time.sleep(1 * std.time.ns_per_ms);
-    //     }
-
     // creating a client to communicate with the node
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
-
-    // This is just a test used to whitelist a certain inbound connection origins
-    const allowed_inbound_connection_config = AllowedInboundConnectionConfig{
-        .host = "0.0.0.0",
-    };
-    const allowed_inbound_connection_configs = [_]AllowedInboundConnectionConfig{allowed_inbound_connection_config};
-    const listener_config = ListenerConfig{
-        .host = "127.0.0.1",
-        .port = 8001,
-        .transport = .tcp,
-        .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
-    };
-    const listener_configs = [_]ListenerConfig{listener_config};
-    node_config.listener_configs = &listener_configs;
-
-    node_config.worker_threads = 1;
-
-    var node = try Node.init(allocator, node_config);
-    defer node.deinit();
-
-    try node.start();
-    defer node.close();
 
     const outbound_connection_config = OutboundConnectionConfig{
         .host = "127.0.0.1",
@@ -458,15 +352,39 @@ pub fn nodePing() !void {
         },
     };
 
-    const conn_handle = try node.connect(outbound_connection_config, 1_000 * std.time.ns_per_ms);
-    defer node.disconnect(conn_handle.connection);
+    var client = try Client.init(allocator, client_config);
+    defer client.deinit();
 
-    try conn_handle.ping();
-    // node.request(topic_name, connection)
-    // node.nodeRequest(topic_name, connection)
+    try client.start();
+    defer client.close();
 
-    // const pong = try node.ping(conn, .{}, 1_000 * std.time.ns_per_ms);
-    // _ = pong;
+    const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
+    defer client.disconnect(conn);
+
+    // const conn_handle = try node.connect(outbound_connection_config, 1_000 * std.time.ns_per_ms);
+    // defer node.disconnect(conn_handle);
+    //
+    // const pong = node.ping(conn_handle, .{}, 1000);
+    //
+    // const pong_message = try node.ping(ch, 1_000 * std.time.ns_per_ms);
+    // defer node.message_pool.destroy(pong_message);
+    // defer pong_message.deref();
+    //
+    // fn ping(self: *Self, ch: *ConnectionHandle, opts: PingOptions, timeout_ns: i64) !Message {
+    //  // Create a ping message
+    //   const ping_message = try self.node.memory_pool.create();
+    //   ping_message
+    //   ping_message.headers.message_type = .ping;
+    //   ping_message.setTransactionId(1);
+    //
+    //   const transaction = self.worker.createTransaction(ping_message.transactionId());
+    //
+    //   self.worker.connection_Messages_mutex.lock();
+    //   defer self.worker.connection_messages_mutex.unlock();
+    //
+    //   try self.worker.connection_messages.addMessage(self.connection.id, ping_message);
+    // }
+    // defer node.disconnect(conn_handle.connection);
 
     registerSigintHandler();
 

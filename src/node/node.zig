@@ -219,7 +219,7 @@ pub const Node = struct {
                     self.tick() catch unreachable;
 
                     // FIX: this should us io uring or something much nicer
-                    std.time.sleep(100 * std.time.ns_per_us);
+                    std.time.sleep(100 * std.time.ns_per_ms);
                 },
                 .closing => {
                     log.info("node {}: closed", .{self.id});
@@ -279,12 +279,36 @@ pub const Node = struct {
         conn.state = .closing;
     }
 
-    pub fn ping(self: *Self, conn: *Connection, opts: PingOptions, timeout_ns: i64) !*Message {
-        _ = self;
-        _ = conn;
+    pub fn ping(self: *Self, conn_handle: ConnectionHandle, opts: PingOptions, timeout_ns: i64) !Message {
         _ = opts;
-        _ = timeout_ns;
-        return error.NotImplemented;
+        const ping_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(ping_message);
+
+        ping_message.* = Message.new();
+        ping_message.headers.message_type = .ping;
+        ping_message.setTransactionId(uuid.v7.new());
+        ping_message.ref();
+        errdefer ping_message.deref();
+
+        var pong_channel = UnbufferedChannel(*Message).new();
+
+        try self.transactions.put(ping_message.transactionId(), &pong_channel);
+        errdefer _ = self.transactions.remove(ping_message.transactionId());
+
+        const deadline = std.time.nanoTimestamp() + timeout_ns;
+        if (deadline > std.time.nanoTimestamp()) {
+            conn_handle.connection.outbox_mutex.lock();
+            defer conn_handle.connection.outbox_mutex.unlock();
+
+            try conn_handle.connection.outbox.enqueue(ping_message);
+        }
+
+        const now = std.time.nanoTimestamp();
+        const remaining_timeout = deadline - now;
+        if (remaining_timeout < 0) return error.Timeout;
+        const pong_message = try pong_channel.timedReceive(@intCast(remaining_timeout));
+
+        return pong_message.*;
     }
 
     fn tick(self: *Self) !void {
@@ -464,30 +488,14 @@ pub const ConnectionHandle = struct {
     connection: *Connection,
     worker: *Worker,
 
-    pub fn ping(self: Self) !void {
-        self.worker.connections_mutex.lock();
-        defer self.worker.connections_mutex.unlock();
+    pub fn enqueueMessage(self: Self, message: *Message) !void {
+        _ = self;
+        _ = message;
 
-        log.debug("worker id {}", .{self.worker.id});
-        log.debug("connection id {}", .{self.connection.connection_id});
+        // self.worker.outbox_mutex.lock();
+        // defer self.worker.outbox_mutex.unlock();
 
-        // ensure that the worker is in charge of this conneciton
-        assert(self.worker.connections.contains(self.connection.connection_id));
-
-        // try worker.enqueueMessageForConnection(connection, .{});
-
-        // worker.
-        // worker.connections.get(connection.connection_id) ||
-    }
-
-    pub fn close(self: Self) void {
-        assert(self.worker.state == .running);
-        switch (self.connection.state) {
-            .closed, .closing => {},
-            else => {
-                self.connection.state = .closing;
-            },
-        }
+        // try self.worker.outbox.enqueue(message);
     }
 };
 

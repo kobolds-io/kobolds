@@ -123,6 +123,7 @@ pub const Connection = struct {
     messages_recv: u128,
     messages_sent: u128,
     outbox: *RingBuffer(*Message),
+    outbox_mutex: std.Thread.Mutex,
     parsed_message_ptrs: std.ArrayList(*Message),
     parsed_messages: std.ArrayList(Message),
     parser: Parser,
@@ -195,6 +196,7 @@ pub const Connection = struct {
             .origin_id = origin_id,
             .remote_id = 0,
             .outbox = outbox,
+            .outbox_mutex = std.Thread.Mutex{},
             .parsed_messages = try std.ArrayList(Message).initCapacity(
                 allocator,
                 // 50,
@@ -316,6 +318,9 @@ pub const Connection = struct {
 
             // if there are bytes remaining in the current send_buffer_list and there is a message to send
             if (send_buffer_list.capacity - send_buffer_list.items.len > 0 and self.outbox.count > 0) {
+                self.outbox_mutex.lock();
+                defer self.outbox_mutex.unlock();
+
                 // buffer that will hold any encoded message
                 var buf: [constants.message_max_size]u8 = undefined;
 
