@@ -4,6 +4,8 @@ const log = std.log.scoped(.ConnectionMessages);
 
 const uuid = @import("uuid");
 
+const RingBuffer = @import("stdx").RingBuffer;
+
 const Message = @import("../protocol/message.zig").Message;
 
 /// Used to map messages to their intended recipients
@@ -11,43 +13,48 @@ pub const ConnectionMessages = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
-    map: std.AutoHashMap(uuid.Uuid, *std.ArrayList(*Message)),
+    map: std.AutoHashMap(uuid.Uuid, *RingBuffer(*Message)),
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
             .allocator = allocator,
-            .map = std.AutoHashMap(uuid.Uuid, *std.ArrayList(*Message)).init(allocator),
+            .map = std.AutoHashMap(uuid.Uuid, *RingBuffer(*Message)).init(allocator),
         };
     }
 
     pub fn deinit(self: *Self) void {
         // loop over all the values in the map and deinit the array lists
         var connection_map_iter = self.map.valueIterator();
-        while (connection_map_iter.next()) |messages_list_ptr| {
-            const messages_list = messages_list_ptr.*;
+        while (connection_map_iter.next()) |messages_queue_ptr| {
+            const messages_queue = messages_queue_ptr.*;
 
-            messages_list.deinit();
-            self.allocator.destroy(messages_list);
+            // TODO: we don't fully clean up here when we should
+            while (messages_queue.dequeue()) |message| {
+                message.deref();
+            }
+
+            messages_queue.deinit();
+            self.allocator.destroy(messages_queue);
         }
 
         self.map.deinit();
     }
 
     pub fn append(self: *Self, conn_id: uuid.Uuid, message: *Message) !void {
-        if (self.map.get(conn_id)) |list| {
-            try list.append(message);
+        if (self.map.get(conn_id)) |queue| {
+            try queue.enqueue(message);
         } else {
             // we need to create a new list for this uuid
             // create a new arraylist for this connection
-            const list = try self.allocator.create(std.ArrayList(*Message));
-            errdefer self.allocator.destroy(list);
+            const queue = try self.allocator.create(RingBuffer(*Message));
+            errdefer self.allocator.destroy(queue);
 
-            list.* = try std.ArrayList(*Message).initCapacity(self.allocator, 1);
-            errdefer list.deinit();
+            queue.* = try RingBuffer(*Message).init(self.allocator, 1_000);
+            errdefer queue.deinit();
 
-            list.appendAssumeCapacity(message);
+            try queue.enqueue(message);
 
-            try self.map.put(conn_id, list);
+            try self.map.put(conn_id, queue);
         }
     }
 

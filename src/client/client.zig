@@ -14,6 +14,8 @@ const constants = @import("../constants.zig");
 const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 const IO = @import("../io.zig").IO;
 
+const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
+
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const MemoryPool = @import("stdx").MemoryPool;
 
@@ -47,6 +49,7 @@ pub const Client = struct {
     connections: std.AutoHashMap(uuid.Uuid, *Connection),
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
     transactions: std.AutoHashMap(uuid.Uuid, *Transaction),
+    connection_messages: ConnectionMessages,
 
     pub fn init(allocator: std.mem.Allocator, config: ClientConfig) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -85,6 +88,7 @@ pub const Client = struct {
             .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .transactions = std.AutoHashMap(uuid.Uuid, *Transaction).init(allocator),
+            .connection_messages = ConnectionMessages.init(allocator),
         };
     }
 
@@ -122,6 +126,7 @@ pub const Client = struct {
         self.connections.deinit();
         self.uninitialized_connections.deinit();
         self.transactions.deinit();
+        self.connection_messages.deinit();
 
         self.allocator.destroy(self.memory_pool);
         self.allocator.destroy(self.io);
@@ -509,6 +514,7 @@ pub const Client = struct {
     }
 
     pub fn ping(self: *Self, node_id: uuid.Uuid) !void {
+        // connection messages
         _ = self;
         _ = node_id;
     }
