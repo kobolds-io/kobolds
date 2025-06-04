@@ -22,6 +22,8 @@ const MemoryPool = @import("stdx").MemoryPool;
 const Message = @import("../protocol/message.zig").Message;
 const Connection = @import("../protocol/connection.zig").Connection;
 
+const PingOptions = struct {};
+
 pub const ClientConfig = struct {
     max_connections: u16 = 1024,
     memory_pool_capacity: usize = 5_000,
@@ -48,8 +50,10 @@ pub const Client = struct {
     connections_mutex: std.Thread.Mutex,
     connections: std.AutoHashMap(uuid.Uuid, *Connection),
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
-    transactions: std.AutoHashMap(uuid.Uuid, *Transaction),
+    transactions: std.AutoHashMap(uuid.Uuid, *UnbufferedChannel(*Message)),
+    transactions_mutex: std.Thread.Mutex,
     connection_messages: ConnectionMessages,
+    connection_messages_mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, config: ClientConfig) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -87,8 +91,10 @@ pub const Client = struct {
             .connections_mutex = std.Thread.Mutex{},
             .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
-            .transactions = std.AutoHashMap(uuid.Uuid, *Transaction).init(allocator),
+            .transactions = std.AutoHashMap(uuid.Uuid, *UnbufferedChannel(*Message)).init(allocator),
+            .transactions_mutex = std.Thread.Mutex{},
             .connection_messages = ConnectionMessages.init(allocator),
+            .connection_messages_mutex = std.Thread.Mutex{},
         };
     }
 
@@ -113,13 +119,12 @@ pub const Client = struct {
             self.allocator.destroy(connection);
         }
 
-        var transactions_iterator = self.transactions.valueIterator();
-        while (transactions_iterator.next()) |entry| {
-            const transaction = entry.*;
+        // var transactions_iterator = self.transactions.valueIterator();
+        // while (transactions_iterator.next()) |entry| {
+        // const transaction = entry.*;
 
-            transaction.deinit();
-            self.allocator.destroy(transaction);
-        }
+        // self.allocator.destroy(transaction);
+        // }
 
         self.io.deinit();
         self.memory_pool.deinit();
@@ -257,7 +262,6 @@ pub const Client = struct {
                     // the connection is now valid and ready for events
                     // move the connection to the regular connections map
                     try self.connections.put(conn.connection_id, conn);
-
                     // remove the connection from the uninitialized_connections map
                     assert(self.uninitialized_connections.remove(tmp_id));
                 }
@@ -280,6 +284,7 @@ pub const Client = struct {
                 };
 
                 try self.gather(conn);
+                try self.distribute(conn);
             }
         }
     }
@@ -344,15 +349,16 @@ pub const Client = struct {
                 //     message.ref();
                 // },
                 .pong => {
-                    self.mutex.lock();
-                    defer self.mutex.unlock();
+                    // log.debug("received pong! {any}", .{message});
+
+                    self.transactions_mutex.lock();
+                    defer self.transactions_mutex.unlock();
 
                     // check if this pong message is part of transaction
-                    if (self.transactions.get(message.transactionId())) |transaction| {
+                    if (self.transactions.get(message.transactionId())) |channel| {
                         message.ref();
                         // log.info("message.refs() {}", .{message.refs()});
-                        transaction.channel.send(message);
-                        transaction.deinit();
+                        channel.send(message);
                         _ = self.transactions.remove(message.transactionId());
                     }
 
@@ -403,6 +409,15 @@ pub const Client = struct {
         }
 
         assert(conn.inbox.count == 0);
+    }
+
+    fn distribute(self: *Self, conn: *Connection) !void {
+        self.connection_messages_mutex.lock();
+        defer self.connection_messages_mutex.unlock();
+
+        if (self.connection_messages.map.get(conn.connection_id)) |messages| {
+            conn.outbox.concatenateAvailable(messages);
+        }
     }
 
     fn cleanupUninitializedConnection(self: *Self, tmp_id: uuid.Uuid, conn: *Connection) !void {
@@ -513,10 +528,49 @@ pub const Client = struct {
         return conn;
     }
 
-    pub fn ping(self: *Self, node_id: uuid.Uuid) !void {
-        // connection messages
-        _ = self;
-        _ = node_id;
+    pub fn ping(self: *Self, conn: *Connection, options: PingOptions, timeout_ns: i64) !void {
+        _ = options;
+        // FIX: this will just crash and that is bad
+        assert(conn.state == .connected);
+
+        const ping_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(ping_message);
+
+        ping_message.* = Message.new();
+        ping_message.headers.message_type = .ping;
+        ping_message.setTransactionId(uuid.v7.new());
+        ping_message.ref();
+        errdefer ping_message.deref();
+
+        var channel = UnbufferedChannel(*Message).new();
+
+        {
+            self.connection_messages_mutex.lock();
+            defer self.connection_messages_mutex.unlock();
+
+            try self.connection_messages.append(conn.connection_id, ping_message);
+        }
+
+        {
+            self.transactions_mutex.lock();
+            defer self.transactions_mutex.unlock();
+
+            try self.transactions.put(ping_message.transactionId(), &channel);
+        }
+
+        const pong_message = channel.timedReceive(@intCast(timeout_ns)) catch |err| switch (err) {
+            error.Timeout => {
+                self.transactions_mutex.lock();
+                defer self.transactions_mutex.unlock();
+
+                _ = self.transactions.remove(ping_message.transactionId());
+                return err;
+            },
+            else => unreachable,
+        };
+
+        _ = pong_message;
+        log.debug("pong message received!", .{});
     }
 };
 
