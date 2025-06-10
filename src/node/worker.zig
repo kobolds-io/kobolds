@@ -151,7 +151,7 @@ pub const Worker = struct {
         log.info("worker {}: running", .{self.id});
         while (true) {
             // check if the close channel has received a close command
-            const close_channel_received = self.close_channel.timedReceive(0) catch false;
+            const close_channel_received = self.close_channel.tryReceive(0) catch false;
             if (close_channel_received) {
                 log.info("worker {} closing", .{self.id});
                 self.state = .closing;

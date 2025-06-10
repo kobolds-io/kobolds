@@ -145,7 +145,7 @@ pub const Client = struct {
         const client_thread = try std.Thread.spawn(.{}, Client.run, .{ self, &ready_channel });
         client_thread.detach();
 
-        _ = ready_channel.timedReceive(100 * std.time.ns_per_ms) catch |err| {
+        _ = ready_channel.tryReceive(100 * std.time.ns_per_ms) catch |err| {
             log.err("client_thread spawn timeout", .{});
             self.close();
             return err;
@@ -158,7 +158,7 @@ pub const Client = struct {
         log.info("client {} running", .{self.id});
         while (true) {
             // check if the close channel has received a close command
-            const close_channel_received = self.close_channel.timedReceive(0) catch false;
+            const close_channel_received = self.close_channel.tryReceive(0) catch false;
             if (close_channel_received) {
                 log.info("client {} closing", .{self.id});
                 self.state = .closing;
@@ -558,7 +558,7 @@ pub const Client = struct {
             try self.transactions.put(ping_message.transactionId(), &channel);
         }
 
-        const pong_message = channel.timedReceive(@intCast(timeout_ns)) catch |err| switch (err) {
+        const pong_message = channel.tryReceive(@intCast(timeout_ns)) catch |err| switch (err) {
             error.Timeout => {
                 self.transactions_mutex.lock();
                 defer self.transactions_mutex.unlock();

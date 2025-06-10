@@ -195,7 +195,7 @@ pub const Node = struct {
         const core_thread = try std.Thread.spawn(.{}, Node.run, .{ self, &ready_channel });
         core_thread.detach();
 
-        _ = ready_channel.timedReceive(100 * std.time.ns_per_ms) catch |err| {
+        _ = ready_channel.tryReceive(100 * std.time.ns_per_ms) catch |err| {
             log.err("core_thread spawn timeout", .{});
             self.close();
             return err;
@@ -208,7 +208,7 @@ pub const Node = struct {
         log.info("node {} running", .{self.id});
         while (true) {
             // check if the close channel has received a close command
-            const close_channel_received = self.close_channel.timedReceive(0) catch false;
+            const close_channel_received = self.close_channel.tryReceive(0) catch false;
             if (close_channel_received) {
                 log.info("node {} closing", .{self.id});
                 self.state = .closing;
@@ -306,7 +306,7 @@ pub const Node = struct {
         const now = std.time.nanoTimestamp();
         const remaining_timeout = deadline - now;
         if (remaining_timeout < 0) return error.Timeout;
-        const pong_message = try pong_channel.timedReceive(@intCast(remaining_timeout));
+        const pong_message = try pong_channel.tryReceive(@intCast(remaining_timeout));
 
         return pong_message.*;
     }
@@ -344,7 +344,7 @@ pub const Node = struct {
             const worker_thread = try std.Thread.spawn(.{}, Worker.run, .{ worker, &ready_channel });
             worker_thread.detach();
 
-            _ = ready_channel.timedReceive(100 * std.time.ns_per_ms) catch |err| {
+            _ = ready_channel.tryReceive(100 * std.time.ns_per_ms) catch |err| {
                 log.err("worker_thread spawn timeout", .{});
                 self.close();
                 return err;
@@ -381,7 +381,7 @@ pub const Node = struct {
             const listener_thread = try std.Thread.spawn(.{}, Listener.run, .{ listener, &ready_channel });
             listener_thread.detach();
 
-            _ = ready_channel.timedReceive(100 * std.time.ns_per_ms) catch |err| {
+            _ = ready_channel.tryReceive(100 * std.time.ns_per_ms) catch |err| {
                 log.err("listener_thread spawn timeout", .{});
                 self.close();
                 return err;

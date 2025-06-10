@@ -148,7 +148,7 @@ pub const Listener = struct {
         // send a message back to the caller that the thread is now up and running
         ready_channel.send(true);
         while (true) {
-            const close_channel_received = self.close_channel.timedReceive(0) catch false;
+            const close_channel_received = self.close_channel.tryReceive(0) catch false;
             if (close_channel_received) {
                 log.info("listener {} closing", .{self.id});
                 self.state = .closing;
