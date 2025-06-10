@@ -41,8 +41,8 @@
             .hash = "12207f6a93a8f73155d1af391980124feb6bab344931e11f62e42e6ac825c8d59ff1",
         },
         .stdx = .{
-            .url = "https://github.com/kobolds-io/stdx/archive/refs/tags/v0.0.6.tar.gz",
-            .hash = "stdx-0.0.6-nyLNAdIOAgA6NQ3E-jaEIdpFdI4-posZNM3WlbKCrjKH",
+            .url = "https://github.com/kobolds-io/stdx/archive/refs/tags/v0.0.7.tar.gz",
+            .hash = "stdx-0.0.7-nyLNAbkOAgCSa55Lf0S-wCWiRjEggpZjVe9reUapaEeA",
         },
         .zbench = .{
             .url = "https://github.com/hendriknielaender/zBench/archive/v0.9.3.tar.gz",
