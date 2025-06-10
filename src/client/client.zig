@@ -569,8 +569,8 @@ pub const Client = struct {
             else => unreachable,
         };
 
-        _ = pong_message;
-        log.debug("pong message received!", .{});
+        pong_message.deref();
+        self.memory_pool.destroy(pong_message);
     }
 };
 
