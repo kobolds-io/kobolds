@@ -351,6 +351,7 @@ pub const Client = struct {
                 .pong => {
                     // log.debug("received pong! {any}", .{message});
 
+                    message.ref();
                     self.transactions_mutex.lock();
                     defer self.transactions_mutex.unlock();
 

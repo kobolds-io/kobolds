@@ -362,7 +362,7 @@ pub fn nodePing() !void {
     defer client.disconnect(conn);
 
     var timer = try std.time.Timer.start();
-    for (0..1000) |_| {
+    for (0..10_000) |_| {
         const start_stage = timer.read();
         try client.ping(conn, .{}, 5_000 * std.time.ns_per_ms);
         log.err("took {}ms to ping/pong", .{(timer.read() - start_stage) / std.time.ns_per_ms});
