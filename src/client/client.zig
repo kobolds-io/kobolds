@@ -17,6 +17,7 @@ const IO = @import("../io.zig").IO;
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
+const Signal = @import("stdx").Signal;
 const MemoryPool = @import("stdx").MemoryPool;
 
 const Message = @import("../protocol/message.zig").Message;
@@ -50,7 +51,7 @@ pub const Client = struct {
     connections_mutex: std.Thread.Mutex,
     connections: std.AutoHashMap(uuid.Uuid, *Connection),
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
-    transactions: std.AutoHashMap(uuid.Uuid, *UnbufferedChannel(*Message)),
+    transactions: std.AutoHashMap(uuid.Uuid, *Signal(*Message)),
     transactions_mutex: std.Thread.Mutex,
     connection_messages: ConnectionMessages,
     connection_messages_mutex: std.Thread.Mutex,
@@ -75,7 +76,8 @@ pub const Client = struct {
         const memory_pool = try allocator.create(MemoryPool(Message));
         errdefer allocator.destroy(memory_pool);
 
-        memory_pool.* = try MemoryPool(Message).init(allocator, config.memory_pool_capacity);
+        memory_pool.* = try MemoryPool(Message).init(allocator, 100_000);
+        // memory_pool.* = try MemoryPool(Message).init(allocator, config.memory_pool_capacity);
         errdefer memory_pool.deinit();
 
         return Self{
@@ -91,7 +93,7 @@ pub const Client = struct {
             .connections_mutex = std.Thread.Mutex{},
             .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
-            .transactions = std.AutoHashMap(uuid.Uuid, *UnbufferedChannel(*Message)).init(allocator),
+            .transactions = std.AutoHashMap(uuid.Uuid, *Signal(*Message)).init(allocator),
             .transactions_mutex = std.Thread.Mutex{},
             .connection_messages = ConnectionMessages.init(allocator),
             .connection_messages_mutex = std.Thread.Mutex{},
@@ -356,10 +358,10 @@ pub const Client = struct {
                     defer self.transactions_mutex.unlock();
 
                     // check if this pong message is part of transaction
-                    if (self.transactions.get(message.transactionId())) |channel| {
+                    if (self.transactions.get(message.transactionId())) |signal| {
                         message.ref();
                         // log.info("message.refs() {}", .{message.refs()});
-                        channel.send(message);
+                        signal.send(message);
                         _ = self.transactions.remove(message.transactionId());
                     }
 
@@ -529,7 +531,7 @@ pub const Client = struct {
         return conn;
     }
 
-    pub fn ping(self: *Self, conn: *Connection, options: PingOptions, timeout_ns: i64) !void {
+    pub fn ping(self: *Self, conn: *Connection, signal: *Signal(*Message), options: PingOptions) !void {
         _ = options;
         // FIX: this will just crash and that is bad
         assert(conn.state == .connected);
@@ -543,8 +545,6 @@ pub const Client = struct {
         ping_message.ref();
         errdefer ping_message.deref();
 
-        var channel = UnbufferedChannel(*Message).new();
-
         {
             self.connection_messages_mutex.lock();
             defer self.connection_messages_mutex.unlock();
@@ -556,48 +556,48 @@ pub const Client = struct {
             self.transactions_mutex.lock();
             defer self.transactions_mutex.unlock();
 
-            try self.transactions.put(ping_message.transactionId(), &channel);
+            try self.transactions.put(ping_message.transactionId(), signal);
         }
-
-        const pong_message = channel.tryReceive(@intCast(timeout_ns)) catch |err| switch (err) {
-            error.Timeout => {
-                self.transactions_mutex.lock();
-                defer self.transactions_mutex.unlock();
-
-                _ = self.transactions.remove(ping_message.transactionId());
-                return err;
-            },
-            else => unreachable,
-        };
-
-        pong_message.deref();
-        self.memory_pool.destroy(pong_message);
     }
 };
 
 pub const Transaction = struct {
     const Self = @This();
-    id: uuid.Uuid,
-    channel: *UnbufferedChannel(*Message),
+    signal: *Signal(*Message),
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, id: uuid.Uuid) !Self {
-        const channel = try allocator.create(UnbufferedChannel(*Message));
-        errdefer allocator.destroy(channel);
+    pub fn init(allocator: std.mem.Allocator) !Self {
+        const signal = try allocator.create(Signal(*Message));
+        errdefer allocator.destroy(signal);
 
-        channel.* = UnbufferedChannel(*Message).new();
+        signal.* = Signal(*Message).new();
 
         return Self{
             .allocator = allocator,
-            .id = id,
-            .channel = channel,
+            .signal = signal,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.allocator.destroy(self.channel);
+        self.allocator.destroy(self.signal);
+    }
+
+    pub fn send(self: *Self, message: *Message) void {
+        self.signal.send(message);
+    }
+
+    pub fn receive(self: *Self) *Message {
+        return self.signal.receive();
     }
 };
+
+// const request_handle = try RequestHandle.init(allocator)
+// defer request_handle.deinit();
+//
+// const request_handle = try client.request(conn, req, opts, timeout_ns);
+//
+// const request_handle = try client.ping(conn, &request_handle, opts, timout_ns)
+// defer request_handle.deinit();
 
 test "init/deinit" {
     const allocator = testing.allocator;

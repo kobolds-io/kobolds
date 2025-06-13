@@ -21,6 +21,7 @@ const Transaction = @import("../client/client.zig").Transaction;
 const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
 const AllowedInboundConnectionConfig = @import("../node/listener.zig").AllowedInboundConnectionConfig;
+const Signal = @import("stdx").Signal;
 
 var node_config = NodeConfig{
     .max_connections = 5,
@@ -361,12 +362,34 @@ pub fn nodePing() !void {
     const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
     defer client.disconnect(conn);
 
+    var signals = std.ArrayList(*Signal(*Message)).init(allocator);
+    defer signals.deinit();
+
     var timer = try std.time.Timer.start();
-    for (0..10_000) |_| {
-        const start_stage = timer.read();
-        try client.ping(conn, .{}, 5_000 * std.time.ns_per_ms);
-        log.err("took {}ms to ping/pong", .{(timer.read() - start_stage) / std.time.ns_per_ms});
-    }
+    const send_start = timer.read();
+
+    var ping_tx = try Transaction.init(allocator);
+    defer ping_tx.deinit();
+
+    var signal = Signal(*Message).new();
+
+    try client.ping(conn, &signal, .{});
+    const send_end = timer.read();
+
+    const receive_start = timer.read();
+    const rep = try signal.tryReceive(1_000 * std.time.ns_per_ms);
+    const receive_end = timer.read();
+
+    const error_code = rep.errorCode();
+    if (error_code != .ok) return error.BadRequest;
+
+    rep.deref();
+    if (rep.refs() == 0) client.memory_pool.destroy(rep);
+
+    const send_time = (send_end - send_start) / std.time.ns_per_ms;
+    const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
+    log.err("send took {}ms", .{send_time});
+    log.err("receive took {}ms", .{receive_time});
 
     // const conn_handle = try node.connect(outbound_connection_config, 1_000 * std.time.ns_per_ms);
     // defer node.disconnect(conn_handle);
