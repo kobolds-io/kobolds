@@ -368,9 +368,6 @@ pub fn nodePing() !void {
     var timer = try std.time.Timer.start();
     const send_start = timer.read();
 
-    var ping_tx = try Transaction.init(allocator);
-    defer ping_tx.deinit();
-
     var signal = Signal(*Message).new();
 
     try client.ping(conn, &signal, .{});
