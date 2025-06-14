@@ -391,36 +391,11 @@ pub fn nodePing() !void {
     log.err("send took {}ms", .{send_time});
     log.err("receive took {}ms", .{receive_time});
 
-    // const conn_handle = try node.connect(outbound_connection_config, 1_000 * std.time.ns_per_ms);
-    // defer node.disconnect(conn_handle);
-    //
-    // const pong = node.ping(conn_handle, .{}, 1000);
-    //
-    // const pong_message = try node.ping(ch, 1_000 * std.time.ns_per_ms);
-    // defer node.message_pool.destroy(pong_message);
-    // defer pong_message.deref();
-    //
-    // fn ping(self: *Self, ch: *ConnectionHandle, opts: PingOptions, timeout_ns: i64) !Message {
-    //  // Create a ping message
-    //   const ping_message = try self.node.memory_pool.create();
-    //   ping_message
-    //   ping_message.headers.message_type = .ping;
-    //   ping_message.setTransactionId(1);
-    //
-    //   const transaction = self.worker.createTransaction(ping_message.transactionId());
-    //
-    //   self.worker.connection_Messages_mutex.lock();
-    //   defer self.worker.connection_messages_mutex.unlock();
-    //
-    //   try self.worker.connection_messages.addMessage(self.connection.id, ping_message);
+    // registerSigintHandler();
+
+    // while (!sigint_received) {
+    //     std.time.sleep(1 * std.time.ns_per_ms);
     // }
-    // defer node.disconnect(conn_handle.connection);
-
-    registerSigintHandler();
-
-    while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
-    }
 }
 
 pub fn nodeConnect() !void {
