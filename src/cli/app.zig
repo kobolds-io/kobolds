@@ -385,14 +385,9 @@ pub fn nodePing() !void {
 
     const send_time = (send_end - send_start) / std.time.ns_per_ms;
     const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
+
     log.err("send took {}ms", .{send_time});
     log.err("receive took {}ms", .{receive_time});
-
-    // registerSigintHandler();
-
-    // while (!sigint_received) {
-    //     std.time.sleep(1 * std.time.ns_per_ms);
-    // }
 }
 
 pub fn nodeConnect() !void {
