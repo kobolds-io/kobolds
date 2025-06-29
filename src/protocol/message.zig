@@ -552,7 +552,6 @@ pub const Headers = extern struct {
         const body_length = utils.bytesToU16(bytes[i..][0..2]);
         i += 2;
 
-        // const protocol_version: ProtocolVersion = @enumFromInt(bytes[i]);
         const protocol_version: ProtocolVersion = switch (bytes[i]) {
             0 => ProtocolVersion.unsupported,
             1 => ProtocolVersion.v1,
@@ -560,7 +559,6 @@ pub const Headers = extern struct {
         };
         i += 1;
 
-        // const message_type: MessageType = @enumFromInt(bytes[i]);
         const message_type: MessageType = switch (bytes[i]) {
             0 => MessageType.undefined,
             1 => MessageType.request,
@@ -577,7 +575,6 @@ pub const Headers = extern struct {
         };
         i += 1;
 
-        // const compression: Compression = @enumFromInt(bytes[i]);
         const compression: Compression = switch (bytes[i]) {
             0 => Compression.none,
             1 => Compression.gzip,
@@ -621,7 +618,6 @@ pub const Headers = extern struct {
         headers_checksum: u64,
         body_checksum: u64,
     ) []const u8 {
-        // Ensure the buffer is large enough
         assert(buf.len >= @sizeOf(Headers));
 
         var fba = std.heap.FixedBufferAllocator.init(buf);
