@@ -485,14 +485,14 @@ pub const Message = struct {
 
 pub const Headers = extern struct {
     const Self = @This();
-    pub const padding_len: comptime_int = 8;
+    pub const padding_len: comptime_int = 10;
     pub const reserved_len: comptime_int = 64;
 
     origin_id: u128 = 0,
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
-    body_length: u32 = 0,
+    body_length: u16 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .undefined,
     compression: Compression = .none,
@@ -549,8 +549,8 @@ pub const Headers = extern struct {
         const connection_id = utils.bytesToU128(bytes[i..][0..16]);
         i += 16;
 
-        const body_length = utils.bytesToU32(bytes[i..][0..4]);
-        i += 4;
+        const body_length = utils.bytesToU16(bytes[i..][0..2]);
+        i += 2;
 
         // const protocol_version: ProtocolVersion = @enumFromInt(bytes[i]);
         const protocol_version: ProtocolVersion = switch (bytes[i]) {
@@ -633,7 +633,7 @@ pub const Headers = extern struct {
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(body_checksum));
         list.appendSliceAssumeCapacity(&utils.u128ToBytes(self.origin_id));
         list.appendSliceAssumeCapacity(&utils.u128ToBytes(self.connection_id));
-        list.appendSliceAssumeCapacity(&utils.u32ToBytes(self.body_length));
+        list.appendSliceAssumeCapacity(&utils.u16ToBytes(self.body_length));
         list.appendAssumeCapacity(@intFromEnum(self.protocol_version));
         list.appendAssumeCapacity(@intFromEnum(self.message_type));
         list.appendAssumeCapacity(@intFromEnum(self.compression));
@@ -660,7 +660,7 @@ pub const Request = extern struct {
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
-    body_length: u32 = 0,
+    body_length: u16 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .request,
     compression: Compression = .none,
@@ -701,7 +701,7 @@ pub const Reply = extern struct {
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
-    body_length: u32 = 0,
+    body_length: u16 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .reply,
     compression: Compression = .none,
@@ -746,7 +746,7 @@ pub const Ping = extern struct {
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
-    body_length: u32 = 0,
+    body_length: u16 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .ping,
     compression: Compression = .none,
@@ -784,7 +784,7 @@ pub const Pong = extern struct {
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
-    body_length: u32 = 0,
+    body_length: u16 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .pong,
     compression: Compression = .none,
@@ -824,7 +824,7 @@ pub const Accept = extern struct {
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
-    body_length: u32 = 0,
+    body_length: u16 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .accept,
     compression: Compression = .none,
@@ -861,7 +861,7 @@ pub const Advertise = extern struct {
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
-    body_length: u32 = 0,
+    body_length: u16 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .advertise,
     compression: Compression = .none,
@@ -906,7 +906,7 @@ pub const Unadvertise = extern struct {
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
-    body_length: u32 = 0,
+    body_length: u16 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .unadvertise,
     compression: Compression = .none,
@@ -951,7 +951,7 @@ pub const Publish = extern struct {
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
-    body_length: u32 = 0,
+    body_length: u16 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .publish,
     compression: Compression = .none,
@@ -989,7 +989,7 @@ pub const Subscribe = extern struct {
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
-    body_length: u32 = 0,
+    body_length: u16 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .subscribe,
     compression: Compression = .none,
@@ -1031,7 +1031,7 @@ pub const Unsubscribe = extern struct {
     connection_id: u128 = 0,
     headers_checksum: u64 = 0,
     body_checksum: u64 = 0,
-    body_length: u32 = 0,
+    body_length: u16 = 0,
     protocol_version: ProtocolVersion = .v1,
     message_type: MessageType = .unsubscribe,
     compression: Compression = .none,
