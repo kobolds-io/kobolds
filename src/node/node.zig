@@ -7,6 +7,7 @@ const posix = std.posix;
 const uuid = @import("uuid");
 const constants = @import("../constants.zig");
 
+const IO = @import("../io.zig").IO;
 const Worker = @import("./worker.zig").Worker;
 const Listener = @import("./listener.zig").Listener;
 const ListenerConfig = @import("./listener.zig").ListenerConfig;
@@ -18,6 +19,7 @@ const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const MemoryPool = @import("stdx").MemoryPool;
 
 const Message = @import("../protocol/message.zig").Message;
+const Accept = @import("../protocol/message.zig").Accept;
 const Connection = @import("../protocol/connection.zig").Connection;
 
 pub const PingOptions = struct {};
@@ -71,6 +73,7 @@ pub const Node = struct {
     const Self = @This();
 
     id: uuid.Uuid,
+    io: *IO,
     allocator: std.mem.Allocator,
     config: NodeConfig,
     listeners: *std.AutoHashMap(usize, *Listener),
@@ -78,6 +81,7 @@ pub const Node = struct {
     done_channel: *UnbufferedChannel(bool),
     state: NodeState,
     workers: *std.AutoHashMap(usize, *Worker),
+    connections: *std.AutoHashMap(u128, *Connection),
     memory_pool: *MemoryPool(Message),
     remotes: *std.AutoHashMap(uuid.Uuid, *Remote),
     mutex: std.Thread.Mutex,
@@ -87,6 +91,12 @@ pub const Node = struct {
             log.err("invalid config: {s}", .{err_message});
             return error.InvalidConfig;
         }
+
+        const io = try allocator.create(IO);
+        errdefer allocator.destroy(io);
+
+        io.* = try IO.init(constants.io_uring_entries, 0);
+        errdefer io.deinit();
 
         // ensure that this node is not spawning a crazy amount of threads
         const cpu_count = try std.Thread.getCpuCount();
@@ -108,6 +118,12 @@ pub const Node = struct {
         workers.* = std.AutoHashMap(usize, *Worker).init(allocator);
         errdefer workers.deinit();
 
+        const connections = try allocator.create(std.AutoHashMap(u128, *Connection));
+        errdefer allocator.destroy(connections);
+
+        connections.* = std.AutoHashMap(u128, *Connection).init(allocator);
+        errdefer connections.deinit();
+
         const memory_pool = try allocator.create(MemoryPool(Message));
         errdefer allocator.destroy(memory_pool);
 
@@ -128,12 +144,14 @@ pub const Node = struct {
 
         return Self{
             .id = uuid.v7.new(),
+            .io = io,
             .allocator = allocator,
             .config = config,
             .close_channel = close_channel,
             .done_channel = done_channel,
             .state = .closed,
             .workers = workers,
+            .connections = connections,
             .memory_pool = memory_pool,
             .remotes = remotes,
             .listeners = listeners,
@@ -147,6 +165,14 @@ pub const Node = struct {
             const listener = entry.*;
             listener.deinit();
             self.allocator.destroy(listener);
+        }
+
+        var connections_iter = self.connections.valueIterator();
+        while (connections_iter.next()) |entry| {
+            const connection = entry.*;
+
+            connection.deinit();
+            self.allocator.destroy(connection);
         }
 
         var workers_iterator = self.workers.valueIterator();
@@ -167,10 +193,14 @@ pub const Node = struct {
         self.workers.deinit();
         self.remotes.deinit();
         self.memory_pool.deinit();
+        self.io.deinit();
+        self.connections.deinit();
 
+        self.allocator.destroy(self.io);
         self.allocator.destroy(self.remotes);
         self.allocator.destroy(self.listeners);
         self.allocator.destroy(self.workers);
+        self.allocator.destroy(self.connections);
         self.allocator.destroy(self.memory_pool);
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
@@ -180,8 +210,8 @@ pub const Node = struct {
         assert(self.state == .closed);
 
         // Start the workers
-        try self.initializeWorkers();
-        try self.spawnWorkerThreads();
+        // try self.initializeWorkers();
+        // try self.spawnWorkerThreads();
 
         // Start the listeners
         try self.initializeListeners();
@@ -218,8 +248,7 @@ pub const Node = struct {
                 .running => {
                     self.tick() catch unreachable;
 
-                    // FIX: this should us io uring or something much nicer
-                    std.time.sleep(100 * std.time.ns_per_ms);
+                    self.io.run_for_ns(100 * std.time.ns_per_us) catch unreachable;
                 },
                 .closing => {
                     log.info("node {}: closed", .{self.id});
@@ -313,6 +342,20 @@ pub const Node = struct {
 
     fn tick(self: *Self) !void {
         try self.maybeAddInboundConnections();
+
+        var connections_iter = self.connections.valueIterator();
+        while (connections_iter.next()) |entry| {
+            const conn = entry.*;
+
+            // check if this connection was closed for whatever reason
+            if (conn.state == .closed) {
+                self.removeConnection(conn);
+                continue;
+            }
+
+            try conn.tick();
+            try self.gather(conn);
+        }
     }
 
     fn initializeWorkers(self: *Self) !void {
@@ -414,10 +457,59 @@ pub const Node = struct {
 
                 // try to add the connections
                 while (listener.sockets.pop()) |socket| {
-                    try self.addInboundConnectionToNextWorker(socket);
+                    try self.addInboundConnection(socket);
+                    // try self.addInboundConnectionToNextWorker(socket);
                 }
             }
         }
+    }
+
+    fn addInboundConnection(self: *Self, socket: posix.socket_t) !void {
+        // we are just gonna try to close this socket if anything blows up
+        errdefer posix.close(socket);
+        // initialize the connection
+        const connection = try self.allocator.create(Connection);
+        errdefer self.allocator.destroy(connection);
+
+        const default_inbound_connection_config = InboundConnectionConfig{};
+
+        const conn_id = uuid.v7.new();
+        connection.* = try Connection.init(
+            conn_id,
+            self.id,
+            .inbound,
+            self.io,
+            socket,
+            self.allocator,
+            self.memory_pool,
+            .{ .inbound = default_inbound_connection_config },
+        );
+        errdefer connection.deinit();
+
+        connection.state = .connecting;
+
+        // self.connections_mutex.lock();
+        // defer self.connections_mutex.unlock();
+
+        try self.connections.put(conn_id, connection);
+        errdefer _ = self.connections.remove(conn_id);
+
+        const accept_message = self.memory_pool.create() catch |err| {
+            log.err("unable to create an accept message for connection {any}", .{err});
+            connection.state = .closing;
+            return;
+        };
+        accept_message.* = Message.new();
+        accept_message.headers.message_type = .accept;
+        accept_message.ref();
+
+        var accept_headers: *Accept = accept_message.headers.into(.accept).?;
+        accept_headers.connection_id = conn_id;
+        accept_headers.origin_id = self.id;
+
+        try connection.outbox.enqueue(accept_message);
+
+        log.info("node: {} added connection {}", .{ self.id, conn_id });
     }
 
     fn addInboundConnectionToNextWorker(self: *Self, socket: posix.socket_t) !void {
@@ -479,6 +571,203 @@ pub const Node = struct {
         };
 
         return ch;
+    }
+
+    fn gather(self: *Self, conn: *Connection) !void {
+        // check to see if there are messages
+        if (conn.inbox.count == 0) return;
+
+        while (conn.inbox.dequeue()) |message| {
+            // defer self.node.processed_messages_count += 1;
+            defer {
+                message.deref();
+                if (message.refs() == 0) self.memory_pool.destroy(message);
+            }
+            switch (message.headers.message_type) {
+                .accept => {
+                    // ensure that this connection is not fully connected
+                    assert(conn.state != .connected);
+
+                    switch (conn.connection_type) {
+                        .outbound => {
+                            assert(conn.connection_id == 0);
+                            // An error here would be a protocol error
+                            assert(conn.remote_id != message.headers.origin_id);
+                            assert(conn.connection_id != message.headers.connection_id);
+
+                            conn.connection_id = message.headers.connection_id;
+                            conn.remote_id = message.headers.origin_id;
+
+                            // enqueue a message to immediately convey the node id of this Node
+                            message.headers.origin_id = conn.origin_id;
+                            message.headers.connection_id = conn.connection_id;
+
+                            message.ref();
+                            try conn.outbox.enqueue(message);
+
+                            assert(conn.connection_type == .outbound);
+
+                            conn.state = .connected;
+                            log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
+                                conn.origin_id,
+                                conn.connection_id,
+                                conn.remote_id,
+                            });
+                        },
+                        .inbound => {
+                            assert(conn.connection_id == message.headers.connection_id);
+                            assert(conn.origin_id != message.headers.origin_id);
+
+                            conn.remote_id = message.headers.origin_id;
+                            conn.state = .connected;
+                            log.info("inbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
+                                conn.origin_id,
+                                conn.connection_id,
+                                conn.remote_id,
+                            });
+                        },
+                    }
+                },
+                .ping => {
+                    log.debug("received ping from origin_id: {}, connection_id: {}", .{
+                        message.headers.origin_id,
+                        message.headers.connection_id,
+                    });
+                    // Since this is a `ping` we don't need to do any extra work to figure out how to respond
+                    message.headers.message_type = .pong;
+                    message.headers.origin_id = self.id;
+                    message.headers.connection_id = conn.connection_id;
+                    message.setTransactionId(message.transactionId());
+                    message.setErrorCode(.ok);
+
+                    assert(message.refs() == 1);
+
+                    if (conn.outbox.enqueue(message)) |_| {} else |err| {
+                        log.err("Failed to enqueue message to outbox: {}", .{err});
+                        message.deref(); // Undo reference if enqueue fails
+                    }
+                    message.ref();
+                },
+                .pong => {
+                    log.debug("received pong from origin_id: {}, connection_id: {}", .{
+                        message.headers.origin_id,
+                        message.headers.connection_id,
+                    });
+                },
+                .publish => {
+                    // // get the publisher's key
+                    // const publisher_key = utils.generateKey(message.topicName(), conn.connection_id);
+                    // if (self.publishers.get(publisher_key)) |publisher| {
+                    //     publisher.publish(message) catch |err| {
+                    //         log.err("could not publish message {any}", .{err});
+                    //         message.deref();
+                    //     };
+                    //     return;
+                    // }
+
+                    // const publisher = try self.allocator.create(Publisher);
+                    // errdefer self.allocator.destroy(publisher);
+
+                    // publisher.* = try Publisher.init(
+                    //     self.allocator,
+                    //     publisher_key,
+                    //     conn.connection_id,
+                    //     constants.publisher_max_queue_capacity,
+                    //     message.topicName(),
+                    // );
+                    // errdefer publisher.deinit();
+
+                    // try self.publishers.put(publisher_key, publisher);
+
+                    // // check if the bus even exists
+                    // const bus_manager = self.node.bus_manager;
+                    // const bus = try bus_manager.findOrCreate(message.topicName());
+                    // try bus.addPublisher(publisher);
+
+                    // publisher.publish(message) catch |err| {
+                    //     log.err("could not publish message {any}", .{err});
+                    //     message.deref();
+                    // };
+                },
+                .subscribe => {
+                    // defer message.deref();
+                    // log.debug("subscribe message received!", .{});
+
+                    // const subscriber_key = utils.generateKey(message.topicName(), conn.connection_id);
+
+                    // // check if this connection is already subscribed to this topic
+                    // if (self.subscribers.contains(subscriber_key)) {
+                    //     // this is not allowed
+                    //     const reply = try Message.create(self.message_pool);
+                    //     errdefer reply.deref();
+
+                    //     reply.headers.message_type = .reply;
+                    //     reply.setTopicName(message.topicName());
+                    //     reply.setTransactionId(message.transactionId());
+                    //     reply.setErrorCode(.bad_request); // TODO: this should be a better error
+
+                    //     try conn.outbox.enqueue(reply);
+                    //     return;
+                    // }
+
+                    // const bus_manager = self.node.bus_manager;
+                    // const bus = try bus_manager.findOrCreate(message.topicName());
+
+                    // const subscriber = try self.allocator.create(Subscriber);
+                    // errdefer self.allocator.destroy(subscriber);
+
+                    // subscriber.* = try Subscriber.init(
+                    //     self.allocator,
+                    //     subscriber_key,
+                    //     conn.connection_id,
+                    //     constants.subscriber_max_queue_capacity,
+                    //     bus,
+                    // );
+                    // errdefer subscriber.deinit();
+
+                    // try self.subscribers.put(subscriber_key, subscriber);
+                    // try subscriber.subscribe();
+                    // errdefer _ = subscriber.unsubscribe() catch @panic("subscriber could not unsubscribe");
+
+                    // // Reply to the subscribe request
+                    // const reply = try Message.create(self.message_pool);
+                    // errdefer reply.deref();
+
+                    // reply.headers.message_type = .reply;
+                    // reply.setTopicName(message.topicName());
+                    // reply.setTransactionId(message.transactionId());
+                    // reply.setErrorCode(.ok);
+
+                    // try conn.outbox.enqueue(reply);
+                },
+                .unsubscribe => {
+                    // defer message.deref();
+                    // log.debug("unsubscribe message received!", .{});
+
+                    // const subscriber_key = utils.generateKey(message.topicName(), conn.connection_id);
+
+                    // if (self.subscribers.get(subscriber_key)) |subscriber| {
+                    //     try subscriber.unsubscribe();
+                    //     _ = self.subscribers.remove(subscriber_key);
+                    // }
+
+                    // TODO: send unsubscribe reply
+                },
+                else => {
+                    //                     message.deref();
+                },
+            }
+        }
+
+        assert(conn.inbox.count == 0);
+    }
+
+    fn removeConnection(self: *Self, conn: *Connection) void {
+        _ = self.connections.remove(conn.connection_id);
+
+        log.info("node: {} removed connection {}", .{ self.id, conn.connection_id });
+        conn.deinit();
+        self.allocator.destroy(conn);
     }
 };
 
