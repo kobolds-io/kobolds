@@ -629,7 +629,7 @@ pub const Node = struct {
                     }
                 },
                 .ping => {
-                    log.debug("received ping from origin_id: {}, connection_id: {}", .{
+                    log.info("received ping from origin_id: {}, connection_id: {}", .{
                         message.headers.origin_id,
                         message.headers.connection_id,
                     });
