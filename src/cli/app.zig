@@ -365,29 +365,49 @@ pub fn nodePing() !void {
     var signals = std.ArrayList(*Signal(*Message)).init(allocator);
     defer signals.deinit();
 
+    const ITERATIONS: usize = 1_000;
+
     var timer = try std.time.Timer.start();
-    const send_start = timer.read();
+    for (0..ITERATIONS) |_| {
+        const signal = try allocator.create(Signal(*Message));
+        errdefer allocator.destroy(signal);
 
-    var signal = Signal(*Message).new();
+        signal.* = Signal(*Message).new();
+        try signals.append(signal);
+    }
+    defer {
+        for (signals.items) |signal| {
+            allocator.destroy(signal);
+        }
+    }
 
-    try client.ping(conn, &signal, .{});
-    const send_end = timer.read();
+    for (signals.items) |signal| {
+        const send_start = timer.read();
+        try client.ping(conn, signal, .{});
+        const send_end = timer.read();
 
-    const receive_start = timer.read();
-    const rep = try signal.tryReceive(1_000 * std.time.ns_per_ms);
-    const receive_end = timer.read();
+        const send_time = (send_end - send_start) / std.time.ns_per_ms;
+        if (send_time > 1) {
+            log.err("send took > 1ms: {}ms", .{send_time});
+        }
+    }
 
-    const error_code = rep.errorCode();
-    if (error_code != .ok) return error.BadRequest;
+    for (signals.items) |signal| {
+        const receive_start = timer.read();
+        const rep = try signal.tryReceive(1_000 * std.time.ns_per_ms);
+        const receive_end = timer.read();
 
-    rep.deref();
-    if (rep.refs() == 0) client.memory_pool.destroy(rep);
+        const error_code = rep.errorCode();
+        if (error_code != .ok) return error.BadRequest;
 
-    const send_time = (send_end - send_start) / std.time.ns_per_ms;
-    const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
+        rep.deref();
+        if (rep.refs() == 0) client.memory_pool.destroy(rep);
 
-    log.err("send took {}ms", .{send_time});
-    log.err("receive took {}ms", .{receive_time});
+        const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
+        if (receive_time > 1) {
+            log.err("receive took > 1ms: {}ms", .{receive_time});
+        }
+    }
 }
 
 pub fn nodeConnect() !void {
