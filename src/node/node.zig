@@ -6,6 +6,7 @@ const posix = std.posix;
 
 const uuid = @import("uuid");
 const constants = @import("../constants.zig");
+const utils = @import("../utils.zig");
 
 const IO = @import("../io.zig").IO;
 const Worker = @import("./worker.zig").Worker;
@@ -21,6 +22,15 @@ const MemoryPool = @import("stdx").MemoryPool;
 const Message = @import("../protocol/message.zig").Message;
 const Accept = @import("../protocol/message.zig").Accept;
 const Connection = @import("../protocol/connection.zig").Connection;
+
+const Publisher = @import("../pubsub/publisher.zig").Publisher;
+const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
+const Topic = @import("../pubsub/topic.zig").Topic;
+
+// const Publisher = @import("../bus/publisher.zig").Publisher;
+// const Subscriber = @import("../bus/subscriber.zig").Subscriber;
+// const Bus = @import("../bus/bus.zig").Bus;
+// const BusManager = @import("../bus/bus_manager.zig").BusManager;
 
 pub const PingOptions = struct {};
 
@@ -85,6 +95,9 @@ pub const Node = struct {
     memory_pool: *MemoryPool(Message),
     remotes: *std.AutoHashMap(uuid.Uuid, *Remote),
     mutex: std.Thread.Mutex,
+    // publishers: std.AutoHashMap(u128, *Publisher),
+    // subscribers: std.AutoHashMap(u128, *Subscriber),
+    topics: std.StringHashMap(*Topic),
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
         if (config.validate()) |err_message| {
@@ -155,6 +168,9 @@ pub const Node = struct {
             .memory_pool = memory_pool,
             .remotes = remotes,
             .listeners = listeners,
+            // .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
+            // .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
+            .topics = std.StringHashMap(*Topic).init(allocator),
             .mutex = std.Thread.Mutex{},
         };
     }
@@ -189,12 +205,20 @@ pub const Node = struct {
             self.allocator.destroy(remote);
         }
 
+        var topics_iter = self.topics.valueIterator();
+        while (topics_iter.next()) |entry| {
+            const topic = entry.*;
+            topic.deinit();
+            self.allocator.destroy(topic);
+        }
+
         self.listeners.deinit();
         self.workers.deinit();
         self.remotes.deinit();
         self.memory_pool.deinit();
         self.io.deinit();
         self.connections.deinit();
+        self.topics.deinit();
 
         self.allocator.destroy(self.io);
         self.allocator.destroy(self.remotes);
@@ -354,7 +378,13 @@ pub const Node = struct {
             }
 
             try conn.tick();
-            try self.gather(conn);
+            try self.process(conn);
+        }
+
+        var topics_iter = self.topics.valueIterator();
+        while (topics_iter.next()) |entry| {
+            const topic = entry.*;
+            try topic.tick();
         }
     }
 
@@ -573,7 +603,7 @@ pub const Node = struct {
         return ch;
     }
 
-    fn gather(self: *Self, conn: *Connection) !void {
+    fn process(self: *Self, conn: *Connection) !void {
         // check to see if there are messages
         if (conn.inbox.count == 0) return;
 
@@ -604,8 +634,6 @@ pub const Node = struct {
 
                             message.ref();
                             try conn.outbox.enqueue(message);
-
-                            assert(conn.connection_type == .outbound);
 
                             conn.state = .connected;
                             log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
@@ -655,107 +683,110 @@ pub const Node = struct {
                     });
                 },
                 .publish => {
-                    // // get the publisher's key
-                    // const publisher_key = utils.generateKey(message.topicName(), conn.connection_id);
-                    // if (self.publishers.get(publisher_key)) |publisher| {
-                    //     publisher.publish(message) catch |err| {
-                    //         log.err("could not publish message {any}", .{err});
-                    //         message.deref();
-                    //     };
-                    //     return;
-                    // }
+                    // get the topic by the topicName
+                    var topic: *Topic = undefined;
+                    if (self.topics.get(message.topicName())) |t| {
+                        topic = t;
+                    } else {
+                        topic = try self.allocator.create(Topic);
+                        errdefer self.allocator.destroy(topic);
 
-                    // const publisher = try self.allocator.create(Publisher);
-                    // errdefer self.allocator.destroy(publisher);
+                        topic.* = try Topic.init(self.allocator, self.memory_pool, message.topicName());
+                        errdefer topic.deinit();
+                    }
 
-                    // publisher.* = try Publisher.init(
-                    //     self.allocator,
-                    //     publisher_key,
-                    //     conn.connection_id,
-                    //     constants.publisher_max_queue_capacity,
-                    //     message.topicName(),
-                    // );
-                    // errdefer publisher.deinit();
+                    const publisher_key = utils.generateKey(message.topicName(), conn.connection_id);
+                    var publisher: *Publisher = undefined;
+                    if (topic.publishers.get(publisher_key)) |p| {
+                        publisher = p;
+                    } else {
+                        publisher = try self.allocator.create(Publisher);
+                        errdefer self.allocator.destroy(publisher);
 
-                    // try self.publishers.put(publisher_key, publisher);
-
-                    // // check if the bus even exists
-                    // const bus_manager = self.node.bus_manager;
-                    // const bus = try bus_manager.findOrCreate(message.topicName());
-                    // try bus.addPublisher(publisher);
-
-                    // publisher.publish(message) catch |err| {
-                    //     log.err("could not publish message {any}", .{err});
-                    //     message.deref();
-                    // };
+                        publisher.* = Publisher.new(conn.connection_id, topic);
+                        try topic.publishers.put(publisher_key, publisher);
+                    }
+                    // NOTE: if this connection fails to publish the message it just exits, the more optimal behavior
+                    // would instead be to keep that message within the inbox of of the connection and continue working
+                    // through the messages
+                    assert(message.refs() == 1);
+                    try publisher.publish(message);
                 },
                 .subscribe => {
                     // defer message.deref();
-                    // log.debug("subscribe message received!", .{});
+                    log.debug("subscribe message received! topic: {s}", .{message.topicName()});
 
-                    // const subscriber_key = utils.generateKey(message.topicName(), conn.connection_id);
+                    // craft the reply
+                    const reply = try self.memory_pool.create();
+                    errdefer reply.deref();
 
-                    // // check if this connection is already subscribed to this topic
-                    // if (self.subscribers.contains(subscriber_key)) {
-                    //     // this is not allowed
-                    //     const reply = try Message.create(self.message_pool);
-                    //     errdefer reply.deref();
+                    reply.* = Message.new();
 
-                    //     reply.headers.message_type = .reply;
-                    //     reply.setTopicName(message.topicName());
-                    //     reply.setTransactionId(message.transactionId());
-                    //     reply.setErrorCode(.bad_request); // TODO: this should be a better error
+                    reply.headers.message_type = .reply;
+                    reply.setTopicName(message.topicName());
+                    reply.setTransactionId(message.transactionId());
+                    reply.setErrorCode(.ok);
+                    reply.ref();
+                    defer conn.outbox.enqueue(reply) catch unreachable;
 
-                    //     try conn.outbox.enqueue(reply);
-                    //     return;
-                    // }
+                    {
+                        errdefer reply.setErrorCode(.err);
 
-                    // const bus_manager = self.node.bus_manager;
-                    // const bus = try bus_manager.findOrCreate(message.topicName());
+                        // get the topic by the topicName
+                        var topic: *Topic = undefined;
+                        if (self.topics.get(message.topicName())) |t| {
+                            topic = t;
+                        } else {
+                            topic = try self.allocator.create(Topic);
+                            errdefer self.allocator.destroy(topic);
 
-                    // const subscriber = try self.allocator.create(Subscriber);
-                    // errdefer self.allocator.destroy(subscriber);
+                            topic.* = try Topic.init(self.allocator, self.memory_pool, message.topicName());
+                            errdefer topic.deinit();
 
-                    // subscriber.* = try Subscriber.init(
-                    //     self.allocator,
-                    //     subscriber_key,
-                    //     conn.connection_id,
-                    //     constants.subscriber_max_queue_capacity,
-                    //     bus,
-                    // );
-                    // errdefer subscriber.deinit();
+                            try self.topics.put(message.topicName(), topic);
+                        }
 
-                    // try self.subscribers.put(subscriber_key, subscriber);
-                    // try subscriber.subscribe();
-                    // errdefer _ = subscriber.unsubscribe() catch @panic("subscriber could not unsubscribe");
+                        const subscriber_key = utils.generateKey(message.topicName(), conn.connection_id);
+                        var subscriber: *Subscriber = undefined;
+                        if (topic.subscribers.get(subscriber_key)) |p| {
+                            subscriber = p;
+                            // FIX: figure out if this should return an error? Should a connection only be able to subscribe
+                            // only once to a topic?
+                        } else {
+                            subscriber = try self.allocator.create(Subscriber);
+                            errdefer self.allocator.destroy(subscriber);
 
-                    // // Reply to the subscribe request
-                    // const reply = try Message.create(self.message_pool);
-                    // errdefer reply.deref();
-
-                    // reply.headers.message_type = .reply;
-                    // reply.setTopicName(message.topicName());
-                    // reply.setTransactionId(message.transactionId());
-                    // reply.setErrorCode(.ok);
-
-                    // try conn.outbox.enqueue(reply);
+                            subscriber.* = Subscriber.new(conn.connection_id, conn.outbox, topic);
+                            try topic.subscribers.put(subscriber_key, subscriber);
+                        }
+                    }
                 },
                 .unsubscribe => {
-                    // defer message.deref();
-                    // log.debug("unsubscribe message received!", .{});
+                    log.info("unsubscribing from {s}", .{message.topicName()});
+                    // craft the reply
+                    const reply = try self.memory_pool.create();
+                    errdefer reply.deref();
 
-                    // const subscriber_key = utils.generateKey(message.topicName(), conn.connection_id);
+                    reply.* = Message.new();
 
-                    // if (self.subscribers.get(subscriber_key)) |subscriber| {
-                    //     try subscriber.unsubscribe();
-                    //     _ = self.subscribers.remove(subscriber_key);
-                    // }
+                    reply.headers.message_type = .reply;
+                    reply.setTopicName(message.topicName());
+                    reply.setTransactionId(message.transactionId());
+                    reply.setErrorCode(.ok);
+                    reply.ref();
+                    defer conn.outbox.enqueue(reply) catch unreachable;
 
-                    // TODO: send unsubscribe reply
+                    if (self.topics.get(message.topicName())) |topic| {
+                        const subscriber_key = utils.generateKey(message.topicName(), conn.connection_id);
+                        if (topic.subscribers.get(subscriber_key)) |subscriber| {
+                            self.allocator.destroy(subscriber);
+                            assert(topic.subscribers.remove(subscriber_key));
+                        }
+                    } else {
+                        reply.setErrorCode(.err);
+                    }
                 },
-                else => {
-                    //                     message.deref();
-                },
+                else => {},
             }
         }
 
@@ -763,6 +794,31 @@ pub const Node = struct {
     }
 
     fn removeConnection(self: *Self, conn: *Connection) void {
+        // Remove any subscribers/publishers this connection has
+        var topics_iter = self.topics.valueIterator();
+        while (topics_iter.next()) |entry| {
+            const topic = entry.*;
+
+            const key = utils.generateKey(topic.topic_name, conn.connection_id);
+            if (topic.subscribers.fetchRemove(key)) |subscriber_entry| {
+                const subscriber = subscriber_entry.value;
+                self.allocator.destroy(subscriber);
+            }
+
+            if (topic.publishers.fetchRemove(key)) |publisher_entry| {
+                const publisher = publisher_entry.value;
+                self.allocator.destroy(publisher);
+            }
+
+            // deinit the topic if there are no publishers or subscribers left
+            if (topic.subscribers.count() == 0 and topic.publishers.count() == 0) {
+                const topic_name = topic.topic_name;
+                topic.deinit();
+                self.allocator.destroy(topic);
+                assert(self.topics.remove(topic_name));
+            }
+        }
+
         _ = self.connections.remove(conn.connection_id);
 
         log.info("node: {} removed connection {}", .{ self.id, conn.connection_id });

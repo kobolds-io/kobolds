@@ -1,10 +1,11 @@
 const std = @import("std");
 const log = std.log.scoped(.Topic);
 const testing = std.testing;
-const assert = std.debug.assert();
+const assert = std.debug.assert;
+const constants = @import("../constants.zig");
 
 const RingBuffer = @import("stdx").RingBuffer;
-const EventEmitter = @import("stdx").EventEmitter;
+const MemoryPool = @import("stdx").MemoryPool;
 
 const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
 
@@ -13,218 +14,134 @@ const Message = @import("../protocol/message.zig").Message;
 const Publisher = @import("./publisher.zig").Publisher;
 const Subscriber = @import("./subscriber.zig").Subscriber;
 
-// const SubscriptionCallback = *const fn (event: TopicEvent, message: *Message) void;
-
 pub const Topic = struct {
     const Self = @This();
-    pub const TopicEvent = enum { publish };
 
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex,
+    memory_pool: *MemoryPool(Message),
     publishers: std.AutoHashMap(u128, *Publisher),
+    queue: *RingBuffer(*Message),
+    subscriber_queues: std.ArrayList(*RingBuffer(*Message)),
     subscribers: std.AutoHashMap(u128, *Subscriber),
     topic_name: []const u8,
-    ee: EventEmitter(TopicEvent, *Message),
+    tmp_copy_buffer: []*Message,
 
-    pub fn init(allocator: std.mem.Allocator, topic_name: []const u8) Self {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        memory_pool: *MemoryPool(Message),
+        topic_name: []const u8,
+    ) !Self {
+        const queue = try allocator.create(RingBuffer(*Message));
+        errdefer allocator.destroy(queue);
+
+        queue.* = try RingBuffer(*Message).init(allocator, 100);
+        errdefer queue.deinit();
+
+        const tmp_buffer = try allocator.alloc(*Message, constants.subscriber_max_queue_capacity);
+        errdefer allocator.free(tmp_buffer);
+
         return Self{
             .allocator = allocator,
-            .mutex = std.Thread.Mutex{},
+            .memory_pool = memory_pool,
             .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
+            .queue = queue,
+            .subscriber_queues = std.ArrayList(*RingBuffer(*Message)).init(allocator),
             .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
             .topic_name = topic_name,
-            .ee = EventEmitter(TopicEvent, *Message).init(allocator),
+            .tmp_copy_buffer = tmp_buffer,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        assert(self.queue.count == 0);
+        self.clearQueue();
+
+        var subscribers_iter = self.subscribers.valueIterator();
+        while (subscribers_iter.next()) |entry| {
+            const subscriber = entry.*;
+            self.allocator.destroy(subscriber);
+        }
+
+        var publishers_iter = self.publishers.valueIterator();
+        while (publishers_iter.next()) |entry| {
+            const publisher = entry.*;
+            self.allocator.destroy(publisher);
+        }
 
         self.subscribers.deinit();
         self.publishers.deinit();
-        self.ee.deinit();
+        self.queue.deinit();
+        self.subscriber_queues.deinit();
+
+        self.allocator.destroy(self.queue);
+        self.allocator.free(self.tmp_copy_buffer);
     }
 
-    pub fn publish(self: *Self, message: *Message) !void {
-        defer message.deref();
+    pub fn enqueue(self: *Self, message: *Message) !void {
+        self.queue.enqueue(message) catch |err| {
+            // log.err("topic unable to enqueue message: {s}, err: {any}", .{ self.topic_name, err });
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+            return err;
+        };
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        var subscribers_iter = self.subscribers.valueIterator();
-        while (subscribers_iter.next()) |entry| {
-            const subscriber = entry.*;
-
-            subscriber.mutex.lock();
-            defer subscriber.mutex.unlock();
-
-            try subscriber.queue.enqueue(message);
-        }
-
-        self.ee.emit(.publish, message);
-
-        // if (self.subscribers.count() == 0) {
-        //     // TODO: we should write the message to disk
-        //     // log.debug("no subscribers for topic {s}", .{self.topic_name});
-        // }
+        message.ref();
     }
 
-    pub fn publishMany(self: *Self, messages: []*Message) !void {
-        if (messages.len == 0) return;
+    pub fn tick(self: *Self) !void {
+        // There are no messages needing to be processed
+        if (self.queue.count == 0) return;
+        // there are no subscribers who are able to consume this message. We should not hang on to these messages
         if (self.subscribers.count() == 0) {
-            // TODO: we should write the message to disk
-            // log.debug("no subscribers for topic {s}", .{self.topic_name});
-            for (messages) |message| {
-                message.deref();
-            }
+            self.clearQueue();
+            return;
         }
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        if (self.subscriber_queues.items.len != self.subscribers.count()) {
+            try self.subscriber_queues.resize(self.subscribers.count());
+        }
 
+        // The subscriber queues.items.len should always be equal to the number of subscribers and should be updated
+        // whenever a subscriber `subscribe`s to the this topic or `unsubscribe`s from this topic
+        assert(self.subscriber_queues.items.len == self.subscribers.count());
+
+        var i: usize = 0;
         var subscribers_iter = self.subscribers.valueIterator();
-        while (subscribers_iter.next()) |entry| {
+        while (subscribers_iter.next()) |entry| : (i += 1) {
             const subscriber = entry.*;
+            self.subscriber_queues.items[i] = subscriber.queue;
+        }
 
-            subscriber.mutex.lock();
-            defer subscriber.mutex.unlock();
-
-            const n = subscriber.queue.enqueueMany(messages);
-
-            // FIX: If not all the items will fit in the queue we should write these to disk
-            // or something so that they can be published "later". The behavior should be similar
-            // to how nginx buffers large client_body requests.
-            if (n != messages.len) {
-                @panic("subscriber could not handle message");
+        // FIX: this can be done in a much cleaner way. This basically requires multiple loops
+        var max_copy = self.queue.count;
+        for (self.subscriber_queues.items) |queue| {
+            if (queue.available() < max_copy) {
+                max_copy = queue.available();
             }
+        }
 
-            // quickly reference each message
-            for (messages[0..n]) |message| {
-                message.ref();
-            }
+        if (max_copy == 0) return;
+
+        const n = self.queue.dequeueMany(self.tmp_copy_buffer[0..max_copy]);
+        for (self.tmp_copy_buffer[0..n]) |message| {
+            // increase the number of refs for this message to match how many subscribers
+            // the message will be added to
+            _ = message.ref_count.fetchAdd(@intCast(self.subscriber_queues.items.len), .seq_cst);
+
+            // deref once for the bus since it is giving up control
+            message.deref();
+        }
+
+        for (self.subscriber_queues.items) |queue| {
+            const x = queue.enqueueMany(self.tmp_copy_buffer[0..n]);
+            assert(x == n);
         }
     }
 
-    pub fn subscribe(self: *Self, subscriber: *Subscriber) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        try self.subscribers.put(subscriber.key, subscriber);
-        try self.ee.addEventListener(.publish, subscriber, subscriber.callback);
-    }
-
-    pub fn unsubscribe(self: *Self, key: u128) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        if (self.subscribers.get(key)) |subscriber| {
-            _ = self.ee.removeEventListener(.publish, subscriber.callback);
-            _ = self.subscribers.remove(key);
+    fn clearQueue(self: *Self) void {
+        while (self.queue.dequeue()) |message| {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
         }
     }
 };
-
-// test "topic init/deinit" {
-//     const allocator = testing.allocator;
-//
-//     const topic_name = "/test/topic";
-//     var topic = Topic.init(allocator, topic_name);
-//     defer topic.deinit();
-// }
-//
-// test "publish/subscribe" {
-//     const allocator = testing.allocator;
-//
-//     const topic_name = "/test/topic";
-//
-//     // create a message to be published
-//     var message_pool = try MessagePool.init(allocator, 100);
-//     defer message_pool.deinit();
-//
-//     // NOTE: the message should be destroyed by the subscriber. Otherwise the message will leak
-//     const message = try Message.create(&message_pool);
-//     defer message.deref();
-//     message.headers.message_type = .publish;
-//     message.setTopicName(topic_name);
-//
-//     var topic = Topic.init(allocator, topic_name);
-//     defer topic.deinit();
-//
-//     var subscriber = try Subscriber.init(allocator, 1, &topic);
-//     defer subscriber.deinit();
-//
-//     try subscriber.subscribe();
-//     defer subscriber.unsubscribe();
-//
-//     var publisher = try Publisher.init(allocator, 1, &topic);
-//     defer publisher.deinit();
-//
-//     try testing.expectEqual(0, subscriber.queue.count);
-//
-//     try publisher.publish(message);
-//
-//     try testing.expectEqual(1, subscriber.queue.count);
-//
-//     // Pretend that we are "ticking" the subscriber
-//     while (subscriber.queue.dequeue()) |subscriber_message| {
-//         try testing.expectEqual(1, subscriber_message.refs());
-//
-//         subscriber_message.deref();
-//     }
-//
-//     try testing.expectEqual(0, subscriber.queue.count);
-// }
-//
-// test "publishMany" {
-//     const allocator = testing.allocator;
-//
-//     const topic_name = "/test/topic";
-//
-//     // create a message to be published
-//     var message_pool = try MessagePool.init(allocator, 100);
-//     defer message_pool.deinit();
-//
-//     const messages_buf = try allocator.alloc(Message, 100);
-//     defer allocator.free(messages_buf);
-//
-//     // NOTE: the message should be destroyed by the subscriber. Otherwise the message will leak
-//     const messages = try message_pool.createN(allocator, @intCast(messages_buf.len));
-//     defer allocator.free(messages);
-//
-//     for (messages, 0..messages_buf.len) |message, i| {
-//         message.* = Message.new();
-//         message.message_pool = &message_pool;
-//         message.headers.message_type = .publish;
-//         message.setTopicName(topic_name);
-//
-//         messages[i] = message;
-//     }
-//
-//     var topic = Topic.init(allocator, topic_name);
-//     defer topic.deinit();
-//
-//     var subscriber = try Subscriber.init(allocator, 1, &topic);
-//     defer subscriber.deinit();
-//
-//     try subscriber.subscribe();
-//     defer subscriber.unsubscribe();
-//
-//     var publisher = try Publisher.init(allocator, 1, &topic);
-//     defer publisher.deinit();
-//
-//     try testing.expectEqual(0, subscriber.queue.count);
-//
-//     try publisher.publishMany(messages);
-//
-//     try testing.expectEqual(messages.len, subscriber.queue.count);
-//
-//     // Pretend that we are "ticking" the subscriber
-//     while (subscriber.queue.dequeue()) |message| {
-//         try testing.expectEqual(1, message.refs());
-//
-//         message.deref();
-//     }
-//
-//     try testing.expectEqual(0, subscriber.queue.count);
-// }
