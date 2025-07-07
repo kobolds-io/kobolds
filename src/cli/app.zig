@@ -590,7 +590,7 @@ pub fn nodePublish() !void {
             continue;
         };
 
-        // std.time.sleep(5 * std.time.ns_per_ms);
+        std.time.sleep(100 * std.time.ns_per_ms);
     }
 }
 

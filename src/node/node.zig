@@ -367,7 +367,7 @@ pub const Node = struct {
     fn tick(self: *Self) !void {
         try self.maybeAddInboundConnections();
 
-        log.debug(" memory_pool.available: {}", .{self.memory_pool.available()});
+        log.info(" memory_pool.available: {}", .{self.memory_pool.available()});
 
         var connections_iter = self.connections.valueIterator();
         while (connections_iter.next()) |entry| {
@@ -380,7 +380,10 @@ pub const Node = struct {
             }
 
             try conn.tick();
-            try self.process(conn);
+            self.process(conn) catch |err| {
+                log.err("could not process connection: {}, err: {any}", .{ conn.connection_id, err });
+                continue;
+            };
         }
 
         var topics_iter = self.topics.valueIterator();
@@ -714,7 +717,9 @@ pub const Node = struct {
                     // would instead be to keep that message within the inbox of of the connection and continue working
                     // through the messages
                     assert(message.refs() == 1);
-                    try publisher.publish(message);
+                    publisher.publish(message) catch |err| {
+                        log.err("could not publish message: {any}", .{err});
+                    };
                 },
                 .subscribe => {
                     // defer message.deref();
