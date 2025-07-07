@@ -367,6 +367,8 @@ pub const Node = struct {
     fn tick(self: *Self) !void {
         try self.maybeAddInboundConnections();
 
+        log.debug(" memory_pool.available: {}", .{self.memory_pool.available()});
+
         var connections_iter = self.connections.valueIterator();
         while (connections_iter.next()) |entry| {
             const conn = entry.*;
@@ -693,6 +695,8 @@ pub const Node = struct {
 
                         topic.* = try Topic.init(self.allocator, self.memory_pool, message.topicName());
                         errdefer topic.deinit();
+
+                        try self.topics.put(message.topicName(), topic);
                     }
 
                     const publisher_key = utils.generateKey(message.topicName(), conn.connection_id);
