@@ -367,7 +367,9 @@ pub const Node = struct {
     fn tick(self: *Self) !void {
         try self.maybeAddInboundConnections();
 
-        log.info(" memory_pool.available: {}", .{self.memory_pool.available()});
+        if (self.memory_pool.available() < self.memory_pool.capacity) {
+            log.info(" memory_pool.available: {}", .{self.memory_pool.available()});
+        }
 
         var connections_iter = self.connections.valueIterator();
         while (connections_iter.next()) |entry| {
