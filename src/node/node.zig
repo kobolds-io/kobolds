@@ -15,6 +15,7 @@ const ListenerConfig = @import("./listener.zig").ListenerConfig;
 const Remote = @import("./remote.zig").Remote;
 const InboundConnectionConfig = @import("../protocol/connection.zig").InboundConnectionConfig;
 const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
+const Metrics = @import("./metrics.zig").Metrics;
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const MemoryPool = @import("stdx").MemoryPool;
@@ -98,6 +99,7 @@ pub const Node = struct {
     // publishers: std.AutoHashMap(u128, *Publisher),
     // subscribers: std.AutoHashMap(u128, *Subscriber),
     topics: std.StringHashMap(*Topic),
+    metrics: Metrics,
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
         if (config.validate()) |err_message| {
@@ -172,6 +174,7 @@ pub const Node = struct {
             // .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
             .topics = std.StringHashMap(*Topic).init(allocator),
             .mutex = std.Thread.Mutex{},
+            .metrics = .{},
         };
     }
 
@@ -273,6 +276,7 @@ pub const Node = struct {
                     self.tick() catch unreachable;
 
                     self.io.run_for_ns(100 * std.time.ns_per_us) catch unreachable;
+                    // self.io.run_for_ns(10 * std.time.ns_per_ms) catch unreachable;
                 },
                 .closing => {
                     log.info("node {}: closed", .{self.id});
@@ -367,9 +371,14 @@ pub const Node = struct {
     fn tick(self: *Self) !void {
         try self.maybeAddInboundConnections();
 
-        if (self.memory_pool.available() < self.memory_pool.capacity) {
-            log.info(" memory_pool.available: {}", .{self.memory_pool.available()});
-        }
+        log.info("memory_pool.available: {}, messages processed {}", .{
+            self.memory_pool.available(),
+            self.metrics.messages_processed,
+        });
+
+        // if (self.memory_pool.available() < self.memory_pool.capacity) {
+        //     log.info(" memory_pool.available: {}", .{self.memory_pool.available()});
+        // }
 
         var connections_iter = self.connections.valueIterator();
         while (connections_iter.next()) |entry| {
@@ -615,6 +624,7 @@ pub const Node = struct {
         if (conn.inbox.count == 0) return;
 
         while (conn.inbox.dequeue()) |message| {
+            self.metrics.messages_processed += 1;
             // defer self.node.processed_messages_count += 1;
             defer {
                 message.deref();

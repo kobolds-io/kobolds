@@ -577,7 +577,7 @@ pub fn nodePublish() !void {
     const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
     defer client.disconnect(conn);
 
-    const body = "hello from the publisher";
+    const body = "";
     // const body = "a" ** constants.message_max_body_size;
     const topic_name = "/test";
 
@@ -590,7 +590,7 @@ pub fn nodePublish() !void {
             continue;
         };
 
-        std.time.sleep(10 * std.time.ns_per_ms);
+        std.time.sleep(1 * std.time.ns_per_ms);
     }
 }
 
