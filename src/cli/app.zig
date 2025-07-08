@@ -577,8 +577,8 @@ pub fn nodePublish() !void {
     const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
     defer client.disconnect(conn);
 
-    // const body = "hello from the publisher";
-    const body = "a" ** constants.message_max_body_size;
+    const body = "hello from the publisher";
+    // const body = "a" ** constants.message_max_body_size;
     const topic_name = "/test";
 
     registerSigintHandler();
