@@ -507,14 +507,20 @@ pub const Worker = struct {
                     // be a central thread in which all messages are processed but it would basically mean that the
                     // workers are restricted to just sending/receiving messages (ticking connections)
                     //     the benefit to having a central processing system is that the contention points would be to
-                    //     copy the messages received in the worker's inbox to the node. I think a better form would be
-                    //     to have the workers "push" messages to the node when they know messages must be processed.
+                    //     copy the messages received in the worker's inbox to the node. I think this is going to require
+                    //     the reintroduction of the `Envelope` idea but instead of it being used to share memory_pool
+                    //     information it would just include information from where the message came from. (is this true?)
                     // 3. Workers are in charge and the node is just the connective tissue that can handle routing messages
                     // between workers.
                     //     a. worker 1 recv message
                     //     b. worker 1 push to node queue
                     //     c. node process message
                     //     d. node route message to worker 4
+                    // 4. More aggressive sharing of memory between workers. What I mean by this is that we could
+                    // have the workers access global (to the process) resources. I think that this would lead to high
+                    // contention touch points. For example, publishing a message would talk to a global topic manager,
+                    // which would require both the topic_manager and topic to be locked as the message was processed
+                    // or routed.
                 },
                 .subscribe => {},
                 .unsubscribe => {},
