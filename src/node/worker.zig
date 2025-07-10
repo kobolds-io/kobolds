@@ -496,7 +496,26 @@ pub const Worker = struct {
                         message.headers.connection_id,
                     });
                 },
-                .publish => {},
+                .publish => {
+                    // FIX: How can i hook up messages received in the worker to more of a global router?
+                    // this is a point of high contention as it requires the worker and the router to sync
+                    // at some point during the processing of the message.
+                    //
+                    // 1. have the worker fill up a queue and simply wait for the queue to be
+                    // processed by the node.
+                    // 2. Make the node perform a collection/processing operation. This means that there would still
+                    // be a central thread in which all messages are processed but it would basically mean that the
+                    // workers are restricted to just sending/receiving messages (ticking connections)
+                    //     the benefit to having a central processing system is that the contention points would be to
+                    //     copy the messages received in the worker's inbox to the node. I think a better form would be
+                    //     to have the workers "push" messages to the node when they know messages must be processed.
+                    // 3. Workers are in charge and the node is just the connective tissue that can handle routing messages
+                    // between workers.
+                    //     a. worker 1 recv message
+                    //     b. worker 1 push to node queue
+                    //     c. node process message
+                    //     d. node route message to worker 4
+                },
                 .subscribe => {},
                 .unsubscribe => {},
                 else => {},
