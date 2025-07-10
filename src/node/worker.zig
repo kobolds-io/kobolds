@@ -243,12 +243,6 @@ pub const Worker = struct {
                 // try self.distribute(conn);
             }
         }
-
-        // while (true) {
-        //     const outbound_message = self.outbox_channel.tryReceive(0, null) catch break;
-        // }
-
-        // try self.process();
     }
 
     pub fn addInboundConnection(self: *Self, socket: posix.socket_t) !void {
@@ -502,108 +496,10 @@ pub const Worker = struct {
                         message.headers.connection_id,
                     });
                 },
-                .publish => {
-                    // // get the publisher's key
-                    // const publisher_key = utils.generateKey(message.topicName(), conn.connection_id);
-                    // if (self.publishers.get(publisher_key)) |publisher| {
-                    //     publisher.publish(message) catch |err| {
-                    //         log.err("could not publish message {any}", .{err});
-                    //         message.deref();
-                    //     };
-                    //     return;
-                    // }
-
-                    // const publisher = try self.allocator.create(Publisher);
-                    // errdefer self.allocator.destroy(publisher);
-
-                    // publisher.* = try Publisher.init(
-                    //     self.allocator,
-                    //     publisher_key,
-                    //     conn.connection_id,
-                    //     constants.publisher_max_queue_capacity,
-                    //     message.topicName(),
-                    // );
-                    // errdefer publisher.deinit();
-
-                    // try self.publishers.put(publisher_key, publisher);
-
-                    // // check if the bus even exists
-                    // const bus_manager = self.node.bus_manager;
-                    // const bus = try bus_manager.findOrCreate(message.topicName());
-                    // try bus.addPublisher(publisher);
-
-                    // publisher.publish(message) catch |err| {
-                    //     log.err("could not publish message {any}", .{err});
-                    //     message.deref();
-                    // };
-                },
-                .subscribe => {
-                    // defer message.deref();
-                    // log.debug("subscribe message received!", .{});
-
-                    // const subscriber_key = utils.generateKey(message.topicName(), conn.connection_id);
-
-                    // // check if this connection is already subscribed to this topic
-                    // if (self.subscribers.contains(subscriber_key)) {
-                    //     // this is not allowed
-                    //     const reply = try Message.create(self.message_pool);
-                    //     errdefer reply.deref();
-
-                    //     reply.headers.message_type = .reply;
-                    //     reply.setTopicName(message.topicName());
-                    //     reply.setTransactionId(message.transactionId());
-                    //     reply.setErrorCode(.bad_request); // TODO: this should be a better error
-
-                    //     try conn.outbox.enqueue(reply);
-                    //     return;
-                    // }
-
-                    // const bus_manager = self.node.bus_manager;
-                    // const bus = try bus_manager.findOrCreate(message.topicName());
-
-                    // const subscriber = try self.allocator.create(Subscriber);
-                    // errdefer self.allocator.destroy(subscriber);
-
-                    // subscriber.* = try Subscriber.init(
-                    //     self.allocator,
-                    //     subscriber_key,
-                    //     conn.connection_id,
-                    //     constants.subscriber_max_queue_capacity,
-                    //     bus,
-                    // );
-                    // errdefer subscriber.deinit();
-
-                    // try self.subscribers.put(subscriber_key, subscriber);
-                    // try subscriber.subscribe();
-                    // errdefer _ = subscriber.unsubscribe() catch @panic("subscriber could not unsubscribe");
-
-                    // // Reply to the subscribe request
-                    // const reply = try Message.create(self.message_pool);
-                    // errdefer reply.deref();
-
-                    // reply.headers.message_type = .reply;
-                    // reply.setTopicName(message.topicName());
-                    // reply.setTransactionId(message.transactionId());
-                    // reply.setErrorCode(.ok);
-
-                    // try conn.outbox.enqueue(reply);
-                },
-                .unsubscribe => {
-                    // defer message.deref();
-                    // log.debug("unsubscribe message received!", .{});
-
-                    // const subscriber_key = utils.generateKey(message.topicName(), conn.connection_id);
-
-                    // if (self.subscribers.get(subscriber_key)) |subscriber| {
-                    //     try subscriber.unsubscribe();
-                    //     _ = self.subscribers.remove(subscriber_key);
-                    // }
-
-                    // TODO: send unsubscribe reply
-                },
-                else => {
-                    //                     message.deref();
-                },
+                .publish => {},
+                .subscribe => {},
+                .unsubscribe => {},
+                else => {},
             }
         }
 
