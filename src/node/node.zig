@@ -40,7 +40,7 @@ pub const NodeConfig = struct {
 
     worker_threads: usize = 3,
     max_connections: u16 = 1024,
-    memory_pool_capacity: usize = 5_000,
+    memory_pool_capacity: usize = 10_000,
     listener_configs: ?[]const ListenerConfig = null,
     outbound_configs: ?[]const OutboundConnectionConfig = null,
 
@@ -371,14 +371,18 @@ pub const Node = struct {
     fn tick(self: *Self) !void {
         try self.maybeAddInboundConnections();
 
-        log.info("memory_pool.available: {}, messages processed {}", .{
-            self.memory_pool.available(),
-            self.metrics.messages_processed,
-        });
-
-        // if (self.memory_pool.available() < self.memory_pool.capacity) {
-        //     log.info(" memory_pool.available: {}", .{self.memory_pool.available()});
-        // }
+        const now_ms = std.time.milliTimestamp();
+        const difference = now_ms - self.metrics.last_printed_at_ms;
+        if (difference > 5_000) {
+            const delta = self.metrics.messages_processed - self.metrics.last_messages_processed_printed;
+            self.metrics.last_messages_processed_printed = self.metrics.messages_processed;
+            self.metrics.last_printed_at_ms = std.time.milliTimestamp();
+            log.info("memory_pool.available: {}, messages processed {}, delta {}", .{
+                self.memory_pool.available(),
+                self.metrics.last_messages_processed_printed,
+                delta,
+            });
+        }
 
         var connections_iter = self.connections.valueIterator();
         while (connections_iter.next()) |entry| {
@@ -625,6 +629,7 @@ pub const Node = struct {
 
         while (conn.inbox.dequeue()) |message| {
             self.metrics.messages_processed += 1;
+            self.metrics.last_updated_at_ms = std.time.milliTimestamp();
             // defer self.node.processed_messages_count += 1;
             defer {
                 message.deref();
