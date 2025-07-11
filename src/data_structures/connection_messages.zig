@@ -5,6 +5,7 @@ const log = std.log.scoped(.ConnectionMessages);
 const uuid = @import("uuid");
 
 const RingBuffer = @import("stdx").RingBuffer;
+const MemoryPool = @import("stdx").MemoryPool;
 
 const Message = @import("../protocol/message.zig").Message;
 
@@ -14,11 +15,13 @@ pub const ConnectionMessages = struct {
 
     allocator: std.mem.Allocator,
     map: std.AutoHashMap(uuid.Uuid, *RingBuffer(*Message)),
+    memory_pool: *MemoryPool(Message),
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator, memory_pool: *MemoryPool(Message)) Self {
         return Self{
             .allocator = allocator,
             .map = std.AutoHashMap(uuid.Uuid, *RingBuffer(*Message)).init(allocator),
+            .memory_pool = memory_pool,
         };
     }
 
@@ -28,9 +31,9 @@ pub const ConnectionMessages = struct {
         while (connection_map_iter.next()) |messages_queue_ptr| {
             const messages_queue = messages_queue_ptr.*;
 
-            // TODO: we don't fully clean up here when we should
             while (messages_queue.dequeue()) |message| {
                 message.deref();
+                if (message.refs() == 0) self.memory_pool.destroy(message);
             }
 
             messages_queue.deinit();

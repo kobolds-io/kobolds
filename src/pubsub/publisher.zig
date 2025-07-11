@@ -10,44 +10,24 @@ const Message = @import("../protocol/message.zig").Message;
 pub const Publisher = struct {
     const Self = @This();
 
-    allocator: std.mem.Allocator,
     conn_id: uuid.Uuid,
-    queue: *RingBuffer(*Message),
     topic: *Topic,
     key: u128,
+    published_count: u128,
 
-    pub fn init(allocator: std.mem.Allocator, conn_id: uuid.Uuid, topic: *Topic) !Self {
-        const queue = try allocator.create(RingBuffer(*Message));
-        errdefer allocator.destroy(queue);
-
-        queue.* = try RingBuffer(*Message).init(allocator, constants.publisher_max_queue_capacity);
-        errdefer queue.deinit();
-
+    pub fn new(conn_id: uuid.Uuid, topic: *Topic) Self {
         const key = utils.generateKey(topic.topic_name, conn_id);
 
         return Self{
-            .allocator = allocator,
             .conn_id = conn_id,
-            .queue = queue,
             .topic = topic,
             .key = key,
+            .published_count = 0,
         };
     }
 
-    pub fn deinit(self: *Self) void {
-        while (self.queue.dequeue()) |message| {
-            message.deref();
-        }
-
-        self.queue.deinit();
-        self.allocator.destroy(self.queue);
-    }
-
     pub fn publish(self: *Self, message: *Message) !void {
-        try self.topic.publish(message);
-    }
-
-    pub fn publishMany(self: *Self, messages: []*Message) !void {
-        try self.topic.publishMany(messages);
+        try self.topic.enqueue(message);
+        self.published_count += 1;
     }
 };
