@@ -623,6 +623,8 @@ pub const Node = struct {
         // check to see if there are messages
         if (conn.inbox.count == 0) return;
 
+        const start_at = std.time.milliTimestamp();
+
         while (conn.inbox.dequeue()) |message| {
             self.metrics.messages_processed += 1;
             // defer self.node.processed_messages_count += 1;
@@ -630,6 +632,16 @@ pub const Node = struct {
                 message.deref();
                 if (message.refs() == 0) self.memory_pool.destroy(message);
             }
+
+            const now = std.time.milliTimestamp();
+            if (now - start_at > 100) {
+                // take this message and put it back into the ring buffer
+                log.warn("node.process timeout", .{});
+                message.ref();
+                try conn.inbox.enqueue(message);
+                break;
+            }
+
             switch (message.headers.message_type) {
                 .accept => {
                     // ensure that this connection is not fully connected

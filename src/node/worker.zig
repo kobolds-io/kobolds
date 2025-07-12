@@ -50,6 +50,7 @@ pub const Worker = struct {
     state: WorkerState,
     transactions: std.AutoHashMap(u128, *UnbufferedChannel(*Message)),
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
+    inbox: *RingBuffer(*Message),
 
     pub fn init(allocator: std.mem.Allocator, id: usize, node: *Node) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -67,6 +68,12 @@ pub const Worker = struct {
 
         outbox_channel.* = try BufferedChannel(Envelope).init(allocator, 5_000);
         errdefer outbox_channel.deinit();
+
+        const inbox = try allocator.create(RingBuffer(*Message));
+        errdefer allocator.destroy(inbox);
+
+        inbox.* = try RingBuffer(*Message).init(allocator, 5_000);
+        errdefer inbox.deinit();
 
         const io = try allocator.create(IO);
         errdefer allocator.destroy(io);
@@ -90,6 +97,7 @@ pub const Worker = struct {
             .outbox_channel = outbox_channel,
             .connection_messages = std.AutoHashMap(u128, *RingBuffer(*Message)).init(allocator),
             .transactions = std.AutoHashMap(u128, *UnbufferedChannel(*Message)).init(allocator),
+            .inbox = inbox,
         };
     }
 
@@ -131,17 +139,24 @@ pub const Worker = struct {
             }
         }
 
+        while (self.inbox.dequeue()) |message| {
+            message.deref();
+            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+        }
+
         self.outbox_channel.deinit();
         self.connection_outbox_buffers.deinit();
         self.connections.deinit();
         self.io.deinit();
         self.uninitialized_connections.deinit();
         self.transactions.deinit();
+        self.inbox.deinit();
 
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
         self.allocator.destroy(self.outbox_channel);
         self.allocator.destroy(self.io);
+        self.allocator.destroy(self.inbox);
     }
 
     pub fn run(self: *Self, ready_channel: *UnbufferedChannel(bool)) void {
@@ -371,53 +386,6 @@ pub const Worker = struct {
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {
-        // Clean up publishers and subscribers associated with this connection
-        // var conn_publisher_keys = std.ArrayList(u128).init(self.allocator);
-        // defer conn_publisher_keys.deinit();
-
-        // var publishers_iter = self.publishers.iterator();
-        // while (publishers_iter.next()) |publisher_entry| {
-        //     const publisher_key = publisher_entry.key_ptr.*;
-        //     const publisher = publisher_entry.value_ptr.*;
-
-        //     // FIX: the publisher may be in the middle of publishing
-        //     // we should ensure that it is safe to destroy this publisher
-
-        //     if (publisher.conn_id == conn.connection_id) {
-        //         if (self.node.bus_manager.get(publisher.topic_name)) |bus| {
-        //             _ = try bus.removePublisher(publisher.key);
-        //         }
-
-        //         publisher.deinit();
-        //         self.allocator.destroy(publisher);
-        //         try conn_publisher_keys.append(publisher_key);
-        //     }
-        // }
-
-        // for (conn_publisher_keys.items) |publisher_key| {
-        //     _ = self.publishers.remove(publisher_key);
-        // }
-
-        // var conn_subscriber_keys = std.ArrayList(u128).init(self.allocator);
-        // defer conn_subscriber_keys.deinit();
-
-        // var subscribers_iter = self.subscribers.iterator();
-        // while (subscribers_iter.next()) |subscriber_entry| {
-        //     const subscriber_key = subscriber_entry.key_ptr.*;
-        //     const subscriber = subscriber_entry.value_ptr.*;
-
-        //     if (subscriber.conn_id == conn.connection_id) {
-        //         subscriber.unsubscribe() catch @panic("subscriber could not unsubscribe from bus");
-        //         subscriber.deinit();
-        //         self.allocator.destroy(subscriber);
-        //         try conn_subscriber_keys.append(subscriber_key);
-        //     }
-        // }
-
-        // for (conn_subscriber_keys.items) |subscriber_key| {
-        //     _ = self.subscribers.remove(subscriber_key);
-        // }
-
         self.removeConnection(conn);
     }
 
@@ -503,6 +471,7 @@ pub const Worker = struct {
                     });
                 },
                 .publish => {
+<<<<<<< Updated upstream
                     // // get the publisher's key
                     // const publisher_key = utils.generateKey(message.topicName(), conn.connection_id);
                     // if (self.publishers.get(publisher_key)) |publisher| {
@@ -603,6 +572,35 @@ pub const Worker = struct {
                 },
                 else => {
                     //                     message.deref();
+=======
+
+                    // TODO: add this to to an inbox for this worker to be gathered by the node
+
+                    // FIX: How can i hook up messages received in the worker to more of a global router?
+                    // this is a point of high contention as it requires the worker and the router to sync
+                    // at some point during the processing of the message.
+                    //
+                    // 1. have the worker fill up a queue and simply wait for the queue to be
+                    // processed by the node.
+                    // 2. Make the node perform a collection/processing operation. This means that there would still
+                    // be a central thread in which all messages are processed but it would basically mean that the
+                    // workers are restricted to just sending/receiving messages (ticking connections)
+                    //     the benefit to having a central processing system is that the contention points would be to
+                    //     copy the messages received in the worker's inbox to the node. I think this is going to require
+                    //     the reintroduction of the `Envelope` idea but instead of it being used to share memory_pool
+                    //     information it would just include information from where the message came from. (is this true?)
+                    // 3. Workers are in charge and the node is just the connective tissue that can handle routing messages
+                    // between workers.
+                    //     a. worker 1 recv message
+                    //     b. worker 1 push to node queue
+                    //     c. node process message
+                    //     d. node route message to worker 4
+                    // 4. More aggressive sharing of memory between workers. What I mean by this is that we could
+                    // have the workers access global (to the process) resources. I think that this would lead to high
+                    // contention touch points. For example, publishing a message would talk to a global topic manager,
+                    // which would require both the topic_manager and topic to be locked as the message was processed
+                    // or routed.
+>>>>>>> Stashed changes
                 },
             }
         }
