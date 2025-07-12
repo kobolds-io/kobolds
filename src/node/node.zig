@@ -237,8 +237,8 @@ pub const Node = struct {
         assert(self.state == .closed);
 
         // Start the workers
-        // try self.initializeWorkers();
-        // try self.spawnWorkerThreads();
+        try self.initializeWorkers();
+        try self.spawnWorkerThreads();
 
         // Start the listeners
         try self.initializeListeners();
@@ -507,8 +507,8 @@ pub const Node = struct {
 
                 // try to add the connections
                 while (listener.sockets.pop()) |socket| {
-                    try self.addInboundConnection(socket);
-                    // try self.addInboundConnectionToNextWorker(socket);
+                    // try self.addInboundConnection(socket);
+                    try self.addInboundConnectionToNextWorker(socket);
                 }
             }
         }

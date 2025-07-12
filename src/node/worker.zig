@@ -211,7 +211,7 @@ pub const Worker = struct {
                     break;
                 };
 
-                try self.gather(conn);
+                try self.process(conn);
 
                 if (conn.state == .connected and conn.connection_id != 0) {
                     // the connection is now valid and ready for events
@@ -239,8 +239,7 @@ pub const Worker = struct {
                     continue;
                 };
 
-                try self.gather(conn);
-                // try self.distribute(conn);
+                try self.process(conn);
             }
         }
     }
@@ -415,7 +414,7 @@ pub const Worker = struct {
         self.removeConnection(conn);
     }
 
-    fn gather(self: *Self, conn: *Connection) !void {
+    fn process(self: *Self, conn: *Connection) !void {
         // check to see if there are messages
         if (conn.inbox.count == 0) return;
 
@@ -543,13 +542,6 @@ pub const Worker = struct {
         // if (worker.connection_messages.get(conn.connection_id)) |messages| {
         //     conn.outbox.concatenateAvailable(messages);
         // }
-    }
-
-    pub fn process(self: *Self) !void {
-        // self.process_mutex.lock();
-        // defer self.process_mutex.unlock();
-
-        _ = self;
     }
 
     fn closeAllConnections(self: *Self) bool {
