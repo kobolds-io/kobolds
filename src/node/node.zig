@@ -40,7 +40,7 @@ pub const NodeConfig = struct {
 
     worker_threads: usize = 3,
     max_connections: u16 = 1024,
-    memory_pool_capacity: usize = 5_000,
+    memory_pool_capacity: usize = 50_000,
     listener_configs: ?[]const ListenerConfig = null,
     outbound_configs: ?[]const OutboundConnectionConfig = null,
 
@@ -627,7 +627,7 @@ pub const Node = struct {
         // check to see if there are messages
         if (conn.inbox.count == 0) return;
 
-        const start_at = std.time.milliTimestamp();
+        // const start_at = std.time.milliTimestamp();
 
         while (conn.inbox.dequeue()) |message| {
             self.metrics.messages_processed += 1;
@@ -637,14 +637,14 @@ pub const Node = struct {
                 if (message.refs() == 0) self.memory_pool.destroy(message);
             }
 
-            const now = std.time.milliTimestamp();
-            if (now - start_at > 100) {
-                // take this message and put it back into the ring buffer
-                log.warn("node.process timeout", .{});
-                message.ref();
-                try conn.inbox.enqueue(message);
-                break;
-            }
+            // const now = std.time.milliTimestamp();
+            // if (now - start_at > 100) {
+            //     // take this message and put it back into the ring buffer
+            //     log.warn("node.process timeout", .{});
+            //     message.ref();
+            //     try conn.inbox.enqueue(message);
+            //     break;
+            // }
 
             switch (message.headers.message_type) {
                 .accept => {

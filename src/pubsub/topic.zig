@@ -34,7 +34,7 @@ pub const Topic = struct {
         const queue = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(queue);
 
-        queue.* = try RingBuffer(*Message).init(allocator, 1_000);
+        queue.* = try RingBuffer(*Message).init(allocator, 10_000);
         errdefer queue.deinit();
 
         const tmp_buffer = try allocator.alloc(*Message, constants.subscriber_max_queue_capacity);
