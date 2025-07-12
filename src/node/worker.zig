@@ -471,7 +471,6 @@ pub const Worker = struct {
                     });
                 },
                 .publish => {
-<<<<<<< Updated upstream
                     // // get the publisher's key
                     // const publisher_key = utils.generateKey(message.topicName(), conn.connection_id);
                     // if (self.publishers.get(publisher_key)) |publisher| {
@@ -572,7 +571,6 @@ pub const Worker = struct {
                 },
                 else => {
                     //                     message.deref();
-=======
 
                     // TODO: add this to to an inbox for this worker to be gathered by the node
 
@@ -600,7 +598,6 @@ pub const Worker = struct {
                     // contention touch points. For example, publishing a message would talk to a global topic manager,
                     // which would require both the topic_manager and topic to be locked as the message was processed
                     // or routed.
->>>>>>> Stashed changes
                 },
             }
         }

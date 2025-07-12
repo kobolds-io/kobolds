@@ -371,14 +371,18 @@ pub const Node = struct {
     fn tick(self: *Self) !void {
         try self.maybeAddInboundConnections();
 
-        log.info("memory_pool.available: {}, messages processed {}", .{
-            self.memory_pool.available(),
-            self.metrics.messages_processed,
-        });
-
-        // if (self.memory_pool.available() < self.memory_pool.capacity) {
-        //     log.info(" memory_pool.available: {}", .{self.memory_pool.available()});
-        // }
+        const now_ms = std.time.milliTimestamp();
+        const difference = now_ms - self.metrics.last_printed_at_ms;
+        if (difference > 5_000) {
+            const delta = self.metrics.messages_processed - self.metrics.last_messages_processed_printed;
+            self.metrics.last_messages_processed_printed = self.metrics.messages_processed;
+            self.metrics.last_printed_at_ms = std.time.milliTimestamp();
+            log.info("memory_pool.available: {}, messages processed {}, delta {}", .{
+                self.memory_pool.available(),
+                self.metrics.last_messages_processed_printed,
+                delta,
+            });
+        }
 
         var connections_iter = self.connections.valueIterator();
         while (connections_iter.next()) |entry| {
