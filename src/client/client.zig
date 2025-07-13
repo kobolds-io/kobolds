@@ -26,7 +26,7 @@ const SubscribeOptions = struct {};
 
 pub const ClientConfig = struct {
     max_connections: u16 = 1024,
-    memory_pool_capacity: usize = 5_000,
+    memory_pool_capacity: usize = 1_000,
 };
 
 const ClientState = enum {
@@ -102,6 +102,8 @@ pub const Client = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        self.connection_messages.deinit();
+
         var connections_iterator = self.connections.valueIterator();
         while (connections_iterator.next()) |entry| {
             const connection = entry.*;
@@ -135,7 +137,6 @@ pub const Client = struct {
         self.connections.deinit();
         self.uninitialized_connections.deinit();
         self.transactions.deinit();
-        self.connection_messages.deinit();
         self.topics.deinit();
 
         self.allocator.destroy(self.memory_pool);

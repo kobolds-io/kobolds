@@ -24,11 +24,11 @@ const AllowedInboundConnectionConfig = @import("../node/listener.zig").AllowedIn
 const Signal = @import("stdx").Signal;
 
 var node_config = NodeConfig{
+    .memory_pool_capacity = 10_000,
     .max_connections = 5,
 };
 
 var client_config = ClientConfig{
-    .memory_pool_capacity = 10_000,
     .max_connections = 100,
 };
 
@@ -578,7 +578,9 @@ pub fn nodePublish() !void {
     var connections = std.ArrayList(*Connection).init(allocator);
     defer connections.deinit();
 
-    for (0..10) |_| {
+    const CONNECTION_COUNT = 10;
+
+    for (0..CONNECTION_COUNT) |_| {
         const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
         errdefer client.disconnect(conn);
         // std.time.sleep(100 * std.time.ns_per_ms);

@@ -389,7 +389,7 @@ pub const Worker = struct {
         while (conn.inbox.dequeue()) |message| {
             // defer self.node.processed_messages_count += 1;
             defer {
-                _ = self.node.metrics.messages_processed.fetchAdd(1, .monotonic);
+                _ = self.node.metrics.messages_processed.fetchAdd(1, .seq_cst);
                 // self.node.metrics.last_updated_at_ms = std.time.milliTimestamp();
                 message.deref();
                 if (message.refs() == 0) self.node.memory_pool.destroy(message);

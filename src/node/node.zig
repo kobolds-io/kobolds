@@ -28,11 +28,6 @@ const Publisher = @import("../pubsub/publisher.zig").Publisher;
 const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
 const Topic = @import("../pubsub/topic.zig").Topic;
 
-// const Publisher = @import("../bus/publisher.zig").Publisher;
-// const Subscriber = @import("../bus/subscriber.zig").Subscriber;
-// const Bus = @import("../bus/bus.zig").Bus;
-// const BusManager = @import("../bus/bus_manager.zig").BusManager;
-
 pub const PingOptions = struct {};
 
 pub const NodeConfig = struct {
@@ -374,7 +369,7 @@ pub const Node = struct {
         const now_ms = std.time.milliTimestamp();
         const difference = now_ms - self.metrics.last_printed_at_ms;
         if (difference > 1_000) {
-            const messages_processed = self.metrics.messages_processed.load(.monotonic);
+            const messages_processed = self.metrics.messages_processed.load(.seq_cst);
             const delta = messages_processed - self.metrics.last_messages_processed_printed;
             self.metrics.last_messages_processed_printed = messages_processed;
             self.metrics.last_printed_at_ms = std.time.milliTimestamp();
@@ -385,34 +380,11 @@ pub const Node = struct {
                 delta,
             });
         }
-
-        // var connections_iter = self.connections.valueIterator();
-        // while (connections_iter.next()) |entry| {
-        //     const conn = entry.*;
-
-        //     // check if this connection was closed for whatever reason
-        //     if (conn.state == .closed) {
-        //         self.removeConnection(conn);
-        //         continue;
-        //     }
-
-        //     try conn.tick();
-        //     self.process(conn) catch |err| {
-        //         log.err("could not process connection: {}, err: {any}", .{ conn.connection_id, err });
-        //         continue;
-        //     };
-        // }
-        // var topics_iter = self.topics.valueIterator();
-        // while (topics_iter.next()) |topic_entry| {
-        //     const topic = topic_entry.*;
-        //     try topic.tick();
-        // }
     }
 
     fn initializeWorkers(self: *Self) !void {
         assert(self.workers.count() == 0);
 
-        // initialize `n` connection_workers
         for (0..self.config.worker_threads) |id| {
             const worker = try self.allocator.create(Worker);
             errdefer self.allocator.destroy(worker);
@@ -488,8 +460,6 @@ pub const Node = struct {
             for (outbound_configs) |outbound_config| {
                 switch (outbound_config.transport) {
                     .tcp => {
-                        // These connections are not directly handled by a client and therefore
-                        // do not need to be handled here. Instead the node will work on them organically
                         _ = try self.addOutboundConnectionToNextWorker(outbound_config);
                     },
                 }
@@ -506,7 +476,6 @@ pub const Node = struct {
                 listener.mutex.lock();
                 defer listener.mutex.unlock();
 
-                // try to add the connections
                 while (listener.sockets.pop()) |socket| {
                     // try self.addInboundConnection(socket);
                     try self.addInboundConnectionToNextWorker(socket);
@@ -538,9 +507,6 @@ pub const Node = struct {
         errdefer connection.deinit();
 
         connection.state = .connecting;
-
-        // self.connections_mutex.lock();
-        // defer self.connections_mutex.unlock();
 
         try self.connections.put(conn_id, connection);
         errdefer _ = self.connections.remove(conn_id);
