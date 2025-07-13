@@ -275,8 +275,8 @@ pub const Node = struct {
                 .running => {
                     self.tick() catch unreachable;
 
-                    self.io.run_for_ns(100 * std.time.ns_per_us) catch unreachable;
-                    // self.io.run_for_ns(10 * std.time.ns_per_ms) catch unreachable;
+                    // self.io.run_for_ns(100 * std.time.ns_per_us) catch unreachable;
+                    self.io.run_for_ns(1 * std.time.ns_per_ms) catch unreachable;
                 },
                 .closing => {
                     log.info("node {}: closed", .{self.id});
@@ -373,11 +373,12 @@ pub const Node = struct {
 
         const now_ms = std.time.milliTimestamp();
         const difference = now_ms - self.metrics.last_printed_at_ms;
-        if (difference > 5_000) {
+        if (difference > 1_000) {
             const delta = self.metrics.messages_processed - self.metrics.last_messages_processed_printed;
             self.metrics.last_messages_processed_printed = self.metrics.messages_processed;
             self.metrics.last_printed_at_ms = std.time.milliTimestamp();
-            log.info("memory_pool.available: {}, messages processed {}, delta {}", .{
+            log.info("tick_duration {}ms, memory_pool.available: {}, messages processed {}, delta {}", .{
+                difference,
                 self.memory_pool.available(),
                 self.metrics.last_messages_processed_printed,
                 delta,
@@ -400,10 +401,9 @@ pub const Node = struct {
                 continue;
             };
         }
-
         var topics_iter = self.topics.valueIterator();
-        while (topics_iter.next()) |entry| {
-            const topic = entry.*;
+        while (topics_iter.next()) |topic_entry| {
+            const topic = topic_entry.*;
             try topic.tick();
         }
     }
@@ -626,8 +626,9 @@ pub const Node = struct {
     fn process(self: *Self, conn: *Connection) !void {
         // check to see if there are messages
         if (conn.inbox.count == 0) return;
+        // log.info("connection inbox count {}", .{conn.inbox.count});
 
-        // const start_at = std.time.milliTimestamp();
+        const start_at = std.time.milliTimestamp();
 
         while (conn.inbox.dequeue()) |message| {
             self.metrics.messages_processed += 1;
@@ -637,14 +638,14 @@ pub const Node = struct {
                 if (message.refs() == 0) self.memory_pool.destroy(message);
             }
 
-            // const now = std.time.milliTimestamp();
-            // if (now - start_at > 100) {
-            //     // take this message and put it back into the ring buffer
-            //     log.warn("node.process timeout", .{});
-            //     message.ref();
-            //     try conn.inbox.enqueue(message);
-            //     break;
-            // }
+            const now = std.time.milliTimestamp();
+            if (now - start_at > 10) {
+                // take this message and put it back into the ring buffer
+                log.warn("node.process timeout", .{});
+                message.ref();
+                try conn.inbox.enqueue(message);
+                break;
+            }
 
             switch (message.headers.message_type) {
                 .accept => {
@@ -827,7 +828,7 @@ pub const Node = struct {
             }
         }
 
-        assert(conn.inbox.count == 0);
+        // assert(conn.inbox.count == 0);
     }
 
     fn removeConnection(self: *Self, conn: *Connection) void {
