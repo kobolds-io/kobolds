@@ -40,7 +40,7 @@ pub const NodeConfig = struct {
 
     worker_threads: usize = 3,
     max_connections: u16 = 1024,
-    memory_pool_capacity: usize = 10_000,
+    memory_pool_capacity: usize = 100_000,
     listener_configs: ?[]const ListenerConfig = null,
     outbound_configs: ?[]const OutboundConnectionConfig = null,
 
@@ -374,8 +374,9 @@ pub const Node = struct {
         const now_ms = std.time.milliTimestamp();
         const difference = now_ms - self.metrics.last_printed_at_ms;
         if (difference > 1_000) {
-            const delta = self.metrics.messages_processed - self.metrics.last_messages_processed_printed;
-            self.metrics.last_messages_processed_printed = self.metrics.messages_processed;
+            const messages_processed = self.metrics.messages_processed.load(.monotonic);
+            const delta = messages_processed - self.metrics.last_messages_processed_printed;
+            self.metrics.last_messages_processed_printed = messages_processed;
             self.metrics.last_printed_at_ms = std.time.milliTimestamp();
             log.info("tick_duration {}ms, memory_pool.available: {}, messages processed {}, delta {}", .{
                 difference,
@@ -385,27 +386,27 @@ pub const Node = struct {
             });
         }
 
-        var connections_iter = self.connections.valueIterator();
-        while (connections_iter.next()) |entry| {
-            const conn = entry.*;
+        // var connections_iter = self.connections.valueIterator();
+        // while (connections_iter.next()) |entry| {
+        //     const conn = entry.*;
 
-            // check if this connection was closed for whatever reason
-            if (conn.state == .closed) {
-                self.removeConnection(conn);
-                continue;
-            }
+        //     // check if this connection was closed for whatever reason
+        //     if (conn.state == .closed) {
+        //         self.removeConnection(conn);
+        //         continue;
+        //     }
 
-            try conn.tick();
-            self.process(conn) catch |err| {
-                log.err("could not process connection: {}, err: {any}", .{ conn.connection_id, err });
-                continue;
-            };
-        }
-        var topics_iter = self.topics.valueIterator();
-        while (topics_iter.next()) |topic_entry| {
-            const topic = topic_entry.*;
-            try topic.tick();
-        }
+        //     try conn.tick();
+        //     self.process(conn) catch |err| {
+        //         log.err("could not process connection: {}, err: {any}", .{ conn.connection_id, err });
+        //         continue;
+        //     };
+        // }
+        // var topics_iter = self.topics.valueIterator();
+        // while (topics_iter.next()) |topic_entry| {
+        //     const topic = topic_entry.*;
+        //     try topic.tick();
+        // }
     }
 
     fn initializeWorkers(self: *Self) !void {
@@ -631,8 +632,8 @@ pub const Node = struct {
         const start_at = std.time.milliTimestamp();
 
         while (conn.inbox.dequeue()) |message| {
-            self.metrics.messages_processed += 1;
-            self.metrics.last_updated_at_ms = std.time.milliTimestamp();
+            // self.metrics.messages_processed += 1;
+            // self.metrics.last_updated_at_ms = std.time.milliTimestamp();
             // defer self.node.processed_messages_count += 1;
             defer {
                 message.deref();
