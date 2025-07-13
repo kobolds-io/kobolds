@@ -28,7 +28,7 @@ var node_config = NodeConfig{
 };
 
 var client_config = ClientConfig{
-    .max_connections = 5,
+    .max_connections = 100,
 };
 
 const RequestConfig = struct {
@@ -574,21 +574,36 @@ pub fn nodePublish() !void {
     try client.start();
     defer client.close();
 
-    const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
-    defer client.disconnect(conn);
+    var connections = std.ArrayList(*Connection).init(allocator);
+    defer connections.deinit();
 
-    const body = "";
-    // const body = "a" ** constants.message_max_body_size;
+    for (0..50) |_| {
+        const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
+        errdefer client.disconnect(conn);
+        // std.time.sleep(100 * std.time.ns_per_ms);
+
+        try connections.append(conn);
+    }
+    defer {
+        for (connections.items) |conn| {
+            client.disconnect(conn);
+        }
+    }
+
+    // const body = "";
+    const body = "a" ** constants.message_max_body_size;
     const topic_name = "/test";
 
     registerSigintHandler();
 
     while (!sigint_received) {
-        client.publish(conn, topic_name, body, .{}) catch |err| {
-            log.err("error {any}", .{err});
-            std.time.sleep(100 * std.time.ns_per_ms);
-            continue;
-        };
+        for (connections.items) |conn| {
+            client.publish(conn, topic_name, body, .{}) catch |err| {
+                log.err("error {any}", .{err});
+                std.time.sleep(100 * std.time.ns_per_ms);
+                continue;
+            };
+        }
 
         // std.time.sleep(1 * std.time.ns_per_ms);
     }
