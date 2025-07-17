@@ -14,6 +14,8 @@ const Message = @import("../protocol/message.zig").Message;
 const Publisher = @import("./publisher.zig").Publisher;
 const Subscriber = @import("./subscriber.zig").Subscriber;
 
+pub const TopicOptions = struct {};
+
 pub const Topic = struct {
     const Self = @This();
 
@@ -34,7 +36,8 @@ pub const Topic = struct {
         const queue = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(queue);
 
-        queue.* = try RingBuffer(*Message).init(allocator, 10_000);
+        // TODO: the buffer size should be configured. perhaps this could be a NodeConfig thing
+        queue.* = try RingBuffer(*Message).init(allocator, constants.topic_max_queue_capacity);
         errdefer queue.deinit();
 
         const tmp_buffer = try allocator.alloc(*Message, constants.subscriber_max_queue_capacity);
@@ -140,6 +143,7 @@ pub const Topic = struct {
 
     fn clearQueue(self: *Self) void {
         while (self.queue.dequeue()) |message| {
+            assert(message.refs() == 1);
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }

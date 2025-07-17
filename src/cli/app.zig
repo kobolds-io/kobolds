@@ -24,7 +24,6 @@ const AllowedInboundConnectionConfig = @import("../node/listener.zig").AllowedIn
 const Signal = @import("stdx").Signal;
 
 var node_config = NodeConfig{
-    .memory_pool_capacity = 10_000,
     .max_connections = 5,
 };
 
@@ -578,7 +577,7 @@ pub fn nodePublish() !void {
     var connections = std.ArrayList(*Connection).init(allocator);
     defer connections.deinit();
 
-    const CONNECTION_COUNT = 10;
+    const CONNECTION_COUNT = 5;
 
     for (0..CONNECTION_COUNT) |_| {
         const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
@@ -593,8 +592,8 @@ pub fn nodePublish() !void {
         }
     }
 
-    const body = "";
-    // const body = "a" ** constants.message_max_body_size;
+    // const body = "";
+    const body = "a" ** constants.message_max_body_size;
     const topic_name = "/test";
 
     registerSigintHandler();
@@ -603,12 +602,12 @@ pub fn nodePublish() !void {
         for (connections.items) |conn| {
             client.publish(conn, topic_name, body, .{}) catch |err| {
                 log.err("error {any}", .{err});
-                std.time.sleep(1 * std.time.ns_per_ms);
+                std.time.sleep(100 * std.time.ns_per_ms);
                 continue;
             };
         }
 
-        // std.time.sleep(1 * std.time.ns_per_ms);
+        std.time.sleep(1 * std.time.ns_per_us);
     }
 }
 

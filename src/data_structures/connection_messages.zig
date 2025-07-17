@@ -3,6 +3,7 @@ const testing = std.testing;
 const log = std.log.scoped(.ConnectionMessages);
 
 const uuid = @import("uuid");
+const constants = @import("../constants.zig");
 
 const RingBuffer = @import("stdx").RingBuffer;
 const MemoryPool = @import("stdx").MemoryPool;
@@ -52,7 +53,7 @@ pub const ConnectionMessages = struct {
             const queue = try self.allocator.create(RingBuffer(*Message));
             errdefer self.allocator.destroy(queue);
 
-            queue.* = try RingBuffer(*Message).init(self.allocator, 1_000);
+            queue.* = try RingBuffer(*Message).init(self.allocator, constants.connection_outbox_capacity);
             errdefer queue.deinit();
 
             try queue.enqueue(message);

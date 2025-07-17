@@ -21,6 +21,9 @@ const InboundConnectionConfig = @import("../protocol/connection.zig").InboundCon
 const Message = @import("../protocol/message.zig").Message;
 const Accept = @import("../protocol/message.zig").Accept;
 
+const Publisher = @import("../pubsub/publisher.zig").Publisher;
+const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
+
 const WorkerState = enum {
     running,
     closing,
@@ -50,7 +53,10 @@ pub const Worker = struct {
     state: WorkerState,
     transactions: std.AutoHashMap(u128, *UnbufferedChannel(*Message)),
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
+    publishers: std.AutoHashMap(u128, *Publisher),
+    subscribers: std.AutoHashMap(u128, *Subscriber),
     inbox: *RingBuffer(*Message),
+    inbox_mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, id: usize, node: *Node) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -72,7 +78,7 @@ pub const Worker = struct {
         const inbox = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(inbox);
 
-        inbox.* = try RingBuffer(*Message).init(allocator, 5_000);
+        inbox.* = try RingBuffer(*Message).init(allocator, node.memory_pool.capacity);
         errdefer inbox.deinit();
 
         const io = try allocator.create(IO);
@@ -97,7 +103,10 @@ pub const Worker = struct {
             .outbox_channel = outbox_channel,
             .connection_messages = std.AutoHashMap(u128, *RingBuffer(*Message)).init(allocator),
             .transactions = std.AutoHashMap(u128, *UnbufferedChannel(*Message)).init(allocator),
+            .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
+            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
             .inbox = inbox,
+            .inbox_mutex = std.Thread.Mutex{},
         };
     }
 
@@ -139,6 +148,18 @@ pub const Worker = struct {
             }
         }
 
+        var publishers_iter = self.publishers.valueIterator();
+        while (publishers_iter.next()) |publisher_entry| {
+            const publisher = publisher_entry.*;
+            self.allocator.destroy(publisher);
+        }
+
+        var subscribers_iter = self.subscribers.valueIterator();
+        while (subscribers_iter.next()) |subscriber_entry| {
+            const subscriber = subscriber_entry.*;
+            self.allocator.destroy(subscriber);
+        }
+
         while (self.inbox.dequeue()) |message| {
             message.deref();
             if (message.refs() == 0) self.node.memory_pool.destroy(message);
@@ -150,13 +171,15 @@ pub const Worker = struct {
         self.io.deinit();
         self.uninitialized_connections.deinit();
         self.transactions.deinit();
+        self.publishers.deinit();
+        self.subscribers.deinit();
         self.inbox.deinit();
 
+        self.allocator.destroy(self.inbox);
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
         self.allocator.destroy(self.outbox_channel);
         self.allocator.destroy(self.io);
-        self.allocator.destroy(self.inbox);
     }
 
     pub fn run(self: *Self, ready_channel: *UnbufferedChannel(bool)) void {
@@ -388,14 +411,21 @@ pub const Worker = struct {
 
         while (conn.inbox.dequeue()) |message| {
             // defer self.node.processed_messages_count += 1;
-            defer {
-                _ = self.node.metrics.messages_processed.fetchAdd(1, .seq_cst);
-                // self.node.metrics.last_updated_at_ms = std.time.milliTimestamp();
-                message.deref();
-                if (message.refs() == 0) self.node.memory_pool.destroy(message);
-            }
+            // defer {
+            //     // _ = self.node.metrics.messages_processed.fetchAdd(1, .seq_cst);
+            //     // self.node.metrics.last_updated_at_ms = std.time.milliTimestamp();
+            //     message.deref();
+            //     if (message.refs() == 0) self.node.memory_pool.destroy(message);
+            // }
             switch (message.headers.message_type) {
                 .accept => {
+                    defer {
+                        // _ = self.node.metrics.messages_processed.fetchAdd(1, .seq_cst);
+                        // self.node.metrics.last_updated_at_ms = std.time.milliTimestamp();
+                        message.deref();
+                        if (message.refs() == 0) self.node.memory_pool.destroy(message);
+                    }
+
                     // ensure that this connection is not fully connected
                     assert(conn.state != .connected);
 
@@ -457,43 +487,79 @@ pub const Worker = struct {
                         log.err("Failed to enqueue message to outbox: {}", .{err});
                         message.deref(); // Undo reference if enqueue fails
                     }
-                    message.ref();
+                    // message.ref();
                 },
                 .pong => {
+                    defer {
+                        message.deref();
+                        if (message.refs() == 0) self.node.memory_pool.destroy(message);
+                    }
+
                     log.debug("received pong from origin_id: {}, connection_id: {}", .{
                         message.headers.origin_id,
                         message.headers.connection_id,
                     });
                 },
-                .publish => {
-                    // FIX: How can i hook up messages received in the worker to more of a global router?
-                    // this is a point of high contention as it requires the worker and the router to sync
-                    // at some point during the processing of the message.
-                    //
-                    // 1. have the worker fill up a queue and simply wait for the queue to be
-                    // processed by the node.
-                    // 2. Make the node perform a collection/processing operation. This means that there would still
-                    // be a central thread in which all messages are processed but it would basically mean that the
-                    // workers are restricted to just sending/receiving messages (ticking connections)
-                    //     the benefit to having a central processing system is that the contention points would be to
-                    //     copy the messages received in the worker's inbox to the node. I think this is going to require
-                    //     the reintroduction of the `Envelope` idea but instead of it being used to share memory_pool
-                    //     information it would just include information from where the message came from. (is this true?)
-                    // 3. Workers are in charge and the node is just the connective tissue that can handle routing messages
-                    // between workers.
-                    //     a. worker 1 recv message
-                    //     b. worker 1 push to node queue
-                    //     c. node process message
-                    //     d. node route message to worker 4
-                    // 4. More aggressive sharing of memory between workers. What I mean by this is that we could
-                    // have the workers access global (to the process) resources. I think that this would lead to high
-                    // contention touch points. For example, publishing a message would talk to a global topic manager,
-                    // which would require both the topic_manager and topic to be locked as the message was processed
-                    // or routed.
+                else => {
+                    self.inbox_mutex.lock();
+                    defer self.inbox_mutex.unlock();
+
+                    assert(message.refs() == 1);
+                    self.inbox.enqueue(message) catch |err| {
+                        // message.ref();
+                        try conn.inbox.enqueue(message);
+
+                        log.err("could not enqueue message {any}", .{err});
+                        // message.deref();
+                    };
                 },
-                .subscribe => {},
-                .unsubscribe => {},
-                else => {},
+                // .publish => {
+                // // 1. get publisher from publishers
+                // // 2. publish to publisher topic
+                // const publisher_key = utils.generateKey(message.topicName(), conn.connection_id);
+                // var publisher: *Publisher = undefined;
+                // if (self.publishers.get(publisher_key)) |p| {
+                //     publisher = p;
+                // } else {
+                //     const topic = try self.node.findOrCreateTopic(message.topicName(), .{});
+
+                //     publisher = try self.allocator.create(Publisher);
+                //     errdefer self.allocator.destroy(publisher);
+
+                //     publisher.* = Publisher.new(conn.connection_id, topic);
+                //     try self.publishers.put(publisher_key, publisher);
+                // }
+
+                // try publisher.publish(message);
+
+                // FIX: How can i hook up messages received in the worker to more of a global router?
+                // this is a point of high contention as it requires the worker and the router to sync
+                // at some point during the processing of the message.
+                //
+                // 1. have the worker fill up a queue and simply wait for the queue to be
+                // processed by the node.
+                // 2. Make the node perform a collection/processing operation. This means that there would still
+                // be a central thread in which all messages are processed but it would basically mean that the
+                // workers are restricted to just sending/receiving messages (ticking connections)
+                //     the benefit to having a central processing system is that the contention points would be to
+                //     copy the messages received in the worker's inbox to the node. I think this is going to require
+                //     the reintroduction of the `Envelope` idea but instead of it being used to share memory_pool
+                //     information it would just include information from where the message came from. (is this true?)
+                // 3. Workers are in charge and the node is just the connective tissue that can handle routing messages
+                // between workers.
+                //     a. worker 1 recv message
+                //     b. worker 1 push to node queue
+                //     c. node process message
+                //     d. node route message to worker 4
+                // 4. More aggressive sharing of memory between workers. What I mean by this is that we could
+                // have the workers access global (to the process) resources. I think that this would lead to high
+                // contention touch points. For example, publishing a message would talk to a global topic manager,
+                // which would require both the topic_manager and topic to be locked as the message was processed
+                // or routed.
+                // },
+                // .subscribe => {},
+                // .unsubscribe => {},
+                // else => {},
             }
         }
 

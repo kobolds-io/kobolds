@@ -25,7 +25,7 @@ const PublishOptions = struct {};
 const SubscribeOptions = struct {};
 
 pub const ClientConfig = struct {
-    max_connections: u16 = 1024,
+    max_connections: u16 = 100,
     memory_pool_capacity: usize = 1_000,
 };
 
@@ -219,6 +219,9 @@ pub const Client = struct {
         while (deadline > std.time.nanoTimestamp()) {
             if (conn.state == .connected) return conn;
 
+            // FIX: this is some baaaaad code. There should instead be a signal or channel that this thread could
+            // wait on instead. Since this call happens on a foreground thread, an unbuffered channel seems the most
+            // appropriate.
             std.time.sleep(constants.io_tick_ms * std.time.ns_per_ms);
         } else {
             return error.DeadlineExceeded;

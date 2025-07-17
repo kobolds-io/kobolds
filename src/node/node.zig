@@ -19,6 +19,7 @@ const Metrics = @import("./metrics.zig").Metrics;
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const MemoryPool = @import("stdx").MemoryPool;
+const RingBuffer = @import("stdx").RingBuffer;
 
 const Message = @import("../protocol/message.zig").Message;
 const Accept = @import("../protocol/message.zig").Accept;
@@ -27,6 +28,9 @@ const Connection = @import("../protocol/connection.zig").Connection;
 const Publisher = @import("../pubsub/publisher.zig").Publisher;
 const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
 const Topic = @import("../pubsub/topic.zig").Topic;
+const TopicOptions = @import("../pubsub/topic.zig").TopicOptions;
+
+const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 
 pub const PingOptions = struct {};
 
@@ -35,7 +39,7 @@ pub const NodeConfig = struct {
 
     worker_threads: usize = 3,
     max_connections: u16 = 1024,
-    memory_pool_capacity: usize = 100_000,
+    memory_pool_capacity: usize = 500_000,
     listener_configs: ?[]const ListenerConfig = null,
     outbound_configs: ?[]const OutboundConnectionConfig = null,
 
@@ -91,10 +95,11 @@ pub const Node = struct {
     memory_pool: *MemoryPool(Message),
     remotes: *std.AutoHashMap(uuid.Uuid, *Remote),
     mutex: std.Thread.Mutex,
-    // publishers: std.AutoHashMap(u128, *Publisher),
-    // subscribers: std.AutoHashMap(u128, *Subscriber),
     topics: std.StringHashMap(*Topic),
+    topics_mutex: std.Thread.Mutex,
     metrics: Metrics,
+    inbox: *RingBuffer(*Message),
+    connection_messages: *ConnectionMessages,
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
         if (config.validate()) |err_message| {
@@ -140,6 +145,12 @@ pub const Node = struct {
         memory_pool.* = try MemoryPool(Message).init(allocator, config.memory_pool_capacity);
         errdefer memory_pool.deinit();
 
+        const inbox = try allocator.create(RingBuffer(*Message));
+        errdefer allocator.destroy(inbox);
+
+        inbox.* = try RingBuffer(*Message).init(allocator, config.memory_pool_capacity);
+        errdefer inbox.deinit();
+
         const remotes = try allocator.create(std.AutoHashMap(uuid.Uuid, *Remote));
         errdefer allocator.destroy(remotes);
 
@@ -151,6 +162,12 @@ pub const Node = struct {
 
         listeners.* = std.AutoHashMap(usize, *Listener).init(allocator);
         errdefer listeners.deinit();
+
+        const connection_messages = try allocator.create(ConnectionMessages);
+        errdefer allocator.destroy(connection_messages);
+
+        connection_messages.* = ConnectionMessages.init(allocator, memory_pool);
+        errdefer connection_messages.deinit();
 
         return Self{
             .id = uuid.v7.new(),
@@ -165,11 +182,12 @@ pub const Node = struct {
             .memory_pool = memory_pool,
             .remotes = remotes,
             .listeners = listeners,
-            // .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
-            // .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
             .topics = std.StringHashMap(*Topic).init(allocator),
+            .topics_mutex = std.Thread.Mutex{},
             .mutex = std.Thread.Mutex{},
             .metrics = .{},
+            .inbox = inbox,
+            .connection_messages = connection_messages,
         };
     }
 
@@ -210,6 +228,11 @@ pub const Node = struct {
             self.allocator.destroy(topic);
         }
 
+        while (self.inbox.dequeue()) |message| {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
         self.listeners.deinit();
         self.workers.deinit();
         self.remotes.deinit();
@@ -217,15 +240,19 @@ pub const Node = struct {
         self.io.deinit();
         self.connections.deinit();
         self.topics.deinit();
+        self.inbox.deinit();
+        self.connection_messages.deinit();
 
-        self.allocator.destroy(self.io);
-        self.allocator.destroy(self.remotes);
-        self.allocator.destroy(self.listeners);
-        self.allocator.destroy(self.workers);
-        self.allocator.destroy(self.connections);
-        self.allocator.destroy(self.memory_pool);
         self.allocator.destroy(self.close_channel);
+        self.allocator.destroy(self.connection_messages);
+        self.allocator.destroy(self.connections);
         self.allocator.destroy(self.done_channel);
+        self.allocator.destroy(self.inbox);
+        self.allocator.destroy(self.io);
+        self.allocator.destroy(self.listeners);
+        self.allocator.destroy(self.memory_pool);
+        self.allocator.destroy(self.remotes);
+        self.allocator.destroy(self.workers);
     }
 
     pub fn start(self: *Self) !void {
@@ -270,8 +297,8 @@ pub const Node = struct {
                 .running => {
                     self.tick() catch unreachable;
 
-                    // self.io.run_for_ns(100 * std.time.ns_per_us) catch unreachable;
-                    self.io.run_for_ns(1 * std.time.ns_per_ms) catch unreachable;
+                    self.io.run_for_ns(100 * std.time.ns_per_us) catch unreachable;
+                    // self.io.run_for_ns(1 * std.time.ns_per_ms) catch unreachable;
                 },
                 .closing => {
                     log.info("node {}: closed", .{self.id});
@@ -368,18 +395,101 @@ pub const Node = struct {
 
         const now_ms = std.time.milliTimestamp();
         const difference = now_ms - self.metrics.last_printed_at_ms;
-        if (difference > 1_000) {
+        if (difference >= 1_000) {
             const messages_processed = self.metrics.messages_processed.load(.seq_cst);
             const delta = messages_processed - self.metrics.last_messages_processed_printed;
             self.metrics.last_messages_processed_printed = messages_processed;
             self.metrics.last_printed_at_ms = std.time.milliTimestamp();
-            log.info("tick_duration {}ms, memory_pool.available: {}, messages processed {}, delta {}", .{
+            log.info("time since last print {}ms, memory_pool.available: {}, messages processed {}, delta {}", .{
                 difference,
                 self.memory_pool.available(),
                 self.metrics.last_messages_processed_printed,
                 delta,
             });
         }
+
+        try self.gatherMessages();
+        try self.processMessages();
+
+        // {
+        //     self.topics_mutex.lock();
+        //     defer self.topics_mutex.unlock();
+
+        //     var topics_iter = self.topics.valueIterator();
+        //     while (topics_iter.next()) |topic_entry| {
+        //         const topic = topic_entry.*;
+        //         try topic.tick();
+        //     }
+        // }
+    }
+
+    fn gatherMessages(self: *Self) !void {
+        var workers_iter = self.workers.valueIterator();
+        while (workers_iter.next()) |worker_entry| {
+            if (self.inbox.available() == 0) break;
+
+            const worker = worker_entry.*;
+
+            worker.inbox_mutex.lock();
+            defer worker.inbox_mutex.unlock();
+
+            // Gather up all of the inbound messages
+            if (worker.inbox.count > 0) {
+                self.inbox.concatenateAvailable(worker.inbox);
+            }
+            if (worker.inbox.count > 0) {
+                log.debug("did not dequeue all messages from worker {}", .{worker.id});
+            }
+        }
+    }
+
+    fn processMessages(self: *Self) !void {
+        if (self.inbox.count == 0) return;
+
+        while (self.inbox.dequeue()) |message| {
+            assert(message.refs() == 1);
+            defer {
+                _ = self.metrics.messages_processed.fetchAdd(1, .seq_cst);
+                message.deref();
+                if (message.refs() == 0) self.memory_pool.destroy(message);
+            }
+
+            // TODO: figure out what kind of message this is and route it
+            switch (message.headers.message_type) {
+                .publish => {
+                    //
+
+                    // TODO: get the publisher
+                    // TODO: add this message to the publisher queue
+
+                    const topic = try self.findOrCreateTopic(message.topicName(), .{});
+                    message.ref();
+                    topic.queue.enqueue(message) catch message.deref();
+                },
+                else => {},
+            }
+        }
+
+        // TODO: topics will replicate messages to each subscriber
+        // TODO: subscriber will put messages into connection_messages
+        //     > lock required
+        // TODO: worker will gather messages for it's connections
+        //     > lock required
+        // TODO: worker will tick through it's connections
+
+        // TODO: topic gather all messages from publishers
+        //     > no lock required
+        // TODO: topic copy messages to all subscriber queues
+        //     > no lock required
+        // TODO: subscribers copy messages to connection outboxes
+        //     > maybe add to connection_messages?
+
+        // Tick every topic
+        // var topics_iter = self.topics.valueIterator();
+        // while (topics_iter.next()) |topic_entry| {
+        // const topic = topic_entry.*;
+        // try topic.tick();
+        // }
     }
 
     fn initializeWorkers(self: *Self) !void {
@@ -830,6 +940,25 @@ pub const Node = struct {
         log.info("node: {} removed connection {}", .{ self.id, conn.connection_id });
         conn.deinit();
         self.allocator.destroy(conn);
+    }
+
+    pub fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
+        _ = options;
+        // self.topics_mutex.lock();
+        // defer self.topics_mutex.unlock();
+
+        if (self.topics.get(topic_name)) |t| {
+            return t;
+        } else {
+            const topic = try self.allocator.create(Topic);
+            errdefer self.allocator.destroy(topic);
+
+            topic.* = try Topic.init(self.allocator, self.memory_pool, topic_name);
+            errdefer topic.deinit();
+
+            try self.topics.put(topic_name, topic);
+            return topic;
+        }
     }
 };
 
