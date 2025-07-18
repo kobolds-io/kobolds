@@ -21,8 +21,8 @@ const InboundConnectionConfig = @import("../protocol/connection.zig").InboundCon
 const Message = @import("../protocol/message.zig").Message;
 const Accept = @import("../protocol/message.zig").Accept;
 
-const Publisher = @import("../pubsub/publisher.zig").Publisher;
-const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
+// const Publisher = @import("../pubsub/publisher.zig").Publisher;
+// const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
 
 const WorkerState = enum {
     running,
@@ -53,8 +53,8 @@ pub const Worker = struct {
     state: WorkerState,
     transactions: std.AutoHashMap(u128, *UnbufferedChannel(*Message)),
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
-    publishers: std.AutoHashMap(u128, *Publisher),
-    subscribers: std.AutoHashMap(u128, *Subscriber),
+    // publishers: std.AutoHashMap(u128, *Publisher),
+    // subscribers: std.AutoHashMap(u128, *Subscriber),
     inbox: *RingBuffer(*Message),
     inbox_mutex: std.Thread.Mutex,
 
@@ -103,8 +103,8 @@ pub const Worker = struct {
             .outbox_channel = outbox_channel,
             .connection_messages = std.AutoHashMap(u128, *RingBuffer(*Message)).init(allocator),
             .transactions = std.AutoHashMap(u128, *UnbufferedChannel(*Message)).init(allocator),
-            .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
-            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
+            // .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
+            // .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
             .inbox = inbox,
             .inbox_mutex = std.Thread.Mutex{},
         };
@@ -148,17 +148,17 @@ pub const Worker = struct {
             }
         }
 
-        var publishers_iter = self.publishers.valueIterator();
-        while (publishers_iter.next()) |publisher_entry| {
-            const publisher = publisher_entry.*;
-            self.allocator.destroy(publisher);
-        }
+        // var publishers_iter = self.publishers.valueIterator();
+        // while (publishers_iter.next()) |publisher_entry| {
+        //     const publisher = publisher_entry.*;
+        //     self.allocator.destroy(publisher);
+        // }
 
-        var subscribers_iter = self.subscribers.valueIterator();
-        while (subscribers_iter.next()) |subscriber_entry| {
-            const subscriber = subscriber_entry.*;
-            self.allocator.destroy(subscriber);
-        }
+        // var subscribers_iter = self.subscribers.valueIterator();
+        // while (subscribers_iter.next()) |subscriber_entry| {
+        //     const subscriber = subscriber_entry.*;
+        //     self.allocator.destroy(subscriber);
+        // }
 
         while (self.inbox.dequeue()) |message| {
             message.deref();
@@ -171,8 +171,8 @@ pub const Worker = struct {
         self.io.deinit();
         self.uninitialized_connections.deinit();
         self.transactions.deinit();
-        self.publishers.deinit();
-        self.subscribers.deinit();
+        // self.publishers.deinit();
+        // self.subscribers.deinit();
         self.inbox.deinit();
 
         self.allocator.destroy(self.inbox);

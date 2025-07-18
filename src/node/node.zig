@@ -457,11 +457,6 @@ pub const Node = struct {
             // TODO: figure out what kind of message this is and route it
             switch (message.headers.message_type) {
                 .publish => {
-                    //
-
-                    // TODO: get the publisher
-                    // TODO: add this message to the publisher queue
-
                     const topic = try self.findOrCreateTopic(message.topicName(), .{});
                     message.ref();
                     topic.queue.enqueue(message) catch message.deref();
@@ -485,11 +480,19 @@ pub const Node = struct {
         //     > maybe add to connection_messages?
 
         // Tick every topic
-        // var topics_iter = self.topics.valueIterator();
-        // while (topics_iter.next()) |topic_entry| {
-        // const topic = topic_entry.*;
-        // try topic.tick();
-        // }
+        var topics_iter = self.topics.valueIterator();
+        while (topics_iter.next()) |topic_entry| {
+            const topic = topic_entry.*;
+            try topic.tick();
+            var subscribers_iter = topic.subscribers.valueIterator();
+            while (subscribers_iter.next()) |subscriber_entry| {
+                _ = subscriber_entry;
+
+                // const subscriber: *Subscriber = subscriber_entry.*;
+                // self.connection_messages.append(subscriber.conn_id, message: *Message)
+                // subscriber.conn_id
+            }
+        }
     }
 
     fn initializeWorkers(self: *Self) !void {

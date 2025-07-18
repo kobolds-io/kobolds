@@ -40,8 +40,8 @@ pub const Topic = struct {
         queue.* = try RingBuffer(*Message).init(allocator, constants.topic_max_queue_capacity);
         errdefer queue.deinit();
 
-        const tmp_buffer = try allocator.alloc(*Message, constants.subscriber_max_queue_capacity);
-        errdefer allocator.free(tmp_buffer);
+        const tmp_copy_buffer = try allocator.alloc(*Message, constants.subscriber_max_queue_capacity);
+        errdefer allocator.free(tmp_copy_buffer);
 
         return Self{
             .allocator = allocator,
@@ -51,7 +51,7 @@ pub const Topic = struct {
             .subscriber_queues = std.ArrayList(*RingBuffer(*Message)).init(allocator),
             .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
             .topic_name = topic_name,
-            .tmp_copy_buffer = tmp_buffer,
+            .tmp_copy_buffer = tmp_copy_buffer,
         };
     }
 
