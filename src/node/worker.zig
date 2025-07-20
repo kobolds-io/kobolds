@@ -11,6 +11,7 @@ const utils = @import("../utils.zig");
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const BufferedChannel = @import("stdx").BufferedChannel;
 const RingBuffer = @import("stdx").RingBuffer;
+const Envelope = @import("../data_structures/envelope.zig").Envelope;
 
 const IO = @import("../io.zig").IO;
 const Node = @import("./node.zig").Node;
@@ -43,6 +44,8 @@ pub const Worker = struct {
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
     inbox: *RingBuffer(*Message),
     inbox_mutex: std.Thread.Mutex,
+    outbox: *RingBuffer(Envelope),
+    outbox_mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, id: usize, node: *Node) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -60,6 +63,12 @@ pub const Worker = struct {
 
         inbox.* = try RingBuffer(*Message).init(allocator, node.memory_pool.capacity);
         errdefer inbox.deinit();
+
+        const outbox = try allocator.create(RingBuffer(Envelope));
+        errdefer allocator.destroy(outbox);
+
+        outbox.* = try RingBuffer(Envelope).init(allocator, node.memory_pool.capacity);
+        errdefer outbox.deinit();
 
         const io = try allocator.create(IO);
         errdefer allocator.destroy(io);
@@ -81,6 +90,8 @@ pub const Worker = struct {
             .transactions = std.AutoHashMap(u128, *UnbufferedChannel(*Message)).init(allocator),
             .inbox = inbox,
             .inbox_mutex = std.Thread.Mutex{},
+            .outbox = outbox,
+            .outbox_mutex = std.Thread.Mutex{},
         };
     }
 
@@ -106,13 +117,21 @@ pub const Worker = struct {
             if (message.refs() == 0) self.node.memory_pool.destroy(message);
         }
 
+        while (self.outbox.dequeue()) |envelope| {
+            const message = envelope.message;
+            message.deref();
+            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+        }
+
+        self.inbox.deinit();
+        self.outbox.deinit();
         self.connections.deinit();
         self.io.deinit();
         self.uninitialized_connections.deinit();
         self.transactions.deinit();
-        self.inbox.deinit();
 
         self.allocator.destroy(self.inbox);
+        self.allocator.destroy(self.outbox);
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
         self.allocator.destroy(self.io);
