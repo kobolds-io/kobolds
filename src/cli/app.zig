@@ -8,8 +8,6 @@ const constants = @import("../constants.zig");
 const Mailbox = @import("../data_structures/mailbox.zig").Mailbox;
 const Connection = @import("../protocol/connection.zig").Connection;
 const Message = @import("../protocol/message.zig").Message;
-// const Topic = @import("../pubsub/topic.zig").Topic;
-// const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
 
 const IO = @import("../io.zig").IO;
 
@@ -459,94 +457,6 @@ pub fn nodeConnect() !void {
     log.warn("sigint received", .{});
 }
 
-// pub fn nodeReply() !void {
-// log.debug("reply config {any}", .{reply_config});
-// var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-// const allocator = gpa.allocator();
-// defer _ = gpa.deinit();
-//
-// var client = try Client.init(allocator, client_config);
-// defer client.deinit();
-//
-// // spin up the client worker thread
-// try client.run();
-// defer client.close();
-//
-// const connect_deadline_ms: i64 = 1000;
-// const conn = try client.connect(connect_deadline_ms);
-// _ = conn; // NOTE: i'm actually not to sure if I want to give users access to the connection
-//
-// const handler_fn = struct {
-//     fn handle(request: *Message, reply: *Message) void {
-//         log.debug("handling request!", .{});
-//         // echo this back
-//         reply.setBody(request.body());
-//     }
-// }.handle;
-//
-// try client.advertise("/my/topic", handler_fn);
-// defer client.unadvertise("/my/topic") catch unreachable;
-//
-// try registerSigintHandler();
-// while (!sigint_received) {
-//     std.time.sleep(1 * std.time.ns_per_ms);
-// }
-// }
-
-// pub fn nodeRequest() !void {}
-
-// pub fn nodeBench() !void {
-//     // creating a client to communicate with the node
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     const allocator = gpa.allocator();
-//     defer _ = gpa.deinit();
-
-//     var client = try Client.init(allocator, client_config);
-//     defer client.deinit();
-
-//     // run the background client thread
-//     try client.start();
-//     defer client.stop();
-
-//     for (0..client.config.max_connections) |_| {
-//         const conn = try client.connect();
-//         errdefer client.disconnect(conn);
-//     }
-
-//     defer {
-//         for (0..client.config.max_connections) |_| {
-//             var conn_iter = client.connections.valueIterator();
-//             while (conn_iter.next()) |conn_ptr| {
-//                 const conn = conn_ptr.*;
-//                 errdefer client.disconnect(conn);
-//             }
-//         }
-//     }
-
-//     const body = "";
-//     // const body = "a" ** constants.message_max_body_size;
-//     const topic_name = "/test";
-
-//     while (true) {
-//         var conn_iter = client.connections.valueIterator();
-//         while (conn_iter.next()) |conn_ptr| {
-//             const conn = conn_ptr.*;
-//             client.publish(conn, topic_name, body, .{}) catch |err| switch (err) {
-//                 error.OutOfMemory => {
-//                     std.time.sleep(1 * std.time.ns_per_ms);
-//                     continue;
-//                 },
-//                 else => {
-//                     std.time.sleep(1 * std.time.ns_per_ms);
-//                     continue;
-
-//                     // @panic("unhandled publish error");
-//                 },
-//             };
-//         }
-//     }
-// }
-
 pub fn nodePublish() !void {
     // creating a client to communicate with the node
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -602,7 +512,7 @@ pub fn nodePublish() !void {
         for (connections.items) |conn| {
             client.publish(conn, topic_name, body, .{}) catch |err| {
                 log.err("error {any}", .{err});
-                std.time.sleep(100 * std.time.ns_per_ms);
+                std.time.sleep(10 * std.time.ns_per_ms);
                 continue;
             };
         }

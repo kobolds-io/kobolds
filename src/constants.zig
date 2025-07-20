@@ -25,6 +25,9 @@ pub const connection_send_buffer_size = (1024 * 256) - message_max_size;
 /// The number of milliseconds the IO instance will wait until it flushes
 /// submissions and completions.
 pub const io_tick_ms: u63 = 1;
+/// The number of microseconds the IO instance will wait until it flushes
+/// submissions and completions.
+pub const io_tick_us: u63 = 100;
 
 /// Number of entries used for the submission and completion queues
 pub const io_uring_entries: u16 = 256;

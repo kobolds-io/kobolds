@@ -15,18 +15,8 @@ pub const Subscriber = struct {
     conn_id: uuid.Uuid,
     key: u128,
     queue: *RingBuffer(*Message),
-    topic: *Topic,
-    worker_id: usize,
 
-    pub fn init(
-        allocator: std.mem.Allocator,
-        worker_id: usize,
-        conn_id: uuid.Uuid,
-        queue_capacity: usize,
-        topic: *Topic,
-    ) !Self {
-        const key = utils.generateKey(topic.topic_name, conn_id);
-
+    pub fn init(allocator: std.mem.Allocator, key: u128, conn_id: uuid.Uuid, queue_capacity: usize) !Self {
         const queue = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(queue);
 
@@ -36,10 +26,8 @@ pub const Subscriber = struct {
         return Self{
             .allocator = allocator,
             .conn_id = conn_id,
-            .worker_id = worker_id,
             .key = key,
             .queue = queue,
-            .topic = topic,
         };
     }
 

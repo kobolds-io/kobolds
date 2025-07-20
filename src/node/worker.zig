@@ -22,6 +22,8 @@ const InboundConnectionConfig = @import("../protocol/connection.zig").InboundCon
 const Message = @import("../protocol/message.zig").Message;
 const Accept = @import("../protocol/message.zig").Accept;
 
+const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
+
 const WorkerState = enum {
     running,
     closing,
@@ -40,12 +42,12 @@ pub const Worker = struct {
     io: *IO,
     node: *Node,
     state: WorkerState,
-    transactions: std.AutoHashMap(u128, *UnbufferedChannel(*Message)),
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
     inbox: *RingBuffer(*Message),
     inbox_mutex: std.Thread.Mutex,
     outbox: *RingBuffer(Envelope),
     outbox_mutex: std.Thread.Mutex,
+    subscribers: std.AutoHashMap(u128, *Subscriber),
 
     pub fn init(allocator: std.mem.Allocator, id: usize, node: *Node) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -87,11 +89,11 @@ pub const Worker = struct {
             .node = node,
             .state = .closed,
             .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
-            .transactions = std.AutoHashMap(u128, *UnbufferedChannel(*Message)).init(allocator),
             .inbox = inbox,
             .inbox_mutex = std.Thread.Mutex{},
             .outbox = outbox,
             .outbox_mutex = std.Thread.Mutex{},
+            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
         };
     }
 
@@ -123,12 +125,24 @@ pub const Worker = struct {
             if (message.refs() == 0) self.node.memory_pool.destroy(message);
         }
 
+        var subscribers_iter = self.subscribers.valueIterator();
+        while (subscribers_iter.next()) |subscriber_entry| {
+            const subscriber = subscriber_entry.*;
+            while (subscriber.queue.dequeue()) |message| {
+                message.deref();
+                if (message.refs() == 0) self.node.memory_pool.destroy(message);
+            }
+
+            subscriber.deinit();
+            self.allocator.destroy(subscriber);
+        }
+
         self.inbox.deinit();
         self.outbox.deinit();
         self.connections.deinit();
         self.io.deinit();
         self.uninitialized_connections.deinit();
-        self.transactions.deinit();
+        self.subscribers.deinit();
 
         self.allocator.destroy(self.inbox);
         self.allocator.destroy(self.outbox);
@@ -153,7 +167,7 @@ pub const Worker = struct {
             switch (self.state) {
                 .running => {
                     self.tick() catch unreachable;
-                    self.io.run_for_ns(100 * std.time.ns_per_us) catch unreachable;
+                    self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch unreachable;
                     // self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
                 },
                 .closing => {
@@ -186,9 +200,9 @@ pub const Worker = struct {
     pub fn tick(self: *Self) !void {
         try self.tickConnections();
         try self.tickUninitializedConnections();
-
-        try self.processConnectionMessages();
-        try self.processUninitializedConnectionMessages();
+        try self.processInboundConnectionMessages();
+        // try self.processUninitializedConnectionMessages();
+        try self.processOutboundConnectionMessages();
     }
 
     pub fn addInboundConnection(self: *Self, socket: posix.socket_t) !void {
@@ -221,19 +235,6 @@ pub const Worker = struct {
 
         try self.connections.put(conn_id, connection);
         errdefer _ = self.connections.remove(conn_id);
-
-        // // FIX: this should all be a method on the `node`
-        // self.node.connection_messages_mutex.lock();
-        // defer self.node.connection_messages_mutex.unlock();
-
-        // const conn_queue = try self.node.allocator.create(RingBuffer(*Message));
-        // errdefer self.node.allocator.destroy(conn_queue);
-
-        // conn_queue.* = try RingBuffer(*Message).init(self.node.allocator, constants.connection_outbox_capacity);
-        // errdefer conn_queue.deinit();
-
-        // try self.node.connection_messages.put(conn_id, conn_queue);
-        // errdefer _ = self.node.connection_messages.remove(conn_id);
 
         const accept_message = self.node.memory_pool.create() catch |err| {
             log.err("unable to create an accept message for connection {any}", .{err});
@@ -324,11 +325,6 @@ pub const Worker = struct {
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {
-        self.node.connection_messages_mutex.lock();
-        defer self.node.connection_messages_mutex.unlock();
-
-        _ = self.node.connection_messages.remove(conn.connection_id);
-
         // FIX: remove subscribers
         // FIX: remove publishers
         // FIX: remove repliers
@@ -351,11 +347,6 @@ pub const Worker = struct {
                 try self.cleanupUninitializedConnection(tmp_id, conn);
                 break;
             }
-
-            // // FIX: there should be a better check for this
-            // if (self.node.memory_pool.available() < 100_000) {
-            //     return;
-            // }
 
             conn.tick() catch |err| {
                 log.err("could not tick uninitialized_connection error: {any}", .{err});
@@ -391,33 +382,14 @@ pub const Worker = struct {
                 continue;
             }
 
-            // // FIX: there should be a better check for this
-            // if (self.node.memory_pool.available() < 100_000) {
-            //     return;
-            // }
-
-            // self.node.connection_messages_mutex.lock();
-            // defer self.node.connection_messages_mutex.unlock();
-
-            // if (self.node.connection_messages.get(conn.connection_id)) |conn_queue| {
-            //     conn.outbox.concatenateAvailable(conn_queue);
-            // } else {
-            //     log.err(
-            //         "connection is not associated with connection_messages. id: {}, count: {}",
-            //         .{ conn.connection_id, self.node.connection_messages.count() },
-            //     );
-            // }
-
             conn.tick() catch |err| {
                 log.err("could not tick connection error: {any}", .{err});
                 continue;
             };
-
-            // try self.process(conn);
         }
     }
 
-    fn processConnectionMessages(self: *Self) !void {
+    fn processInboundConnectionMessages(self: *Self) !void {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
@@ -432,6 +404,7 @@ pub const Worker = struct {
                 assert(message.refs() == 1);
 
                 switch (message.headers.message_type) {
+                    .accept => try self.handleAcceptMessage(conn, message),
                     .ping => try self.handlePingMessage(conn, message),
                     .pong => try self.handlePongMessage(conn, message),
                     // .subscribe => try self.handleSubscribeMessage(conn, message),
@@ -473,6 +446,26 @@ pub const Worker = struct {
                         break;
                     },
                 }
+            }
+        }
+    }
+
+    fn processOutboundConnectionMessages(self: *Self) !void {
+        self.outbox_mutex.lock();
+        defer self.outbox_mutex.unlock();
+
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        while (self.outbox.dequeue()) |envelope| {
+            const message = envelope.message;
+            if (self.connections.get(envelope.connection_id)) |connection| {
+                // FIX: there should be a handler for this issue
+                try connection.outbox.enqueue(message);
+            } else {
+                // The connection has disappeared since and this should be destroyed
+                message.deref();
+                if (message.refs() == 0) self.node.memory_pool.destroy(message);
             }
         }
     }
@@ -559,155 +552,6 @@ pub const Worker = struct {
             message.headers.origin_id,
             message.headers.connection_id,
         });
-    }
-
-    fn process(self: *Self, conn: *Connection) !void {
-        // check to see if there are messages
-        if (conn.inbox.count == 0) return;
-
-        while (conn.inbox.dequeue()) |message| {
-            switch (message.headers.message_type) {
-                .accept => {
-                    defer {
-                        message.deref();
-                        if (message.refs() == 0) self.node.memory_pool.destroy(message);
-                    }
-
-                    // ensure that this connection is not fully connected
-                    assert(conn.state != .connected);
-
-                    switch (conn.connection_type) {
-                        .outbound => {
-                            assert(conn.connection_id == 0);
-                            // An error here would be a protocol error
-                            assert(conn.remote_id != message.headers.origin_id);
-                            assert(conn.connection_id != message.headers.connection_id);
-
-                            conn.connection_id = message.headers.connection_id;
-                            conn.remote_id = message.headers.origin_id;
-
-                            // enqueue a message to immediately convey the node id of this Node
-                            message.headers.origin_id = conn.origin_id;
-                            message.headers.connection_id = conn.connection_id;
-
-                            message.ref();
-                            try conn.outbox.enqueue(message);
-
-                            assert(conn.connection_type == .outbound);
-
-                            conn.state = .connected;
-                            log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
-                                conn.origin_id,
-                                conn.connection_id,
-                                conn.remote_id,
-                            });
-                        },
-                        .inbound => {
-                            assert(conn.connection_id == message.headers.connection_id);
-                            assert(conn.origin_id != message.headers.origin_id);
-
-                            conn.remote_id = message.headers.origin_id;
-                            conn.state = .connected;
-                            log.info("inbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
-                                conn.origin_id,
-                                conn.connection_id,
-                                conn.remote_id,
-                            });
-                        },
-                    }
-                },
-                .ping => {
-                    log.debug("received ping from origin_id: {}, connection_id: {}", .{
-                        message.headers.origin_id,
-                        message.headers.connection_id,
-                    });
-                    // Since this is a `ping` we don't need to do any extra work to figure out how to respond
-                    message.headers.message_type = .pong;
-                    message.headers.origin_id = self.node.id;
-                    message.headers.connection_id = conn.connection_id;
-                    message.setTransactionId(message.transactionId());
-                    message.setErrorCode(.ok);
-
-                    assert(message.refs() == 1);
-
-                    if (conn.outbox.enqueue(message)) |_| {} else |err| {
-                        log.err("Failed to enqueue message to outbox: {}", .{err});
-                        message.deref(); // Undo reference if enqueue fails
-                    }
-                },
-                .pong => {
-                    defer {
-                        message.deref();
-                        if (message.refs() == 0) self.node.memory_pool.destroy(message);
-                    }
-
-                    log.debug("received pong from origin_id: {}, connection_id: {}", .{
-                        message.headers.origin_id,
-                        message.headers.connection_id,
-                    });
-                },
-                else => {
-                    self.inbox_mutex.lock();
-                    defer self.inbox_mutex.unlock();
-
-                    assert(message.refs() == 1);
-                    self.inbox.enqueue(message) catch |err| {
-                        try conn.inbox.enqueue(message);
-
-                        log.err("could not enqueue message {any}", .{err});
-                    };
-                },
-                // .publish => {
-                // // 1. get publisher from publishers
-                // // 2. publish to publisher topic
-                // const publisher_key = utils.generateKey(message.topicName(), conn.connection_id);
-                // var publisher: *Publisher = undefined;
-                // if (self.publishers.get(publisher_key)) |p| {
-                //     publisher = p;
-                // } else {
-                //     const topic = try self.node.findOrCreateTopic(message.topicName(), .{});
-
-                //     publisher = try self.allocator.create(Publisher);
-                //     errdefer self.allocator.destroy(publisher);
-
-                //     publisher.* = Publisher.new(conn.connection_id, topic);
-                //     try self.publishers.put(publisher_key, publisher);
-                // }
-
-                // try publisher.publish(message);
-
-                // FIX: How can i hook up messages received in the worker to more of a global router?
-                // this is a point of high contention as it requires the worker and the router to sync
-                // at some point during the processing of the message.
-                //
-                // 1. have the worker fill up a queue and simply wait for the queue to be
-                // processed by the node.
-                // 2. Make the node perform a collection/processing operation. This means that there would still
-                // be a central thread in which all messages are processed but it would basically mean that the
-                // workers are restricted to just sending/receiving messages (ticking connections)
-                //     the benefit to having a central processing system is that the contention points would be to
-                //     copy the messages received in the worker's inbox to the node. I think this is going to require
-                //     the reintroduction of the `Envelope` idea but instead of it being used to share memory_pool
-                //     information it would just include information from where the message came from. (is this true?)
-                // 3. Workers are in charge and the node is just the connective tissue that can handle routing messages
-                // between workers.
-                //     a. worker 1 recv message
-                //     b. worker 1 push to node queue
-                //     c. node process message
-                //     d. node route message to worker 4
-                // 4. More aggressive sharing of memory between workers. What I mean by this is that we could
-                // have the workers access global (to the process) resources. I think that this would lead to high
-                // contention touch points. For example, publishing a message would talk to a global topic manager,
-                // which would require both the topic_manager and topic to be locked as the message was processed
-                // or routed.
-                // },
-                // .subscribe => {},
-                // .unsubscribe => {},
-                // else => {},
-            }
-        }
-
-        assert(conn.inbox.count == 0);
     }
 
     fn closeAllConnections(self: *Self) bool {
