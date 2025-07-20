@@ -16,9 +16,11 @@ pub const Subscriber = struct {
     key: u128,
     queue: *RingBuffer(*Message),
     topic: *Topic,
+    worker_id: usize,
 
     pub fn init(
         allocator: std.mem.Allocator,
+        worker_id: usize,
         conn_id: uuid.Uuid,
         queue_capacity: usize,
         topic: *Topic,
@@ -34,6 +36,7 @@ pub const Subscriber = struct {
         return Self{
             .allocator = allocator,
             .conn_id = conn_id,
+            .worker_id = worker_id,
             .key = key,
             .queue = queue,
             .topic = topic,

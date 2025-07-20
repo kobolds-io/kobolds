@@ -31,6 +31,7 @@ const Topic = @import("../pubsub/topic.zig").Topic;
 const TopicOptions = @import("../pubsub/topic.zig").TopicOptions;
 
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
+const Envelope = @import("../data_structures/envelope.zig").Envelope;
 
 pub const PingOptions = struct {};
 
@@ -100,8 +101,9 @@ pub const Node = struct {
     metrics: Metrics,
     inbox: *RingBuffer(*Message),
     connection_messages: std.AutoHashMap(u128, *RingBuffer(*Message)),
-    // connection_messages: *ConnectionMessages,
     connection_messages_mutex: std.Thread.Mutex,
+    worker_envelopes: std.AutoHashMap(usize, *RingBuffer(Envelope)),
+    worker_envelopes_mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
         if (config.validate()) |err_message| {
@@ -185,6 +187,8 @@ pub const Node = struct {
             .inbox = inbox,
             .connection_messages = std.AutoHashMap(u128, *RingBuffer(*Message)).init(allocator),
             .connection_messages_mutex = std.Thread.Mutex{},
+            .worker_envelopes = std.AutoHashMap(usize, *RingBuffer(Envelope)).init(allocator),
+            .worker_envelopes_mutex = std.Thread.Mutex{},
         };
     }
 
@@ -242,6 +246,20 @@ pub const Node = struct {
             self.allocator.destroy(queue);
         }
 
+        var worker_envelopes_iter = self.worker_envelopes.valueIterator();
+        while (worker_envelopes_iter.next()) |worker_envelopes_entry| {
+            const worker_envelopes = worker_envelopes_entry.*;
+
+            while (worker_envelopes.dequeue()) |envelope| {
+                const message = envelope.message;
+                message.deref();
+                if (message.refs() == 0) self.memory_pool.destroy(message);
+            }
+
+            worker_envelopes.deinit();
+            self.allocator.destroy(worker_envelopes);
+        }
+
         self.listeners.deinit();
         self.workers.deinit();
         self.remotes.deinit();
@@ -250,7 +268,8 @@ pub const Node = struct {
         self.connections.deinit();
         self.topics.deinit();
         self.inbox.deinit();
-        self.connection_messages.deinit();
+        // self.connection_messages.deinit();
+        self.worker_envelopes.deinit();
 
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.connections);
@@ -383,12 +402,12 @@ pub const Node = struct {
         }
 
         try self.maybeAddInboundConnections();
-        try self.gatherMessages();
+        try self.gatherWorkerInboxes();
         try self.processMessages();
         try self.distributeMessages();
     }
 
-    fn gatherMessages(self: *Self) !void {
+    fn gatherWorkerInboxes(self: *Self) !void {
         var workers_iter = self.workers.valueIterator();
         while (workers_iter.next()) |worker_entry| {
             if (self.inbox.available() == 0) break;
@@ -398,13 +417,9 @@ pub const Node = struct {
             worker.inbox_mutex.lock();
             defer worker.inbox_mutex.unlock();
 
-            // Gather up all of the inbound messages
-            if (worker.inbox.count > 0) {
-                self.inbox.concatenateAvailable(worker.inbox);
-            }
-            if (worker.inbox.count > 0) {
-                log.debug("did not dequeue all messages from worker {}", .{worker.id});
-            }
+            if (worker.inbox.count == 0) continue;
+
+            self.inbox.concatenateAvailable(worker.inbox);
         }
     }
 
@@ -423,67 +438,9 @@ pub const Node = struct {
                     if (message.refs() == 0) self.memory_pool.destroy(message);
                 }
 
-                // TODO: figure out what kind of message this is and route it
                 switch (message.headers.message_type) {
-                    .publish => {
-                        const topic = try self.findOrCreateTopic(message.topicName(), .{});
-                        if (topic.queue.available() == 0) {
-                            try topic.tick();
-                        }
-                        message.ref();
-                        topic.queue.enqueue(message) catch {
-                            log.err("could not enqueue message in topic {s}", .{message.topicName()});
-                            message.deref();
-                            break;
-                        };
-                    },
-                    .subscribe => {
-                        // NOTE: this should probably just be done in the worker???
-                        const topic = try self.findOrCreateTopic(message.topicName(), .{});
-
-                        const subscriber = try self.allocator.create(Subscriber);
-                        errdefer self.allocator.destroy(subscriber);
-
-                        subscriber.* = try Subscriber.init(
-                            self.allocator,
-                            message.headers.connection_id,
-                            constants.subscriber_max_queue_capacity,
-                            topic,
-                        );
-                        errdefer subscriber.deinit();
-
-                        try topic.subscribers.put(subscriber.key, subscriber);
-                        errdefer _ = topic.subscribers.remove(subscriber.key);
-
-                        self.connection_messages_mutex.lock();
-                        defer self.connection_messages_mutex.unlock();
-
-                        const reply = try self.memory_pool.create();
-                        errdefer self.memory_pool.destroy(reply);
-
-                        reply.* = Message.new();
-                        reply.ref();
-                        reply.headers.message_type = .reply;
-                        reply.setTransactionId(message.transactionId());
-                        reply.setTopicName(message.topicName());
-                        reply.setErrorCode(.ok);
-
-                        var queue: *RingBuffer(*Message) = undefined;
-                        if (self.connection_messages.get(subscriber.conn_id)) |q| {
-                            queue = q;
-                        } else {
-                            const q = try self.allocator.create(RingBuffer(*Message));
-                            errdefer self.allocator.destroy(q);
-
-                            q.* = try RingBuffer(*Message).init(self.allocator, constants.connection_outbox_capacity);
-                            errdefer q.deinit();
-
-                            try self.connection_messages.put(subscriber.conn_id, q);
-                            queue = q;
-                        }
-
-                        try queue.enqueue(reply);
-                    },
+                    .publish => self.handlePublish(message) catch break,
+                    // .subscribe => try self.handleSubscribe(message),
                     else => {},
                 }
             }
@@ -497,46 +454,29 @@ pub const Node = struct {
     }
 
     fn distributeMessages(self: *Self) !void {
-        self.connection_messages_mutex.lock();
-        defer self.connection_messages_mutex.unlock();
+        _ = self;
+        // self.connection_messages_mutex.lock();
+        // defer self.connection_messages_mutex.unlock();
 
-        var topics_iter = self.topics.valueIterator();
-        while (topics_iter.next()) |topic_entry| {
-            const topic = topic_entry.*;
+        // var topics_iter = self.topics.valueIterator();
+        // while (topics_iter.next()) |topic_entry| {
+        //     const topic = topic_entry.*;
 
-            var subscribers_iter = topic.subscribers.valueIterator();
-            while (subscribers_iter.next()) |subscriber_entry| {
-                const subscriber: *Subscriber = subscriber_entry.*;
-                if (subscriber.queue.isEmpty()) continue;
+        //     var subscribers_iter = topic.subscribers.valueIterator();
+        //     while (subscribers_iter.next()) |subscriber_entry| {
+        //         const subscriber: *Subscriber = subscriber_entry.*;
+        //         if (subscriber.queue.isEmpty()) continue;
 
-                if (self.connection_messages.get(subscriber.conn_id)) |conn_queue| {
-                    conn_queue.concatenateAvailable(subscriber.queue);
-                } else {
-                    log.err("subscriber is not associated with a connection! {}", .{subscriber.conn_id});
-                }
-            }
-        }
+        //         if (self.connection_messages.get(subscriber.conn_id)) |conn_queue| {
+        //             conn_queue.concatenateAvailable(subscriber.queue);
+        //         } else {
+        //             log.err("subscriber is not associated with a connection! {}", .{subscriber.conn_id});
+        //         }
+        //     }
+        // }
 
         // TODO: add repliers
         // TODO: add requestors
-    }
-
-    fn distributeMessages2(self: *Self) !void {
-        var workers_iter = self.workers.valueIterator();
-        while (workers_iter.next()) |worker_entry| {
-            const worker = worker_entry.*;
-
-            worker.outbox_mutex.lock();
-            defer worker.outbox_mutex.unlock();
-
-            // Gather up all of the outbound messages
-            // worker.outbox.concatenateAvailable(worker_messages);
-
-        }
-
-        // TODO:
-        //     1. loop over all the processed messages
-
     }
 
     fn initializeWorkers(self: *Self) !void {
@@ -551,6 +491,17 @@ pub const Node = struct {
 
             try self.workers.put(id, worker);
             errdefer _ = self.workers.remove(id);
+
+            const worker_envelopes = try self.allocator.create(RingBuffer(Envelope));
+            errdefer self.allocator.destroy(worker_envelopes);
+
+            worker_envelopes.* = try RingBuffer(Envelope).init(
+                self.allocator,
+                constants.default_worker_message_pool_capacity,
+            );
+            errdefer worker_envelopes.deinit();
+
+            try self.worker_envelopes.put(id, worker_envelopes);
         }
     }
 
@@ -746,6 +697,68 @@ pub const Node = struct {
 
         return ch;
     }
+
+    fn handlePublish(self: *Self, message: *Message) !void {
+        // Publishes actually don't care about the origin of the message so much. Instead, they care much more about
+        // the destination of the mssage. The topic is in charge of distributing messages to subscribers. Subscribers
+        // are in charge of attaching metadata as to the destination of the message
+        const topic = try self.findOrCreateTopic(message.topicName(), .{});
+        if (topic.queue.available() == 0) {
+            try topic.tick();
+        }
+        message.ref();
+        errdefer message.deref();
+        try topic.queue.enqueue(message);
+    }
+
+    // fn handleSubscribe(self: *Self, message: *Message) !void {
+    //     // NOTE: this should probably just be done in the worker???
+    //     const topic = try self.findOrCreateTopic(message.topicName(), .{});
+
+    //     const subscriber = try self.allocator.create(Subscriber);
+    //     errdefer self.allocator.destroy(subscriber);
+
+    //     subscriber.* = try Subscriber.init(
+    //         self.allocator,
+    //         0, // TODO: fix this
+    //         message.headers.connection_id,
+    //         constants.subscriber_max_queue_capacity,
+    //         topic,
+    //     );
+    //     errdefer subscriber.deinit();
+
+    //     try topic.subscribers.put(subscriber.key, subscriber);
+    //     errdefer _ = topic.subscribers.remove(subscriber.key);
+
+    //     self.connection_messages_mutex.lock();
+    //     defer self.connection_messages_mutex.unlock();
+
+    //     const reply = try self.memory_pool.create();
+    //     errdefer self.memory_pool.destroy(reply);
+
+    //     reply.* = Message.new();
+    //     reply.ref();
+    //     reply.headers.message_type = .reply;
+    //     reply.setTransactionId(message.transactionId());
+    //     reply.setTopicName(message.topicName());
+    //     reply.setErrorCode(.ok);
+
+    //     var queue: *RingBuffer(*Message) = undefined;
+    //     if (self.connection_messages.get(subscriber.conn_id)) |q| {
+    //         queue = q;
+    //     } else {
+    //         const q = try self.allocator.create(RingBuffer(*Message));
+    //         errdefer self.allocator.destroy(q);
+
+    //         q.* = try RingBuffer(*Message).init(self.allocator, constants.connection_outbox_capacity);
+    //         errdefer q.deinit();
+
+    //         try self.connection_messages.put(subscriber.conn_id, q);
+    //         queue = q;
+    //     }
+
+    //     try queue.enqueue(reply);
+    // }
 
     // fn process(self: *Self, conn: *Connection) !void {
     //     // check to see if there are messages

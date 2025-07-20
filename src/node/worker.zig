@@ -184,93 +184,11 @@ pub const Worker = struct {
     }
 
     pub fn tick(self: *Self) !void {
-        // TODO: gather messages from node
-        // TODO: process messages from node
-        // TODO: distribute messages from node
-        //
-        // TODO: gather messages from connections
-        // TODO: process messages from connections
-        // TODO: distrobute messages from connections
+        try self.tickConnections();
+        try self.tickUninitializedConnections();
 
-        // FIX: there should be a better check for this
-        if (self.node.memory_pool.available() < 100_000) {
-            return;
-        }
-
-        {
-            self.connections_mutex.lock();
-            defer self.connections_mutex.unlock();
-
-            var uninitialized_connections_iter = self.uninitialized_connections.iterator();
-            while (uninitialized_connections_iter.next()) |entry| {
-                const tmp_id = entry.key_ptr.*;
-                const conn = entry.value_ptr.*;
-
-                // check if this connection was closed for whatever reason
-                if (conn.state == .closed) {
-                    try self.cleanupUninitializedConnection(tmp_id, conn);
-                    break;
-                }
-
-                // FIX: there should be a better check for this
-                if (self.node.memory_pool.available() < 100_000) {
-                    return;
-                }
-
-                conn.tick() catch |err| {
-                    log.err("could not tick uninitialized_connection error: {any}", .{err});
-                    break;
-                };
-
-                try self.process(conn);
-
-                if (conn.state == .connected and conn.connection_id != 0) {
-                    // the connection is now valid and ready for events
-                    // move the connection to the regular connections map
-                    try self.connections.put(conn.connection_id, conn);
-                    errdefer _ = self.connections.remove(conn.connection_id);
-
-                    // remove the connection from the uninitialized_connections map
-                    assert(self.uninitialized_connections.remove(tmp_id));
-                }
-            }
-
-            // loop over all connections and gather their messages
-            var connections_iter = self.connections.iterator();
-            while (connections_iter.next()) |entry| {
-                const conn = entry.value_ptr.*;
-
-                // check if this connection was closed for whatever reason
-                if (conn.state == .closed) {
-                    try self.cleanupConnection(conn);
-                    continue;
-                }
-
-                // FIX: there should be a better check for this
-                if (self.node.memory_pool.available() < 100_000) {
-                    return;
-                }
-
-                self.node.connection_messages_mutex.lock();
-                defer self.node.connection_messages_mutex.unlock();
-
-                if (self.node.connection_messages.get(conn.connection_id)) |conn_queue| {
-                    conn.outbox.concatenateAvailable(conn_queue);
-                } else {
-                    log.err(
-                        "connection is not associated with connection_messages. id: {}, count: {}",
-                        .{ conn.connection_id, self.node.connection_messages.count() },
-                    );
-                }
-
-                conn.tick() catch |err| {
-                    log.err("could not tick connection error: {any}", .{err});
-                    continue;
-                };
-
-                try self.process(conn);
-            }
-        }
+        try self.processConnectionMessages();
+        try self.processUninitializedConnectionMessages();
     }
 
     pub fn addInboundConnection(self: *Self, socket: posix.socket_t) !void {
@@ -304,18 +222,18 @@ pub const Worker = struct {
         try self.connections.put(conn_id, connection);
         errdefer _ = self.connections.remove(conn_id);
 
-        // FIX: this should all be a method on the `node`
-        self.node.connection_messages_mutex.lock();
-        defer self.node.connection_messages_mutex.unlock();
+        // // FIX: this should all be a method on the `node`
+        // self.node.connection_messages_mutex.lock();
+        // defer self.node.connection_messages_mutex.unlock();
 
-        const conn_queue = try self.node.allocator.create(RingBuffer(*Message));
-        errdefer self.node.allocator.destroy(conn_queue);
+        // const conn_queue = try self.node.allocator.create(RingBuffer(*Message));
+        // errdefer self.node.allocator.destroy(conn_queue);
 
-        conn_queue.* = try RingBuffer(*Message).init(self.node.allocator, constants.connection_outbox_capacity);
-        errdefer conn_queue.deinit();
+        // conn_queue.* = try RingBuffer(*Message).init(self.node.allocator, constants.connection_outbox_capacity);
+        // errdefer conn_queue.deinit();
 
-        try self.node.connection_messages.put(conn_id, conn_queue);
-        errdefer _ = self.node.connection_messages.remove(conn_id);
+        // try self.node.connection_messages.put(conn_id, conn_queue);
+        // errdefer _ = self.node.connection_messages.remove(conn_id);
 
         const accept_message = self.node.memory_pool.create() catch |err| {
             log.err("unable to create an accept message for connection {any}", .{err});
@@ -417,6 +335,230 @@ pub const Worker = struct {
         // FIX: remove requestors
 
         self.removeConnection(conn);
+    }
+
+    fn tickUninitializedConnections(self: *Self) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        var uninitialized_connections_iter = self.uninitialized_connections.iterator();
+        while (uninitialized_connections_iter.next()) |entry| {
+            const tmp_id = entry.key_ptr.*;
+            const conn = entry.value_ptr.*;
+
+            // check if this connection was closed for whatever reason
+            if (conn.state == .closed) {
+                try self.cleanupUninitializedConnection(tmp_id, conn);
+                break;
+            }
+
+            // // FIX: there should be a better check for this
+            // if (self.node.memory_pool.available() < 100_000) {
+            //     return;
+            // }
+
+            conn.tick() catch |err| {
+                log.err("could not tick uninitialized_connection error: {any}", .{err});
+                break;
+            };
+
+            // try self.process(conn);
+
+            if (conn.state == .connected and conn.connection_id != 0) {
+                // the connection is now valid and ready for events
+                // move the connection to the regular connections map
+                try self.connections.put(conn.connection_id, conn);
+                errdefer _ = self.connections.remove(conn.connection_id);
+
+                // remove the connection from the uninitialized_connections map
+                assert(self.uninitialized_connections.remove(tmp_id));
+            }
+        }
+    }
+
+    fn tickConnections(self: *Self) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        // loop over all connections and gather their messages
+        var connections_iter = self.connections.iterator();
+        while (connections_iter.next()) |entry| {
+            const conn = entry.value_ptr.*;
+
+            // check if this connection was closed for whatever reason
+            if (conn.state == .closed) {
+                try self.cleanupConnection(conn);
+                continue;
+            }
+
+            // // FIX: there should be a better check for this
+            // if (self.node.memory_pool.available() < 100_000) {
+            //     return;
+            // }
+
+            // self.node.connection_messages_mutex.lock();
+            // defer self.node.connection_messages_mutex.unlock();
+
+            // if (self.node.connection_messages.get(conn.connection_id)) |conn_queue| {
+            //     conn.outbox.concatenateAvailable(conn_queue);
+            // } else {
+            //     log.err(
+            //         "connection is not associated with connection_messages. id: {}, count: {}",
+            //         .{ conn.connection_id, self.node.connection_messages.count() },
+            //     );
+            // }
+
+            conn.tick() catch |err| {
+                log.err("could not tick connection error: {any}", .{err});
+                continue;
+            };
+
+            // try self.process(conn);
+        }
+    }
+
+    fn processConnectionMessages(self: *Self) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        var connections_iter = self.connections.valueIterator();
+        while (connections_iter.next()) |connection_entry| {
+            const conn = connection_entry.*;
+
+            if (conn.inbox.count == 0) continue;
+            while (conn.inbox.dequeue()) |message| {
+                // if this message has more than a single ref, something has not been initialized
+                // or deinitialized correctly.
+                assert(message.refs() == 1);
+
+                switch (message.headers.message_type) {
+                    .ping => try self.handlePingMessage(conn, message),
+                    .pong => try self.handlePongMessage(conn, message),
+                    // .subscribe => try self.handleSubscribeMessage(conn, message),
+                    else => {
+                        // NOTE: This message type is meant to be handled by the node
+                        self.inbox_mutex.lock();
+                        defer self.inbox_mutex.unlock();
+
+                        self.inbox.enqueue(message) catch |err| {
+                            try conn.inbox.enqueue(message);
+
+                            log.err("could not enqueue envelope {any}", .{err});
+                        };
+                    },
+                }
+            }
+        }
+    }
+
+    fn processUninitializedConnectionMessages(self: *Self) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        var uninitialized_connections_iter = self.uninitialized_connections.valueIterator();
+        while (uninitialized_connections_iter.next()) |connection_entry| {
+            const conn = connection_entry.*;
+
+            if (conn.inbox.count == 0) continue;
+            while (conn.inbox.dequeue()) |message| {
+                // if this message has more than a single ref, something has not been initialized
+                // or deinitialized correctly.
+                assert(message.refs() == 1);
+
+                switch (message.headers.message_type) {
+                    .accept => try self.handleAcceptMessage(conn, message),
+                    else => {
+                        log.err("unexpected message received from uninitialized connection", .{});
+                        conn.state = .closing;
+                        break;
+                    },
+                }
+            }
+        }
+    }
+
+    fn handleAcceptMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+        }
+
+        // ensure that this connection is not fully connected
+        assert(conn.state != .connected);
+
+        switch (conn.connection_type) {
+            .outbound => {
+                assert(conn.connection_id == 0);
+                // An error here would be a protocol error
+                assert(conn.remote_id != message.headers.origin_id);
+                assert(conn.connection_id != message.headers.connection_id);
+
+                conn.connection_id = message.headers.connection_id;
+                conn.remote_id = message.headers.origin_id;
+
+                // enqueue a message to immediately convey the node id of this Node
+                message.headers.origin_id = conn.origin_id;
+                message.headers.connection_id = conn.connection_id;
+
+                message.ref();
+                try conn.outbox.enqueue(message);
+
+                assert(conn.connection_type == .outbound);
+
+                conn.state = .connected;
+                log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
+                    conn.origin_id,
+                    conn.connection_id,
+                    conn.remote_id,
+                });
+            },
+            .inbound => {
+                assert(conn.connection_id == message.headers.connection_id);
+                assert(conn.origin_id != message.headers.origin_id);
+
+                conn.remote_id = message.headers.origin_id;
+                conn.state = .connected;
+                log.info("inbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
+                    conn.origin_id,
+                    conn.connection_id,
+                    conn.remote_id,
+                });
+            },
+        }
+    }
+
+    fn handlePingMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        log.debug("received ping from origin_id: {}, connection_id: {}", .{
+            message.headers.origin_id,
+            message.headers.connection_id,
+        });
+        // Since this is a `ping` we don't need to do any extra work to figure out how to respond
+        message.headers.message_type = .pong;
+        message.headers.origin_id = self.node.id;
+        message.headers.connection_id = conn.connection_id;
+        message.setTransactionId(message.transactionId());
+        message.setErrorCode(.ok);
+
+        assert(message.refs() == 1);
+
+        if (conn.outbox.enqueue(message)) |_| {} else |err| {
+            log.err("Failed to enqueue message to outbox: {}", .{err});
+            message.deref(); // Undo reference if enqueue fails
+        }
+    }
+
+    fn handlePongMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        _ = conn;
+
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+        }
+
+        log.debug("received pong from origin_id: {}, connection_id: {}", .{
+            message.headers.origin_id,
+            message.headers.connection_id,
+        });
     }
 
     fn process(self: *Self, conn: *Connection) !void {
@@ -566,11 +708,6 @@ pub const Worker = struct {
         }
 
         assert(conn.inbox.count == 0);
-    }
-
-    pub fn distribute(self: *Self, conn: *Connection) !void {
-        _ = self;
-        _ = conn;
     }
 
     fn closeAllConnections(self: *Self) bool {
