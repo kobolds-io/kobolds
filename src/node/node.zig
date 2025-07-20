@@ -165,18 +165,6 @@ pub const Node = struct {
         listeners.* = std.AutoHashMap(usize, *Listener).init(allocator);
         errdefer listeners.deinit();
 
-        // const connection_messages = try allocator.create(ConnectionMessages);
-        // errdefer allocator.destroy(connection_messages);
-
-        // connection_messages.* = ConnectionMessages.init(allocator, memory_pool);
-        // errdefer connection_messages.deinit();
-
-        // const connection_messages = std.Auto
-        // errdefer allocator.destroy(connection_messages);
-
-        // connection_messages.* = ConnectionMessages.init(allocator, memory_pool);
-        // errdefer connection_messages.deinit();
-
         return Self{
             .id = uuid.v7.new(),
             .io = io,
@@ -265,7 +253,6 @@ pub const Node = struct {
         self.connection_messages.deinit();
 
         self.allocator.destroy(self.close_channel);
-        // self.allocator.destroy(self.connection_messages);
         self.allocator.destroy(self.connections);
         self.allocator.destroy(self.done_channel);
         self.allocator.destroy(self.inbox);

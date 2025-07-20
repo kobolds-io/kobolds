@@ -21,18 +21,10 @@ const InboundConnectionConfig = @import("../protocol/connection.zig").InboundCon
 const Message = @import("../protocol/message.zig").Message;
 const Accept = @import("../protocol/message.zig").Accept;
 
-// const Publisher = @import("../pubsub/publisher.zig").Publisher;
-// const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
-
 const WorkerState = enum {
     running,
     closing,
     closed,
-};
-
-const Envelope = struct {
-    connection_id: u128,
-    message: *Message,
 };
 
 pub const Worker = struct {
@@ -40,21 +32,15 @@ pub const Worker = struct {
 
     allocator: std.mem.Allocator,
     close_channel: *UnbufferedChannel(bool),
-    // connection_messages: std.AutoHashMap(u128, *RingBuffer(*Message)),
-    connection_outbox_buffers_mutex: std.Thread.Mutex,
-    connection_outbox_buffers: std.AutoHashMap(u128, *RingBuffer(*Message)),
     connections_mutex: std.Thread.Mutex,
     connections: std.AutoHashMap(uuid.Uuid, *Connection),
     done_channel: *UnbufferedChannel(bool),
     id: usize,
     io: *IO,
     node: *Node,
-    outbox_channel: *BufferedChannel(Envelope),
     state: WorkerState,
     transactions: std.AutoHashMap(u128, *UnbufferedChannel(*Message)),
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
-    // publishers: std.AutoHashMap(u128, *Publisher),
-    // subscribers: std.AutoHashMap(u128, *Subscriber),
     inbox: *RingBuffer(*Message),
     inbox_mutex: std.Thread.Mutex,
 
@@ -68,12 +54,6 @@ pub const Worker = struct {
         errdefer allocator.destroy(done_channel);
 
         done_channel.* = UnbufferedChannel(bool).new();
-
-        const outbox_channel = try allocator.create(BufferedChannel(Envelope));
-        errdefer allocator.destroy(outbox_channel);
-
-        outbox_channel.* = try BufferedChannel(Envelope).init(allocator, 5_000);
-        errdefer outbox_channel.deinit();
 
         const inbox = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(inbox);
@@ -98,13 +78,7 @@ pub const Worker = struct {
             .node = node,
             .state = .closed,
             .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
-            .connection_outbox_buffers = std.AutoHashMap(u128, *RingBuffer(*Message)).init(allocator),
-            .connection_outbox_buffers_mutex = std.Thread.Mutex{},
-            .outbox_channel = outbox_channel,
-            // .connection_messages = std.AutoHashMap(u128, *RingBuffer(*Message)).init(allocator),
             .transactions = std.AutoHashMap(u128, *UnbufferedChannel(*Message)).init(allocator),
-            // .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
-            // .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
             .inbox = inbox,
             .inbox_mutex = std.Thread.Mutex{},
         };
@@ -126,59 +100,21 @@ pub const Worker = struct {
             connection.deinit();
             self.allocator.destroy(connection);
         }
-        var connection_outbox_buffers_iter = self.connection_outbox_buffers.valueIterator();
-        while (connection_outbox_buffers_iter.next()) |entry| {
-            const ring_buffer = entry.*;
-
-            while (ring_buffer.dequeue()) |message| {
-                message.deref();
-                if (message.refs() == 0) self.node.memory_pool.destroy(message);
-            }
-
-            ring_buffer.deinit();
-            self.allocator.destroy(ring_buffer);
-        }
-
-        // drain the outbox channel if it isn't empty
-        if (!self.outbox_channel.isEmpty()) {
-            while (self.outbox_channel.buffer.dequeue()) |envelope| {
-                const message = envelope.message;
-                message.deref();
-                if (message.refs() == 0) self.node.memory_pool.destroy(message);
-            }
-        }
-
-        // var publishers_iter = self.publishers.valueIterator();
-        // while (publishers_iter.next()) |publisher_entry| {
-        //     const publisher = publisher_entry.*;
-        //     self.allocator.destroy(publisher);
-        // }
-
-        // var subscribers_iter = self.subscribers.valueIterator();
-        // while (subscribers_iter.next()) |subscriber_entry| {
-        //     const subscriber = subscriber_entry.*;
-        //     self.allocator.destroy(subscriber);
-        // }
 
         while (self.inbox.dequeue()) |message| {
             message.deref();
             if (message.refs() == 0) self.node.memory_pool.destroy(message);
         }
 
-        self.outbox_channel.deinit();
-        self.connection_outbox_buffers.deinit();
         self.connections.deinit();
         self.io.deinit();
         self.uninitialized_connections.deinit();
         self.transactions.deinit();
-        // self.publishers.deinit();
-        // self.subscribers.deinit();
         self.inbox.deinit();
 
         self.allocator.destroy(self.inbox);
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
-        self.allocator.destroy(self.outbox_channel);
         self.allocator.destroy(self.io);
     }
 
@@ -229,6 +165,14 @@ pub const Worker = struct {
     }
 
     pub fn tick(self: *Self) !void {
+        // TODO: gather messages from node
+        // TODO: process messages from node
+        // TODO: distribute messages from node
+        //
+        // TODO: gather messages from connections
+        // TODO: process messages from connections
+        // TODO: distrobute messages from connections
+
         // FIX: there should be a better check for this
         if (self.node.memory_pool.available() < 100_000) {
             return;
@@ -606,17 +550,8 @@ pub const Worker = struct {
     }
 
     pub fn distribute(self: *Self, conn: *Connection) !void {
-        // self.mutex.lock();
-        // defer self.mutex.unlock();
-
         _ = self;
         _ = conn;
-
-        // self.mutex.lock();
-        // defer self.mutex.unlock();
-        // if (worker.connection_messages.get(conn.connection_id)) |messages| {
-        //     conn.outbox.concatenateAvailable(messages);
-        // }
     }
 
     fn closeAllConnections(self: *Self) bool {
