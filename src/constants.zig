@@ -35,9 +35,6 @@ pub const io_uring_entries: u16 = 256;
 /// Optionally verify if operations based on this boolean.
 pub const verify: bool = true;
 
-/// Maximum size of the message pool
-pub const default_worker_message_pool_capacity: u32 = 10_000;
-
 pub const connection_outbox_capacity: usize = 5_000;
 pub const connection_inbox_capacity: usize = 5_000;
 

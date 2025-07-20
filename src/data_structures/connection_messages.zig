@@ -90,10 +90,14 @@ pub const ConnectionMessages = struct {
 test "append a message" {
     const allocator = testing.allocator;
 
-    var connection_messages = ConnectionMessages.init(allocator);
+    var memory_pool = try MemoryPool(Message).init(allocator, 10);
+    defer memory_pool.deinit();
+
+    var connection_messages = ConnectionMessages.init(allocator, &memory_pool);
     defer connection_messages.deinit();
 
-    var message_1 = Message.new();
+    const message_1 = try memory_pool.create();
+    message_1.* = Message.new();
     message_1.headers.message_type = .ping;
     message_1.headers.connection_id = 2;
     message_1.ref();
@@ -102,25 +106,29 @@ test "append a message" {
 
     try testing.expect(connection_messages.map.get(conn_id) == null);
 
-    try connection_messages.append(conn_id, &message_1);
+    try connection_messages.append(conn_id, message_1);
 
     try testing.expect(connection_messages.map.get(conn_id) != null);
 
     const list = connection_messages.map.get(conn_id).?;
     try testing.expectEqual(1, list.count);
 
-    var message_2 = Message.new();
+    const message_2 = try memory_pool.create();
+    message_2.* = Message.new();
     message_2.headers.message_type = .ping;
     message_2.headers.connection_id = 2;
     message_2.ref();
 
-    try connection_messages.append(conn_id, &message_2);
+    try connection_messages.append(conn_id, message_2);
     try testing.expectEqual(2, list.count);
 }
 
 test "init/deinit" {
     const allocator = testing.allocator;
 
-    var grouper = ConnectionMessages.init(allocator);
-    defer grouper.deinit();
+    var memory_pool = try MemoryPool(Message).init(allocator, 10);
+    defer memory_pool.deinit();
+
+    var connection_messages = ConnectionMessages.init(allocator, &memory_pool);
+    defer connection_messages.deinit();
 }

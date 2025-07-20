@@ -25,7 +25,6 @@ pub const Topic = struct {
     subscribers: std.AutoHashMap(u128, *Subscriber),
     topic_name: []const u8,
     tmp_copy_buffer: []*Message,
-    mutex: std.Thread.Mutex,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -51,7 +50,6 @@ pub const Topic = struct {
             .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
             .topic_name = topic_name,
             .tmp_copy_buffer = tmp_copy_buffer,
-            .mutex = std.Thread.Mutex{},
         };
     }
 
@@ -93,9 +91,6 @@ pub const Topic = struct {
     }
 
     pub fn tick(self: *Self) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         // There are no messages needing to be distributed to subscribers
         if (self.queue.count == 0) return;
 

@@ -48,6 +48,8 @@ pub const Worker = struct {
     outbox: *RingBuffer(Envelope),
     outbox_mutex: std.Thread.Mutex,
     subscribers: std.AutoHashMap(u128, *Subscriber),
+    dead_connections: std.ArrayList(u128),
+    dead_connections_mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, id: usize, node: *Node) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -94,6 +96,8 @@ pub const Worker = struct {
             .outbox = outbox,
             .outbox_mutex = std.Thread.Mutex{},
             .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
+            .dead_connections = std.ArrayList(u128).init(allocator),
+            .dead_connections_mutex = std.Thread.Mutex{},
         };
     }
 
@@ -143,6 +147,7 @@ pub const Worker = struct {
         self.io.deinit();
         self.uninitialized_connections.deinit();
         self.subscribers.deinit();
+        self.dead_connections.deinit();
 
         self.allocator.destroy(self.inbox);
         self.allocator.destroy(self.outbox);
@@ -305,8 +310,6 @@ pub const Worker = struct {
     }
 
     fn removeConnection(self: *Self, conn: *Connection) void {
-        log.debug("remove connection called", .{});
-
         _ = self.connections.remove(conn.connection_id);
 
         log.info("worker: {} removed connection {}", .{ self.id, conn.connection_id });
@@ -315,8 +318,6 @@ pub const Worker = struct {
     }
 
     fn cleanupUninitializedConnection(self: *Self, tmp_id: uuid.Uuid, conn: *Connection) !void {
-        log.debug("remove uninitialized connection called", .{});
-
         _ = self.uninitialized_connections.remove(tmp_id);
         log.info("worker: {} removed uninitialized_connection {}", .{ self.id, conn.connection_id });
 
@@ -325,10 +326,10 @@ pub const Worker = struct {
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {
-        // FIX: remove subscribers
-        // FIX: remove publishers
-        // FIX: remove repliers
-        // FIX: remove requestors
+        self.dead_connections_mutex.lock();
+        defer self.dead_connections_mutex.unlock();
+
+        try self.dead_connections.append(conn.connection_id);
 
         self.removeConnection(conn);
     }
