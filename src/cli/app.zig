@@ -577,7 +577,7 @@ pub fn nodePublish() !void {
     var connections = std.ArrayList(*Connection).init(allocator);
     defer connections.deinit();
 
-    const CONNECTION_COUNT = 5;
+    const CONNECTION_COUNT = 1;
 
     for (0..CONNECTION_COUNT) |_| {
         const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
@@ -592,9 +592,9 @@ pub fn nodePublish() !void {
         }
     }
 
+    const topic_name = "/test";
     // const body = "";
     const body = "a" ** constants.message_max_body_size;
-    const topic_name = "/test";
 
     registerSigintHandler();
 
@@ -607,10 +607,11 @@ pub fn nodePublish() !void {
             };
         }
 
-        std.time.sleep(1 * std.time.ns_per_us);
+        std.time.sleep(100 * std.time.ns_per_ms);
     }
 }
 
+var subscriber_msg_count: usize = 0;
 pub fn nodeSubscribe() !void {
     // creating a client to communicate with the node
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -645,7 +646,13 @@ pub fn nodeSubscribe() !void {
 
     const callback = struct {
         pub fn callback(message: *Message) void {
-            log.info("received message topic: {s}, length: {}", .{ message.topicName(), message.headers.body_length });
+            subscriber_msg_count += 1;
+            if (subscriber_msg_count % 5_000 == 0) {
+                log.info(
+                    "received message topic: {s}, count: {}",
+                    .{ message.topicName(), subscriber_msg_count },
+                );
+            }
         }
     }.callback;
 

@@ -40,7 +40,7 @@ pub const Worker = struct {
 
     allocator: std.mem.Allocator,
     close_channel: *UnbufferedChannel(bool),
-    connection_messages: std.AutoHashMap(u128, *RingBuffer(*Message)),
+    // connection_messages: std.AutoHashMap(u128, *RingBuffer(*Message)),
     connection_outbox_buffers_mutex: std.Thread.Mutex,
     connection_outbox_buffers: std.AutoHashMap(u128, *RingBuffer(*Message)),
     connections_mutex: std.Thread.Mutex,
@@ -101,7 +101,7 @@ pub const Worker = struct {
             .connection_outbox_buffers = std.AutoHashMap(u128, *RingBuffer(*Message)).init(allocator),
             .connection_outbox_buffers_mutex = std.Thread.Mutex{},
             .outbox_channel = outbox_channel,
-            .connection_messages = std.AutoHashMap(u128, *RingBuffer(*Message)).init(allocator),
+            // .connection_messages = std.AutoHashMap(u128, *RingBuffer(*Message)).init(allocator),
             .transactions = std.AutoHashMap(u128, *UnbufferedChannel(*Message)).init(allocator),
             // .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
             // .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
@@ -229,6 +229,11 @@ pub const Worker = struct {
     }
 
     pub fn tick(self: *Self) !void {
+        // FIX: there should be a better check for this
+        if (self.node.memory_pool.available() < 100_000) {
+            return;
+        }
+
         {
             self.connections_mutex.lock();
             defer self.connections_mutex.unlock();
@@ -244,6 +249,11 @@ pub const Worker = struct {
                     break;
                 }
 
+                // FIX: there should be a better check for this
+                if (self.node.memory_pool.available() < 100_000) {
+                    return;
+                }
+
                 conn.tick() catch |err| {
                     log.err("could not tick uninitialized_connection error: {any}", .{err});
                     break;
@@ -255,6 +265,7 @@ pub const Worker = struct {
                     // the connection is now valid and ready for events
                     // move the connection to the regular connections map
                     try self.connections.put(conn.connection_id, conn);
+                    errdefer _ = self.connections.remove(conn.connection_id);
 
                     // remove the connection from the uninitialized_connections map
                     assert(self.uninitialized_connections.remove(tmp_id));
@@ -270,6 +281,23 @@ pub const Worker = struct {
                 if (conn.state == .closed) {
                     try self.cleanupConnection(conn);
                     continue;
+                }
+
+                // FIX: there should be a better check for this
+                if (self.node.memory_pool.available() < 100_000) {
+                    return;
+                }
+
+                self.node.connection_messages_mutex.lock();
+                defer self.node.connection_messages_mutex.unlock();
+
+                if (self.node.connection_messages.get(conn.connection_id)) |conn_queue| {
+                    conn.outbox.concatenateAvailable(conn_queue);
+                } else {
+                    log.err(
+                        "connection is not associated with connection_messages. id: {}, count: {}",
+                        .{ conn.connection_id, self.node.connection_messages.count() },
+                    );
                 }
 
                 conn.tick() catch |err| {
@@ -312,6 +340,19 @@ pub const Worker = struct {
 
         try self.connections.put(conn_id, connection);
         errdefer _ = self.connections.remove(conn_id);
+
+        // FIX: this should all be a method on the `node`
+        self.node.connection_messages_mutex.lock();
+        defer self.node.connection_messages_mutex.unlock();
+
+        const conn_queue = try self.node.allocator.create(RingBuffer(*Message));
+        errdefer self.node.allocator.destroy(conn_queue);
+
+        conn_queue.* = try RingBuffer(*Message).init(self.node.allocator, constants.connection_outbox_capacity);
+        errdefer conn_queue.deinit();
+
+        try self.node.connection_messages.put(conn_id, conn_queue);
+        errdefer _ = self.node.connection_messages.remove(conn_id);
 
         const accept_message = self.node.memory_pool.create() catch |err| {
             log.err("unable to create an accept message for connection {any}", .{err});
@@ -402,6 +443,16 @@ pub const Worker = struct {
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {
+        self.node.connection_messages_mutex.lock();
+        defer self.node.connection_messages_mutex.unlock();
+
+        _ = self.node.connection_messages.remove(conn.connection_id);
+
+        // FIX: remove subscribers
+        // FIX: remove publishers
+        // FIX: remove repliers
+        // FIX: remove requestors
+
         self.removeConnection(conn);
     }
 
@@ -410,18 +461,9 @@ pub const Worker = struct {
         if (conn.inbox.count == 0) return;
 
         while (conn.inbox.dequeue()) |message| {
-            // defer self.node.processed_messages_count += 1;
-            // defer {
-            //     // _ = self.node.metrics.messages_processed.fetchAdd(1, .seq_cst);
-            //     // self.node.metrics.last_updated_at_ms = std.time.milliTimestamp();
-            //     message.deref();
-            //     if (message.refs() == 0) self.node.memory_pool.destroy(message);
-            // }
             switch (message.headers.message_type) {
                 .accept => {
                     defer {
-                        // _ = self.node.metrics.messages_processed.fetchAdd(1, .seq_cst);
-                        // self.node.metrics.last_updated_at_ms = std.time.milliTimestamp();
                         message.deref();
                         if (message.refs() == 0) self.node.memory_pool.destroy(message);
                     }
@@ -487,7 +529,6 @@ pub const Worker = struct {
                         log.err("Failed to enqueue message to outbox: {}", .{err});
                         message.deref(); // Undo reference if enqueue fails
                     }
-                    // message.ref();
                 },
                 .pong => {
                     defer {
@@ -506,11 +547,9 @@ pub const Worker = struct {
 
                     assert(message.refs() == 1);
                     self.inbox.enqueue(message) catch |err| {
-                        // message.ref();
                         try conn.inbox.enqueue(message);
 
                         log.err("could not enqueue message {any}", .{err});
-                        // message.deref();
                     };
                 },
                 // .publish => {

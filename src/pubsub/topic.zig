@@ -7,8 +7,6 @@ const constants = @import("../constants.zig");
 const RingBuffer = @import("stdx").RingBuffer;
 const MemoryPool = @import("stdx").MemoryPool;
 
-const MessagePool = @import("../data_structures/message_pool.zig").MessagePool;
-
 const Message = @import("../protocol/message.zig").Message;
 
 const Publisher = @import("./publisher.zig").Publisher;
@@ -92,8 +90,9 @@ pub const Topic = struct {
     }
 
     pub fn tick(self: *Self) !void {
-        // There are no messages needing to be processed
+        // There are no messages needing to be distributed to subscribers
         if (self.queue.count == 0) return;
+
         // there are no subscribers who are able to consume this message. We should not hang on to these messages
         if (self.subscribers.count() == 0) {
             self.clearQueue();
@@ -110,8 +109,8 @@ pub const Topic = struct {
 
         var i: usize = 0;
         var subscribers_iter = self.subscribers.valueIterator();
-        while (subscribers_iter.next()) |entry| : (i += 1) {
-            const subscriber = entry.*;
+        while (subscribers_iter.next()) |subscriber_entry| : (i += 1) {
+            const subscriber = subscriber_entry.*;
             self.subscriber_queues.items[i] = subscriber.queue;
         }
 

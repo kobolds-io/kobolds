@@ -44,6 +44,20 @@ pub const ConnectionMessages = struct {
         self.map.deinit();
     }
 
+    pub fn add(self: *Self, conn_id: uuid.Uuid) !void {
+        if (self.map.get(conn_id)) |_| {
+            return error.AlreadyExists;
+        } else {
+            const queue = try self.allocator.create(RingBuffer(*Message));
+            errdefer self.allocator.destroy(queue);
+
+            queue.* = try RingBuffer(*Message).init(self.allocator, constants.connection_outbox_capacity);
+            errdefer queue.deinit();
+
+            try self.map.put(conn_id, queue);
+        }
+    }
+
     pub fn append(self: *Self, conn_id: uuid.Uuid, message: *Message) !void {
         if (self.map.get(conn_id)) |queue| {
             try queue.enqueue(message);
