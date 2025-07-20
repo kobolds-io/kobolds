@@ -57,17 +57,17 @@ pub const Topic = struct {
         assert(self.queue.count == 0);
         self.clearQueue();
 
-        var subscribers_iter = self.subscribers.valueIterator();
-        while (subscribers_iter.next()) |entry| {
-            const subscriber = entry.*;
-            self.allocator.destroy(subscriber);
-        }
+        // var subscribers_iter = self.subscribers.valueIterator();
+        // while (subscribers_iter.next()) |entry| {
+        //     const subscriber = entry.*;
+        //     self.allocator.destroy(subscriber);
+        // }
 
-        var publishers_iter = self.publishers.valueIterator();
-        while (publishers_iter.next()) |entry| {
-            const publisher = entry.*;
-            self.allocator.destroy(publisher);
-        }
+        // var publishers_iter = self.publishers.valueIterator();
+        // while (publishers_iter.next()) |entry| {
+        //     const publisher = entry.*;
+        //     self.allocator.destroy(publisher);
+        // }
 
         self.subscribers.deinit();
         self.publishers.deinit();

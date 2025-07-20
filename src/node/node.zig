@@ -513,6 +513,7 @@ pub const Node = struct {
                             if (message.refs() == 0) self.memory_pool.destroy(message);
                         }
 
+                        subscriber.deinit();
                         self.allocator.destroy(subscriber);
                     }
 
@@ -844,39 +845,6 @@ pub const Node = struct {
         };
 
         try connection_outbox.enqueue(envelope);
-    }
-
-    fn removeConnection(self: *Self, conn: *Connection) void {
-        // Remove any subscribers/publishers this connection has
-        var topics_iter = self.topics.valueIterator();
-        while (topics_iter.next()) |entry| {
-            const topic = entry.*;
-
-            const key = utils.generateKey(topic.topic_name, conn.connection_id);
-            if (topic.subscribers.fetchRemove(key)) |subscriber_entry| {
-                const subscriber = subscriber_entry.value;
-                self.allocator.destroy(subscriber);
-            }
-
-            if (topic.publishers.fetchRemove(key)) |publisher_entry| {
-                const publisher = publisher_entry.value;
-                self.allocator.destroy(publisher);
-            }
-
-            // deinit the topic if there are no publishers or subscribers left
-            if (topic.subscribers.count() == 0 and topic.publishers.count() == 0) {
-                const topic_name = topic.topic_name;
-                topic.deinit();
-                self.allocator.destroy(topic);
-                assert(self.topics.remove(topic_name));
-            }
-        }
-
-        _ = self.connections.remove(conn.connection_id);
-
-        log.info("node: {} removed connection {}", .{ self.id, conn.connection_id });
-        conn.deinit();
-        self.allocator.destroy(conn);
     }
 
     pub fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {

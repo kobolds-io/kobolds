@@ -487,7 +487,7 @@ pub fn nodePublish() !void {
     var connections = std.ArrayList(*Connection).init(allocator);
     defer connections.deinit();
 
-    const CONNECTION_COUNT = 20;
+    const CONNECTION_COUNT = 5;
 
     for (0..CONNECTION_COUNT) |_| {
         const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
@@ -516,7 +516,7 @@ pub fn nodePublish() !void {
                 continue;
             };
         }
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.time.sleep(100 * std.time.ns_per_ms);
     }
 }
 
