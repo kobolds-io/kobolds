@@ -370,16 +370,27 @@ pub const Node = struct {
         const now_ms = std.time.milliTimestamp();
         const difference = now_ms - self.metrics.last_printed_at_ms;
         if (difference >= 1_000) {
-            const messages_processed = self.metrics.messages_processed.load(.seq_cst);
-            const delta = messages_processed - self.metrics.last_messages_processed_printed;
-            self.metrics.last_messages_processed_printed = messages_processed;
             self.metrics.last_printed_at_ms = std.time.milliTimestamp();
-            log.info("time since last print {}ms, memory_pool.available: {}, messages processed {}, delta {}", .{
-                difference,
-                self.memory_pool.available(),
-                self.metrics.last_messages_processed_printed,
-                delta,
+            // log.info("last print: {}ms, memory_pool.available: {}", .{
+            //     difference,
+            //     self.memory_pool.available(),
+            // });
+
+            const messages_processed = self.metrics.messages_processed.load(.seq_cst);
+            const messages_processed_delta = messages_processed - self.metrics.last_messages_processed_printed;
+            self.metrics.last_messages_processed_printed = messages_processed;
+            log.info("messages_processed: {}, messages_processed_delta: {}", .{
+                messages_processed,
+                messages_processed_delta,
             });
+
+            // const bytes_processed = self.metrics.bytes_processed;
+            // const bytes_processed_delta = bytes_processed - self.metrics.last_bytes_processed_printed;
+            // self.metrics.last_bytes_processed_printed = bytes_processed;
+            // log.info("bytes_processed: {}, bytes_processed_delta: {}", .{
+            //     bytes_processed,
+            //     bytes_processed_delta,
+            // });
         }
 
         try self.pruneDeadConnections();
@@ -417,6 +428,7 @@ pub const Node = struct {
                 assert(message.refs() == 1);
                 defer {
                     _ = self.metrics.messages_processed.fetchAdd(1, .seq_cst);
+                    self.metrics.bytes_processed += @intCast(message.size());
                     message.deref();
                     if (message.refs() == 0) self.memory_pool.destroy(message);
                 }
