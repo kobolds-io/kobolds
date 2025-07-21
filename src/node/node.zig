@@ -40,7 +40,7 @@ pub const NodeConfig = struct {
 
     worker_threads: usize = 3,
     max_connections: u16 = 1024,
-    memory_pool_capacity: usize = 500_000,
+    memory_pool_capacity: usize = 100_000,
     listener_configs: ?[]const ListenerConfig = null,
     outbound_configs: ?[]const OutboundConnectionConfig = null,
 
@@ -51,7 +51,7 @@ pub const NodeConfig = struct {
         };
         if (self.worker_threads > cpu_core_count) return "NodeConfig `worker_threads` exceeds cpu core count";
         if (self.max_connections > 5_000) return "NodeConfig `max_connections` exceeds arbitrary limit";
-        if (self.memory_pool_capacity > 500_000) return "NodeConfig `memory_pool_capacity` exceeds arbitrary limit";
+        if (self.memory_pool_capacity > 1_000_000) return "NodeConfig `memory_pool_capacity` exceeds arbitrary limit";
 
         if (self.listener_configs) |listener_configs| {
             if (listener_configs.len == 0) return "NodeConfig `listener_configs` is non null but contains no entries";
@@ -379,18 +379,25 @@ pub const Node = struct {
             const messages_processed = self.metrics.messages_processed.load(.seq_cst);
             const messages_processed_delta = messages_processed - self.metrics.last_messages_processed_printed;
             self.metrics.last_messages_processed_printed = messages_processed;
-            log.info("messages_processed: {}, messages_processed_delta: {}", .{
-                messages_processed,
-                messages_processed_delta,
-            });
+            // log.info("messages_processed: {}, messages_processed_delta: {}", .{
+            //     messages_processed,
+            //     messages_processed_delta,
+            // });
 
-            // const bytes_processed = self.metrics.bytes_processed;
-            // const bytes_processed_delta = bytes_processed - self.metrics.last_bytes_processed_printed;
-            // self.metrics.last_bytes_processed_printed = bytes_processed;
+            const bytes_processed = self.metrics.bytes_processed;
+            const bytes_processed_delta = bytes_processed - self.metrics.last_bytes_processed_printed;
+            self.metrics.last_bytes_processed_printed = bytes_processed;
             // log.info("bytes_processed: {}, bytes_processed_delta: {}", .{
             //     bytes_processed,
             //     bytes_processed_delta,
             // });
+
+            log.err("messages_processed: {}, bytes_processed: {}, messages_delta: {}, bytes_delta: {}", .{
+                messages_processed,
+                bytes_processed,
+                messages_processed_delta,
+                bytes_processed_delta,
+            });
         }
 
         try self.pruneDeadConnections();
