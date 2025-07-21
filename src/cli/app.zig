@@ -487,12 +487,11 @@ pub fn nodePublish() !void {
     var connections = std.ArrayList(*Connection).init(allocator);
     defer connections.deinit();
 
-    const CONNECTION_COUNT = 20;
+    const CONNECTION_COUNT = 1;
 
     for (0..CONNECTION_COUNT) |_| {
-        const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
+        const conn = try client.connect(outbound_connection_config, 10_000 * std.time.ns_per_ms);
         errdefer client.disconnect(conn);
-        // std.time.sleep(100 * std.time.ns_per_ms);
 
         try connections.append(conn);
     }
@@ -503,8 +502,8 @@ pub fn nodePublish() !void {
     }
 
     const topic_name = "/test";
-    const body = "";
-    // const body = "a" ** constants.message_max_body_size;
+    // const body = "";
+    const body = "a" ** constants.message_max_body_size;
 
     registerSigintHandler();
 
