@@ -25,6 +25,9 @@ pub const connection_send_buffer_size = (1024 * 256) - message_max_size;
 /// The number of milliseconds the IO instance will wait until it flushes
 /// submissions and completions.
 pub const io_tick_ms: u63 = 1;
+/// The number of microseconds the IO instance will wait until it flushes
+/// submissions and completions.
+pub const io_tick_us: u63 = 100;
 
 /// Number of entries used for the submission and completion queues
 pub const io_uring_entries: u16 = 256;
@@ -32,12 +35,11 @@ pub const io_uring_entries: u16 = 256;
 /// Optionally verify if operations based on this boolean.
 pub const verify: bool = true;
 
-/// Maximum size of the message pool
-pub const default_worker_message_pool_capacity: u32 = 10_000;
+pub const connection_outbox_capacity: usize = 5_000;
+pub const connection_inbox_capacity: usize = 5_000;
 
-pub const connection_outbox_capacity: u32 = 5_000;
-pub const connection_inbox_capacity: u32 = 5_000;
+pub const topic_max_queue_capacity: usize = 10_000;
+pub const publisher_max_queue_capacity: usize = 5_000;
+pub const subscriber_max_queue_capacity: usize = 5_000;
 
-pub const publisher_max_queue_capacity: usize = 1_000;
-pub const subscriber_max_queue_capacity: usize = 1_000;
 pub const bus_max_queue_capacity: usize = 10_000;

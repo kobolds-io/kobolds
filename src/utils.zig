@@ -51,14 +51,14 @@ pub fn generateKey(topic_name: []const u8, id: u128) u128 {
     const fba_allocator = fba.allocator();
 
     // a failure here would be unrecoverable
-    var list = std.ArrayList(u8).initCapacity(fba_allocator, buf.len) catch unreachable;
+    var bytes_list = std.ArrayList(u8).initCapacity(fba_allocator, buf.len) catch unreachable;
 
-    list.appendSliceAssumeCapacity(topic_name);
-    list.appendSliceAssumeCapacity(&u128ToBytes(id));
-    defer list.deinit();
+    bytes_list.appendSliceAssumeCapacity(topic_name);
+    bytes_list.appendSliceAssumeCapacity(&u128ToBytes(id));
+    defer bytes_list.deinit();
 
     // we are just going to use the same checksum hasher as we do for messages.
-    return hash.xxHash64Checksum(list.items);
+    return hash.xxHash64Checksum(bytes_list.items);
 }
 
 pub fn generateUniqueId(salt: u128) u64 {

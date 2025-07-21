@@ -123,7 +123,6 @@ pub const Connection = struct {
     messages_recv: u128,
     messages_sent: u128,
     outbox: *RingBuffer(*Message),
-    outbox_mutex: std.Thread.Mutex,
     parsed_message_ptrs: std.ArrayList(*Message),
     parsed_messages: std.ArrayList(Message),
     parser: Parser,
@@ -196,7 +195,6 @@ pub const Connection = struct {
             .origin_id = origin_id,
             .remote_id = 0,
             .outbox = outbox,
-            .outbox_mutex = std.Thread.Mutex{},
             .parsed_messages = try std.ArrayList(Message).initCapacity(
                 allocator,
                 // 50,
@@ -251,19 +249,6 @@ pub const Connection = struct {
     }
 
     pub fn tick(self: *Connection) !void {
-        // var timer = try std.time.Timer.start();
-        // defer timer.reset();
-        // const start = timer.read();
-        // defer {
-        //     const end = timer.read();
-        //     const took = ((end - start) / std.time.ns_per_us);
-        //     log.debug("connection tick: {d:6}us, inbox: {d:6}, outbox: {d:6}", .{
-        //         took,
-        //         self.inbox.count,
-        //         self.outbox.count,
-        //     });
-        // }
-
         switch (self.state) {
             .closing => {
                 if (self.connection_id == 0) {
@@ -318,9 +303,6 @@ pub const Connection = struct {
 
             // if there are bytes remaining in the current send_buffer_list and there is a message to send
             if (send_buffer_list.capacity - send_buffer_list.items.len > 0 and self.outbox.count > 0) {
-                self.outbox_mutex.lock();
-                defer self.outbox_mutex.unlock();
-
                 // buffer that will hold any encoded message
                 var buf: [constants.message_max_size]u8 = undefined;
 
@@ -335,7 +317,13 @@ pub const Connection = struct {
                     message.headers.origin_id = self.origin_id;
                     message.headers.connection_id = self.connection_id;
 
-                    message.encode(buf[0..message_size]);
+                    if (buf.len >= message_size) {
+                        message.encode(buf[0..message_size]);
+                    } else {
+                        log.err("buf len: {}, message_size: {}", .{ buf.len, message_size });
+                        log.err("message.headers.body_length {any}", .{message.headers.body_length});
+                        @panic("buffer was not big enough to hold message");
+                    }
 
                     // add the maximum number of bytes possible to the send buffer
                     const bytes_available: usize = send_buffer_list.capacity - send_buffer_list.items.len;

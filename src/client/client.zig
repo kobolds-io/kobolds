@@ -6,11 +6,8 @@ const posix = std.posix;
 
 const uuid = @import("uuid");
 const constants = @import("../constants.zig");
+const utils = @import("../utils.zig");
 
-// const Worker = @import("./worker.zig").Worker;
-// const Listener = @import("./listener.zig").Listener;
-// const ListenerConfig = @import("./listener.zig").ListenerConfig;
-// const InboundConnectionConfig = @import("../protocol/connection.zig").InboundConnectionConfig;
 const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 const IO = @import("../io.zig").IO;
 
@@ -24,10 +21,12 @@ const Message = @import("../protocol/message.zig").Message;
 const Connection = @import("../protocol/connection.zig").Connection;
 
 const PingOptions = struct {};
+const PublishOptions = struct {};
+const SubscribeOptions = struct {};
 
 pub const ClientConfig = struct {
-    max_connections: u16 = 1024,
-    memory_pool_capacity: usize = 5_000,
+    max_connections: u16 = 100,
+    memory_pool_capacity: usize = 1_000,
 };
 
 const ClientState = enum {
@@ -55,6 +54,7 @@ pub const Client = struct {
     transactions_mutex: std.Thread.Mutex,
     connection_messages: ConnectionMessages,
     connection_messages_mutex: std.Thread.Mutex,
+    topics: std.StringHashMap(*Topic),
 
     pub fn init(allocator: std.mem.Allocator, config: ClientConfig) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -95,12 +95,15 @@ pub const Client = struct {
             .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .transactions = std.AutoHashMap(uuid.Uuid, *Signal(*Message)).init(allocator),
             .transactions_mutex = std.Thread.Mutex{},
-            .connection_messages = ConnectionMessages.init(allocator),
+            .connection_messages = ConnectionMessages.init(allocator, memory_pool),
             .connection_messages_mutex = std.Thread.Mutex{},
+            .topics = std.StringHashMap(*Topic).init(allocator),
         };
     }
 
     pub fn deinit(self: *Self) void {
+        self.connection_messages.deinit();
+
         var connections_iterator = self.connections.valueIterator();
         while (connections_iterator.next()) |entry| {
             const connection = entry.*;
@@ -121,19 +124,20 @@ pub const Client = struct {
             self.allocator.destroy(connection);
         }
 
-        // var transactions_iterator = self.transactions.valueIterator();
-        // while (transactions_iterator.next()) |entry| {
-        // const transaction = entry.*;
+        var topics_iterator = self.topics.valueIterator();
+        while (topics_iterator.next()) |entry| {
+            const topic = entry.*;
 
-        // self.allocator.destroy(transaction);
-        // }
+            topic.deinit();
+            self.allocator.destroy(topic);
+        }
 
         self.io.deinit();
         self.memory_pool.deinit();
         self.connections.deinit();
         self.uninitialized_connections.deinit();
         self.transactions.deinit();
-        self.connection_messages.deinit();
+        self.topics.deinit();
 
         self.allocator.destroy(self.memory_pool);
         self.allocator.destroy(self.io);
@@ -170,7 +174,7 @@ pub const Client = struct {
                 .running => {
                     self.tick() catch unreachable;
 
-                    // self.io.run_for_ns(100 * std.time.ns_per_us) catch |err| {
+                    // self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch |err| {
                     self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch |err| {
                         log.err("client failed to run io {any}", .{err});
                     };
@@ -215,6 +219,9 @@ pub const Client = struct {
         while (deadline > std.time.nanoTimestamp()) {
             if (conn.state == .connected) return conn;
 
+            // FIX: this is some baaaaad code. There should instead be a signal or channel that this thread could
+            // wait on instead. Since this call happens on a foreground thread, an unbuffered channel seems the most
+            // appropriate.
             std.time.sleep(constants.io_tick_ms * std.time.ns_per_ms);
         } else {
             return error.DeadlineExceeded;
@@ -258,7 +265,7 @@ pub const Client = struct {
                     break;
                 };
 
-                try self.gather(conn);
+                try self.process(conn);
 
                 if (conn.state == .connected and conn.connection_id != 0) {
                     // the connection is now valid and ready for events
@@ -285,13 +292,13 @@ pub const Client = struct {
                     continue;
                 };
 
-                try self.gather(conn);
+                try self.process(conn);
                 try self.distribute(conn);
             }
         }
     }
 
-    fn gather(self: *Self, conn: *Connection) !void {
+    fn process(self: *Self, conn: *Connection) !void {
         // check to see if there are messages
         if (conn.inbox.count == 0) return;
 
@@ -330,29 +337,7 @@ pub const Client = struct {
                         conn.remote_id,
                     });
                 },
-                // .ping => {
-                //     log.debug("received ping from origin_id: {}, connection_id: {}", .{
-                //         message.headers.origin_id,
-                //         message.headers.connection_id,
-                //     });
-                //     // Since this is a `ping` we don't need to do any extra work to figure out how to respond
-                //     message.headers.message_type = .pong;
-                //     message.headers.origin_id = self.id;
-                //     message.headers.connection_id = conn.connection_id;
-                //     message.setTransactionId(message.transactionId());
-                //     message.setErrorCode(.ok);
-
-                //     assert(message.refs() == 1);
-
-                //     if (conn.outbox.enqueue(message)) |_| {} else |err| {
-                //         log.err("Failed to enqueue message to outbox: {}", .{err});
-                //         message.deref(); // Undo reference if enqueue fails
-                //     }
-                //     message.ref();
-                // },
                 .pong => {
-                    // log.debug("received pong! {any}", .{message});
-
                     message.ref();
                     self.transactions_mutex.lock();
                     defer self.transactions_mutex.unlock();
@@ -364,46 +349,27 @@ pub const Client = struct {
                         signal.send(message);
                         _ = self.transactions.remove(message.transactionId());
                     }
-
-                    // log.debug("received pong from origin_id: {}, connection_id: {}", .{
-                    //     message.headers.origin_id,
-                    //     message.headers.connection_id,
-                    // });
                 },
                 .publish => {
-                    // // get the publisher's key
-                    // const publisher_key = utils.generateKey(message.topicName(), conn.connection_id);
-                    // if (self.publishers.get(publisher_key)) |publisher| {
-                    //     publisher.publish(message) catch |err| {
-                    //         log.err("could not publish message {any}", .{err});
-                    //         message.deref();
-                    //     };
-                    //     return;
-                    // }
+                    if (self.topics.get(message.topicName())) |topic| {
+                        topic.process(message);
+                    } else {
+                        return error.TopicDoesNotExist;
+                    }
+                },
+                .reply => {
+                    log.debug("reply received", .{});
+                    message.ref();
+                    self.transactions_mutex.lock();
+                    defer self.transactions_mutex.unlock();
 
-                    // const publisher = try self.allocator.create(Publisher);
-                    // errdefer self.allocator.destroy(publisher);
-
-                    // publisher.* = try Publisher.init(
-                    //     self.allocator,
-                    //     publisher_key,
-                    //     conn.connection_id,
-                    //     constants.publisher_max_queue_capacity,
-                    //     message.topicName(),
-                    // );
-                    // errdefer publisher.deinit();
-
-                    // try self.publishers.put(publisher_key, publisher);
-
-                    // // check if the bus even exists
-                    // const bus_manager = self.node.bus_manager;
-                    // const bus = try bus_manager.findOrCreate(message.topicName());
-                    // try bus.addPublisher(publisher);
-
-                    // publisher.publish(message) catch |err| {
-                    //     log.err("could not publish message {any}", .{err});
-                    //     message.deref();
-                    // };
+                    // check if this pong message is part of transaction
+                    if (self.transactions.get(message.transactionId())) |signal| {
+                        message.ref();
+                        // log.info("message.refs() {}", .{message.refs()});
+                        signal.send(message);
+                        _ = self.transactions.remove(message.transactionId());
+                    }
                 },
                 else => {
                     //                     message.deref();
@@ -559,45 +525,194 @@ pub const Client = struct {
             try self.transactions.put(ping_message.transactionId(), signal);
         }
     }
+
+    pub fn publish(
+        self: *Self,
+        conn: *Connection,
+        topic_name: []const u8,
+        body: []const u8,
+        options: PublishOptions,
+    ) !void {
+        _ = options;
+        assert(conn.state == .connected);
+
+        const message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(message);
+
+        message.* = Message.new();
+        message.headers.message_type = .publish;
+        message.setTopicName(topic_name);
+        message.setBody(body);
+        message.ref();
+
+        self.connection_messages_mutex.lock();
+        defer self.connection_messages_mutex.unlock();
+
+        try self.connection_messages.append(conn.connection_id, message);
+    }
+
+    pub fn subscribe(
+        self: *Self,
+        conn: *Connection,
+        signal: *Signal(*Message),
+        topic_name: []const u8,
+        callback: Topic.SubscriptionCallback,
+        options: SubscribeOptions,
+    ) !void {
+        assert(conn.state == .connected);
+
+        var topic: *Topic = undefined;
+        if (self.topics.get(topic_name)) |t| {
+            topic = t;
+        } else {
+            topic = try self.allocator.create(Topic);
+            errdefer self.allocator.destroy(topic);
+
+            topic.* = Topic.init(self.allocator, topic_name);
+            errdefer topic.deinit();
+
+            try self.topics.put(topic_name, topic);
+        }
+
+        // Add the callback to the list of subscribers to this topic
+        const subscriber_key = utils.generateKey(topic_name, conn.connection_id);
+        try topic.subscribers.put(subscriber_key, callback);
+        errdefer _ = topic.subscribers.remove(subscriber_key);
+
+        const subscribe_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(subscribe_message);
+
+        subscribe_message.* = Message.new();
+        subscribe_message.headers.message_type = .subscribe;
+        subscribe_message.setTransactionId(uuid.v7.new());
+        subscribe_message.setTopicName(topic_name);
+        subscribe_message.ref();
+        errdefer subscribe_message.deref();
+
+        {
+            self.connection_messages_mutex.lock();
+            defer self.connection_messages_mutex.unlock();
+
+            try self.connection_messages.append(conn.connection_id, subscribe_message);
+        }
+
+        {
+            self.transactions_mutex.lock();
+            defer self.transactions_mutex.unlock();
+
+            try self.transactions.put(subscribe_message.transactionId(), signal);
+        }
+
+        // register the callback to be executed when we receive a new message on the matching topic
+        _ = options;
+    }
+
+    // const subscriber = try client.subscribe(conn, topic_name, )
+    // defer client.unsubscribe(subscriber);
+    //
+    // const subscriber = Subscriber.new();
+    // defer subscriber.unsubscribe();
+    //
+    // subscriber.subscribe(conn, topic_name);
+
+    pub fn unsubscribe(
+        self: *Self,
+        conn: *Connection,
+        signal: *Signal(*Message),
+        topic_name: []const u8,
+        callback: Topic.SubscriptionCallback,
+    ) !void {
+        _ = callback;
+        if (self.topics.get(topic_name)) |topic| {
+            const subscriber_key = utils.generateKey(topic_name, conn.connection_id);
+            _ = topic.subscribers.remove(subscriber_key);
+        } else {
+            return error.NotSubscribed;
+        }
+
+        const unsubscribe_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(unsubscribe_message);
+
+        unsubscribe_message.* = Message.new();
+        unsubscribe_message.headers.message_type = .unsubscribe;
+        unsubscribe_message.setTransactionId(uuid.v7.new());
+        unsubscribe_message.setTopicName(topic_name);
+        unsubscribe_message.ref();
+        errdefer unsubscribe_message.deref();
+
+        {
+            self.connection_messages_mutex.lock();
+            defer self.connection_messages_mutex.unlock();
+
+            try self.connection_messages.append(conn.connection_id, unsubscribe_message);
+        }
+
+        {
+            self.transactions_mutex.lock();
+            defer self.transactions_mutex.unlock();
+
+            try self.transactions.put(unsubscribe_message.transactionId(), signal);
+        }
+    }
 };
 
-pub const Transaction = struct {
+const Topic = struct {
     const Self = @This();
-    signal: *Signal(*Message),
+    const SubscriptionCallback = *const fn (message: *Message) void;
     allocator: std.mem.Allocator,
+    subscribers: std.AutoHashMap(u128, SubscriptionCallback),
+    topic_name: []const u8,
 
-    pub fn init(allocator: std.mem.Allocator) !Self {
-        const signal = try allocator.create(Signal(*Message));
-        errdefer allocator.destroy(signal);
-
-        signal.* = Signal(*Message).new();
-
+    pub fn init(allocator: std.mem.Allocator, topic_name: []const u8) Self {
         return Self{
             .allocator = allocator,
-            .signal = signal,
+            .topic_name = topic_name,
+            .subscribers = std.AutoHashMap(u128, SubscriptionCallback).init(allocator),
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.allocator.destroy(self.signal);
+        // var subscribers_iter = self.subscribers.valueIterator();
+        // while (subscribers_iter.next()) |entry| {
+        //     const subscriber = entry.*;
+
+        //     self.allocator.destroy(subscriber);
+        // }
+
+        self.subscribers.deinit();
     }
 
-    pub fn send(self: *Self, message: *Message) void {
-        self.signal.send(message);
-    }
+    pub fn process(self: *Self, message: *Message) void {
+        assert(message.headers.message_type == .publish);
+        assert(std.mem.eql(u8, message.topicName(), self.topic_name));
 
-    pub fn receive(self: *Self) *Message {
-        return self.signal.receive();
+        var subscribers_iter = self.subscribers.valueIterator();
+        while (subscribers_iter.next()) |entry| {
+            const callback = entry.*;
+
+            callback(message);
+        }
     }
 };
 
-// const request_handle = try RequestHandle.init(allocator)
-// defer request_handle.deinit();
-//
-// const request_handle = try client.request(conn, req, opts, timeout_ns);
-//
-// const request_handle = try client.ping(conn, &request_handle, opts, timout_ns)
-// defer request_handle.deinit();
+const Publisher = struct {};
+const Subscriber = struct {
+    const Self = @This();
+
+    id: u128,
+    callback: *const fn (message: *Message) void,
+    messages_recv: u128,
+    topic: *Topic,
+
+    pub fn new(id: uuid.Uuid, topic: *Topic, callback: *const fn (message: *Message) void) Self {
+        return Self{
+            .id = id,
+            .callback = callback,
+            .messages_recv = 0,
+            .topic = topic,
+        };
+    }
+};
 
 test "init/deinit" {
     const allocator = testing.allocator;
