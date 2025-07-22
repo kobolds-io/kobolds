@@ -555,7 +555,7 @@ pub fn nodeSubscribe() !void {
     const callback = struct {
         pub fn callback(message: *Message) void {
             subscriber_msg_count += 1;
-            if (subscriber_msg_count % 5 == 0) {
+            if (subscriber_msg_count % 10 == 0) {
                 log.info(
                     "received message topic: {s}, count: {}",
                     .{ message.topicName(), subscriber_msg_count },
