@@ -392,7 +392,7 @@ pub const Node = struct {
             //     bytes_processed_delta,
             // });
 
-            log.err("messages_processed: {}, bytes_processed: {}, messages_delta: {}, bytes_delta: {}", .{
+            log.info("messages_processed: {}, bytes_processed: {}, messages_delta: {}, bytes_delta: {}", .{
                 messages_processed,
                 bytes_processed,
                 messages_processed_delta,
