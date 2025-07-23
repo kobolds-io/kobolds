@@ -57,11 +57,18 @@ pub const Topic = struct {
         assert(self.queue.count == 0);
         self.clearQueue();
 
-        // var subscribers_iter = self.subscribers.valueIterator();
-        // while (subscribers_iter.next()) |entry| {
-        //     const subscriber = entry.*;
-        //     self.allocator.destroy(subscriber);
-        // }
+        var subscribers_iter = self.subscribers.valueIterator();
+        while (subscribers_iter.next()) |entry| {
+            const subscriber = entry.*;
+
+            while (subscriber.queue.dequeue()) |message| {
+                message.deref();
+                if (message.refs() == 0) self.memory_pool.destroy(message);
+            }
+
+            subscriber.deinit();
+            self.allocator.destroy(subscriber);
+        }
 
         // var publishers_iter = self.publishers.valueIterator();
         // while (publishers_iter.next()) |entry| {
@@ -139,6 +146,39 @@ pub const Topic = struct {
             const x = queue.enqueueMany(self.tmp_copy_buffer[0..n]);
             assert(x == n);
         }
+    }
+
+    pub fn addSubscriber(self: *Self, subscriber_key: u128, conn_id: u128) !void {
+        const subscriber = try self.allocator.create(Subscriber);
+        errdefer self.allocator.destroy(subscriber);
+
+        subscriber.* = try Subscriber.init(
+            self.allocator,
+            subscriber_key,
+            conn_id,
+            constants.subscriber_max_queue_capacity,
+        );
+        errdefer subscriber.deinit();
+
+        try self.subscribers.put(subscriber_key, subscriber);
+    }
+
+    pub fn removeSubscriber(self: *Self, subscriber_key: u128) bool {
+        if (self.subscribers.fetchRemove(subscriber_key)) |entry| {
+            const subscriber = entry.value;
+
+            while (subscriber.queue.dequeue()) |message| {
+                message.deref();
+                if (message.refs() == 0) self.memory_pool.destroy(message);
+            }
+
+            subscriber.deinit();
+            self.allocator.destroy(subscriber);
+
+            return true;
+        }
+
+        return false;
     }
 
     fn clearQueue(self: *Self) void {

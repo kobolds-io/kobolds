@@ -92,7 +92,6 @@ pub const Node = struct {
     metrics: Metrics,
     mutex: std.Thread.Mutex,
     state: NodeState,
-    subscribers: std.AutoHashMap(u128, *Subscriber),
     topics: std.StringHashMap(*Topic),
     workers: *std.AutoHashMap(usize, *Worker),
 
@@ -167,7 +166,6 @@ pub const Node = struct {
             .metrics = .{},
             .mutex = std.Thread.Mutex{},
             .state = .closed,
-            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
             .topics = std.StringHashMap(*Topic).init(allocator),
             .workers = workers,
         };
@@ -203,19 +201,6 @@ pub const Node = struct {
             self.allocator.destroy(topic);
         }
 
-        var subscribers_iter = self.subscribers.valueIterator();
-        while (subscribers_iter.next()) |entry| {
-            const subscriber = entry.*;
-
-            while (subscriber.queue.dequeue()) |message| {
-                message.deref();
-                if (message.refs() == 0) self.memory_pool.destroy(message);
-            }
-
-            subscriber.deinit();
-            self.allocator.destroy(subscriber);
-        }
-
         while (self.inbox.dequeue()) |message| {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
@@ -242,7 +227,6 @@ pub const Node = struct {
         self.topics.deinit();
         self.inbox.deinit();
         self.connection_outboxes.deinit();
-        self.subscribers.deinit();
 
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.connections);
@@ -311,11 +295,12 @@ pub const Node = struct {
     }
 
     pub fn close(self: *Self) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         switch (self.state) {
             .closed, .closing => return,
             else => {
-                self.mutex.lock();
-                defer self.mutex.unlock();
 
                 // spin down the workers
                 var worker_iterator = self.workers.valueIterator();
@@ -433,21 +418,27 @@ pub const Node = struct {
     }
 
     fn aggregateMessages(self: *Self) !void {
-        var subscribers_iter = self.subscribers.valueIterator();
-        while (subscribers_iter.next()) |subscriber_entry| {
-            const subscriber: *Subscriber = subscriber_entry.*;
-            const connection_outbox = try self.findOrCreateConnectionOutbox(subscriber.conn_id);
+        var topics_iter = self.topics.valueIterator();
+        while (topics_iter.next()) |topic_entry| {
+            const topic: *Topic = topic_entry.*;
+            if (topic.subscribers.count() == 0) continue;
 
-            // We are going to create envelopes here
-            while (connection_outbox.available() > 0 and !subscriber.queue.isEmpty()) {
-                if (subscriber.queue.dequeue()) |message| {
-                    const envelope = Envelope{
-                        .connection_id = subscriber.conn_id,
-                        .message = message,
-                    };
+            var subscribers_iter = topic.subscribers.valueIterator();
+            while (subscribers_iter.next()) |subscriber_entry| {
+                const subscriber: *Subscriber = subscriber_entry.*;
+                const connection_outbox = try self.findOrCreateConnectionOutbox(subscriber.conn_id);
 
-                    // we are checking this loop that adding the envelope will be successful
-                    connection_outbox.enqueue(envelope) catch unreachable;
+                // We are going to create envelopes here
+                while (connection_outbox.available() > 0 and !subscriber.queue.isEmpty()) {
+                    if (subscriber.queue.dequeue()) |message| {
+                        const envelope = Envelope{
+                            .connection_id = subscriber.conn_id,
+                            .message = message,
+                        };
+
+                        // we are checking this loop that adding the envelope will be successful
+                        connection_outbox.enqueue(envelope) catch unreachable;
+                    }
                 }
             }
         }
@@ -511,8 +502,6 @@ pub const Node = struct {
                         subscriber.deinit();
                         self.allocator.destroy(subscriber);
                     }
-
-                    _ = self.subscribers.remove(key);
 
                     // if (topic.publishers.fetchRemove(key)) |publisher_entry| {
                     //     const publisher = publisher_entry.value;
@@ -803,9 +792,11 @@ pub const Node = struct {
             return error.ConnectionOutboxFull;
         }
 
+        const topic = try self.findOrCreateTopic(message.topicName(), .{});
+
         // QUESTION: A connection can only be subscribed to a topic ONCE. Is this good behavior???
         const subscriber_key = utils.generateKey(message.topicName(), message.headers.connection_id);
-        if (self.subscribers.get(subscriber_key)) |_| {
+        if (topic.subscribers.get(subscriber_key)) |_| {
             // FIX: pick a better error for this
             reply.setErrorCode(.err);
             log.err("duplicate connection subscription", .{});
@@ -819,22 +810,8 @@ pub const Node = struct {
             return;
         }
 
-        const subscriber = try self.allocator.create(Subscriber);
-        errdefer self.allocator.destroy(subscriber);
-
-        subscriber.* = try Subscriber.init(
-            self.allocator,
-            subscriber_key,
-            message.headers.connection_id,
-            constants.subscriber_max_queue_capacity,
-        );
-        errdefer subscriber.deinit();
-
-        try self.subscribers.put(subscriber_key, subscriber);
-        errdefer _ = self.subscribers.remove(subscriber_key);
-
-        try self.addSubscriber(message.topicName(), subscriber);
-        errdefer self.removeSubscriber(message.topicName(), subscriber_key);
+        try topic.addSubscriber(subscriber_key, message.headers.connection_id);
+        errdefer _ = topic.removeSubscriber(subscriber_key);
 
         const envelope = Envelope{
             .connection_id = message.headers.connection_id,
