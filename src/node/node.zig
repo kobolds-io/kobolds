@@ -654,51 +654,6 @@ pub const Node = struct {
         }
     }
 
-    fn addInboundConnection(self: *Self, socket: posix.socket_t) !void {
-        // we are just gonna try to close this socket if anything blows up
-        errdefer posix.close(socket);
-        // initialize the connection
-        const connection = try self.allocator.create(Connection);
-        errdefer self.allocator.destroy(connection);
-
-        const default_inbound_connection_config = InboundConnectionConfig{};
-
-        const conn_id = uuid.v7.new();
-        connection.* = try Connection.init(
-            conn_id,
-            self.id,
-            .inbound,
-            self.io,
-            socket,
-            self.allocator,
-            self.memory_pool,
-            .{ .inbound = default_inbound_connection_config },
-        );
-        errdefer connection.deinit();
-
-        connection.state = .connecting;
-
-        try self.connections.put(conn_id, connection);
-        errdefer _ = self.connections.remove(conn_id);
-
-        const accept_message = self.memory_pool.create() catch |err| {
-            log.err("unable to create an accept message for connection {any}", .{err});
-            connection.state = .closing;
-            return;
-        };
-        accept_message.* = Message.new();
-        accept_message.headers.message_type = .accept;
-        accept_message.ref();
-
-        var accept_headers: *Accept = accept_message.headers.into(.accept).?;
-        accept_headers.connection_id = conn_id;
-        accept_headers.origin_id = self.id;
-
-        try connection.outbox.enqueue(accept_message);
-
-        log.info("node: {} added connection {}", .{ self.id, conn_id });
-    }
-
     fn addInboundConnectionToNextWorker(self: *Self, socket: posix.socket_t) !void {
         assert(self.workers.count() > 0);
         // we are just gonna try to close this socket if anything blows up
@@ -761,12 +716,16 @@ pub const Node = struct {
         return ch;
     }
 
+    // FIX: need much better error handling here. Slow subscribers simply aren't able to consume as many messages as
+    // can be published at a time. What is the strategy for a flood of publishes?
     fn handlePublish(self: *Self, message: *Message) !void {
         // Publishes actually don't care about the origin of the message so much. Instead, they care much more about
         // the destination of the mssage. The topic is in charge of distributing messages to subscribers. Subscribers
         // are in charge of attaching metadata as to the destination of the message
         const topic = try self.findOrCreateTopic(message.topicName(), .{});
+
         if (topic.queue.available() == 0) {
+            // Try and push messages to subscribers to free up slots in the topic
             try topic.tick();
         }
         message.ref();
@@ -775,8 +734,6 @@ pub const Node = struct {
     }
 
     fn handleSubscribe(self: *Self, message: *Message) !void {
-        // FIX: we should ensure that the outbox has sufficient space before even attempting to process this
-
         const reply = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(reply);
 
@@ -836,38 +793,6 @@ pub const Node = struct {
             try self.topics.put(topic_name, topic);
             return topic;
         }
-    }
-
-    pub fn addSubscriber(self: *Self, topic_name: []const u8, subscriber: *Subscriber) !void {
-        const topic = try self.findOrCreateTopic(topic_name, .{});
-
-        try topic.subscribers.put(subscriber.key, subscriber);
-    }
-
-    pub fn removeSubscriber(self: *Self, topic_name: []const u8, subscriber_key: u128) void {
-        const topic = self.findOrCreateTopic(topic_name, .{}) catch |err| {
-            log.err("could not find or create topic {any}", .{err});
-            return;
-        };
-
-        _ = topic.subscribers.remove(subscriber_key);
-    }
-
-    pub fn connect(self: *Self, config: OutboundConnectionConfig, timeout_ns: i64) !ConnectionHandle {
-        const ch = try self.addOutboundConnectionToNextWorker(config);
-        const deadline = std.time.nanoTimestamp() + timeout_ns;
-        while (deadline > std.time.nanoTimestamp()) {
-            if (ch.connection.state == .connected) return ch;
-
-            std.time.sleep(constants.io_tick_ms * std.time.ns_per_ms);
-        } else {
-            return error.DeadlineExceeded;
-        }
-    }
-
-    pub fn disconnect(self: *Self, conn: *Connection) void {
-        _ = self;
-        conn.state = .closing;
     }
 };
 
