@@ -13,7 +13,7 @@ const io_uring_sqe = linux.io_uring_sqe;
 const log = std.log; //.scoped(.io);
 const utils = @import("../utils.zig");
 
-const FIFOType = @import("../data_structures/fifo.zig").FIFOType;
+const FIFOType = @import("../data_structures/fifo_queue.zig").FIFOType;
 const DoublyLinkedListType = @import("../data_structures/doubly_linked_list.zig").DoublyLinkedListType;
 
 const constants = @import("../constants.zig");
