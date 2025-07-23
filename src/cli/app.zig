@@ -5,7 +5,6 @@ const cli = @import("zig-cli");
 const log = std.log.scoped(.CLI);
 
 const constants = @import("../constants.zig");
-const Mailbox = @import("../data_structures/mailbox.zig").Mailbox;
 const Connection = @import("../protocol/connection.zig").Connection;
 const Message = @import("../protocol/message.zig").Message;
 
@@ -514,8 +513,8 @@ pub fn nodePublish() !void {
                 std.time.sleep(10 * std.time.ns_per_ms);
                 continue;
             };
-            std.time.sleep(1 * std.time.ns_per_ms);
         }
+        std.time.sleep(1 * std.time.ns_per_ms);
     }
 }
 

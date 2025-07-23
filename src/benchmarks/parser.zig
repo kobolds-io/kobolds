@@ -8,12 +8,12 @@ const Message = @import("../protocol/message.zig").Message;
 
 const constants = @import("../constants.zig");
 
-const ParserBenchmark = struct {
+const ParserParseBenchmark = struct {
     messages: *std.ArrayList(Message),
     parser: *Parser,
     bytes: []const u8,
 
-    fn new(messages: *std.ArrayList(Message), parser: *Parser, bytes: []const u8) ParserBenchmark {
+    fn new(messages: *std.ArrayList(Message), parser: *Parser, bytes: []const u8) ParserParseBenchmark {
         return .{
             .messages = messages,
             .parser = parser,
@@ -21,7 +21,7 @@ const ParserBenchmark = struct {
         };
     }
 
-    pub fn run(self: ParserBenchmark, _: std.mem.Allocator) void {
+    pub fn run(self: ParserParseBenchmark, _: std.mem.Allocator) void {
         self.parser.parse(self.messages, self.bytes) catch unreachable;
     }
 };
@@ -52,7 +52,7 @@ test "Parser benchmarks" {
     var parser = Parser.init(parser_allocator);
     defer parser.deinit();
 
-    const headers_1 = [_]u8{ 195, 37, 247, 124, 7, 9, 112, 194, 98, 99, 131, 40, 248, 184, 217, 148, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    const headers_1 = [_]u8{ 185, 109, 74, 197, 189, 38, 87, 150, 98, 99, 131, 40, 248, 184, 217, 148, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 47, 104, 101, 108, 108, 111, 47, 119, 111, 114, 108, 100 };
 
     const body = [_]u8{97} ** constants.message_max_body_size;
     const bytes_1 = headers_1 ++ body;
@@ -116,7 +116,7 @@ test "Parser benchmarks" {
 
     try bench.addParam(
         parser_parse_4_title,
-        &ParserBenchmark.new(&parser_messages, &parser, bytes_4),
+        &ParserParseBenchmark.new(&parser_messages, &parser, bytes_4),
         .{
             .hooks = .{
                 .after_each = afterEach,
@@ -125,7 +125,7 @@ test "Parser benchmarks" {
     );
     try bench.addParam(
         parser_parse_1_title,
-        &ParserBenchmark.new(&parser_messages, &parser, &bytes_1),
+        &ParserParseBenchmark.new(&parser_messages, &parser, &bytes_1),
         .{
             .hooks = .{
                 .after_each = afterEach,
@@ -134,7 +134,7 @@ test "Parser benchmarks" {
     );
     try bench.addParam(
         parser_parse_2_title,
-        &ParserBenchmark.new(&parser_messages, &parser, &bytes_2),
+        &ParserParseBenchmark.new(&parser_messages, &parser, &bytes_2),
         .{
             .hooks = .{
                 .after_each = afterEach,
@@ -143,7 +143,7 @@ test "Parser benchmarks" {
     );
     try bench.addParam(
         parser_parse_3_title,
-        &ParserBenchmark.new(&parser_messages, &parser, &bytes_3),
+        &ParserParseBenchmark.new(&parser_messages, &parser, &bytes_3),
         .{
             .hooks = .{
                 .after_each = afterEach,
@@ -152,7 +152,7 @@ test "Parser benchmarks" {
     );
     try bench.addParam(
         parser_parse_5_title,
-        &ParserBenchmark.new(&parser_messages, &parser, recv_buffer[0..recv_buffer_index]),
+        &ParserParseBenchmark.new(&parser_messages, &parser, recv_buffer[0..recv_buffer_index]),
         .{
             .hooks = .{
                 .after_each = afterEach,

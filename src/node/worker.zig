@@ -22,8 +22,6 @@ const InboundConnectionConfig = @import("../protocol/connection.zig").InboundCon
 const Message = @import("../protocol/message.zig").Message;
 const Accept = @import("../protocol/message.zig").Accept;
 
-const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
-
 const WorkerState = enum {
     running,
     closing,
@@ -37,19 +35,18 @@ pub const Worker = struct {
     close_channel: *UnbufferedChannel(bool),
     connections_mutex: std.Thread.Mutex,
     connections: std.AutoHashMap(uuid.Uuid, *Connection),
+    dead_connections_mutex: std.Thread.Mutex,
+    dead_connections: std.ArrayList(u128),
     done_channel: *UnbufferedChannel(bool),
     id: usize,
+    inbox_mutex: std.Thread.Mutex,
+    inbox: *RingBuffer(*Message),
     io: *IO,
     node: *Node,
+    outbox_mutex: std.Thread.Mutex,
+    outbox: *RingBuffer(Envelope),
     state: WorkerState,
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
-    inbox: *RingBuffer(*Message),
-    inbox_mutex: std.Thread.Mutex,
-    outbox: *RingBuffer(Envelope),
-    outbox_mutex: std.Thread.Mutex,
-    subscribers: std.AutoHashMap(u128, *Subscriber),
-    dead_connections: std.ArrayList(u128),
-    dead_connections_mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, id: usize, node: *Node) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -95,7 +92,6 @@ pub const Worker = struct {
             .inbox_mutex = std.Thread.Mutex{},
             .outbox = outbox,
             .outbox_mutex = std.Thread.Mutex{},
-            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
             .dead_connections = std.ArrayList(u128).init(allocator),
             .dead_connections_mutex = std.Thread.Mutex{},
         };
@@ -129,24 +125,11 @@ pub const Worker = struct {
             if (message.refs() == 0) self.node.memory_pool.destroy(message);
         }
 
-        var subscribers_iter = self.subscribers.valueIterator();
-        while (subscribers_iter.next()) |subscriber_entry| {
-            const subscriber = subscriber_entry.*;
-            while (subscriber.queue.dequeue()) |message| {
-                message.deref();
-                if (message.refs() == 0) self.node.memory_pool.destroy(message);
-            }
-
-            subscriber.deinit();
-            self.allocator.destroy(subscriber);
-        }
-
         self.inbox.deinit();
         self.outbox.deinit();
         self.connections.deinit();
         self.io.deinit();
         self.uninitialized_connections.deinit();
-        self.subscribers.deinit();
         self.dead_connections.deinit();
 
         self.allocator.destroy(self.inbox);
@@ -541,9 +524,7 @@ pub const Worker = struct {
         }
     }
 
-    fn handlePongMessage(self: *Self, conn: *Connection, message: *Message) !void {
-        _ = conn;
-
+    fn handlePongMessage(self: *Self, _: *Connection, message: *Message) !void {
         defer {
             message.deref();
             if (message.refs() == 0) self.node.memory_pool.destroy(message);

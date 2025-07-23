@@ -12,7 +12,6 @@ const IO = @import("../io.zig").IO;
 const Worker = @import("./worker.zig").Worker;
 const Listener = @import("./listener.zig").Listener;
 const ListenerConfig = @import("./listener.zig").ListenerConfig;
-const Remote = @import("./remote.zig").Remote;
 const InboundConnectionConfig = @import("../protocol/connection.zig").InboundConnectionConfig;
 const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 const Metrics = @import("./metrics.zig").Metrics;
@@ -33,8 +32,6 @@ const TopicOptions = @import("../pubsub/topic.zig").TopicOptions;
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 const Envelope = @import("../data_structures/envelope.zig").Envelope;
 
-pub const PingOptions = struct {};
-
 pub const NodeConfig = struct {
     const Self = @This();
 
@@ -45,13 +42,11 @@ pub const NodeConfig = struct {
     outbound_configs: ?[]const OutboundConnectionConfig = null,
 
     pub fn validate(self: Self) ?[]const u8 {
-        const cpu_core_count = std.Thread.getCpuCount() catch {
-            const msg = "could not getCpuCount";
-            @panic(msg);
-        };
+        const cpu_core_count = std.Thread.getCpuCount() catch @panic("could not get getCpuCount");
+
         if (self.worker_threads > cpu_core_count) return "NodeConfig `worker_threads` exceeds cpu core count";
-        if (self.max_connections > 5_000) return "NodeConfig `max_connections` exceeds arbitrary limit";
-        if (self.memory_pool_capacity > 1_000_000) return "NodeConfig `memory_pool_capacity` exceeds arbitrary limit";
+        if (self.max_connections > 1024) return "NodeConfig `max_connections` exceeds arbitrary limit";
+        if (self.memory_pool_capacity > 500_000) return "NodeConfig `memory_pool_capacity` exceeds arbitrary limit";
 
         if (self.listener_configs) |listener_configs| {
             if (listener_configs.len == 0) return "NodeConfig `listener_configs` is non null but contains no entries";
@@ -83,26 +78,22 @@ const NodeState = enum {
 pub const Node = struct {
     const Self = @This();
 
-    id: uuid.Uuid,
-    io: *IO,
     allocator: std.mem.Allocator,
-    config: NodeConfig,
-    listeners: *std.AutoHashMap(usize, *Listener),
     close_channel: *UnbufferedChannel(bool),
-    done_channel: *UnbufferedChannel(bool),
-    state: NodeState,
-    workers: *std.AutoHashMap(usize, *Worker),
-    connections: *std.AutoHashMap(u128, *Connection),
-    memory_pool: *MemoryPool(Message),
-    remotes: *std.AutoHashMap(uuid.Uuid, *Remote),
-    mutex: std.Thread.Mutex,
-    topics: std.StringHashMap(*Topic),
-    topics_mutex: std.Thread.Mutex,
-    subscribers: std.AutoHashMap(u128, *Subscriber),
-    metrics: Metrics,
-    inbox: *RingBuffer(*Message),
+    config: NodeConfig,
     connection_outboxes: std.AutoHashMap(u128, *RingBuffer(Envelope)),
-    connection_outboxes_mutex: std.Thread.Mutex,
+    connections: *std.AutoHashMap(u128, *Connection),
+    done_channel: *UnbufferedChannel(bool),
+    id: uuid.Uuid,
+    inbox: *RingBuffer(*Message),
+    io: *IO,
+    listeners: *std.AutoHashMap(usize, *Listener),
+    memory_pool: *MemoryPool(Message),
+    metrics: Metrics,
+    mutex: std.Thread.Mutex,
+    state: NodeState,
+    topics: std.StringHashMap(*Topic),
+    workers: *std.AutoHashMap(usize, *Worker),
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
         if (config.validate()) |err_message| {
@@ -154,12 +145,6 @@ pub const Node = struct {
         inbox.* = try RingBuffer(*Message).init(allocator, config.memory_pool_capacity);
         errdefer inbox.deinit();
 
-        const remotes = try allocator.create(std.AutoHashMap(uuid.Uuid, *Remote));
-        errdefer allocator.destroy(remotes);
-
-        remotes.* = std.AutoHashMap(uuid.Uuid, *Remote).init(allocator);
-        errdefer remotes.deinit();
-
         const listeners = try allocator.create(std.AutoHashMap(usize, *Listener));
         errdefer allocator.destroy(listeners);
 
@@ -167,26 +152,22 @@ pub const Node = struct {
         errdefer listeners.deinit();
 
         return Self{
-            .id = uuid.v7.new(),
-            .io = io,
             .allocator = allocator,
-            .config = config,
             .close_channel = close_channel,
-            .done_channel = done_channel,
-            .state = .closed,
-            .workers = workers,
-            .connections = connections,
-            .memory_pool = memory_pool,
-            .remotes = remotes,
-            .listeners = listeners,
-            .topics = std.StringHashMap(*Topic).init(allocator),
-            .topics_mutex = std.Thread.Mutex{},
-            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
-            .mutex = std.Thread.Mutex{},
-            .metrics = .{},
-            .inbox = inbox,
+            .config = config,
             .connection_outboxes = std.AutoHashMap(u128, *RingBuffer(Envelope)).init(allocator),
-            .connection_outboxes_mutex = std.Thread.Mutex{},
+            .connections = connections,
+            .done_channel = done_channel,
+            .id = uuid.v7.new(),
+            .inbox = inbox,
+            .io = io,
+            .listeners = listeners,
+            .memory_pool = memory_pool,
+            .metrics = .{},
+            .mutex = std.Thread.Mutex{},
+            .state = .closed,
+            .topics = std.StringHashMap(*Topic).init(allocator),
+            .workers = workers,
         };
     }
 
@@ -213,31 +194,11 @@ pub const Node = struct {
             self.allocator.destroy(worker);
         }
 
-        var remotes_iterator = self.remotes.valueIterator();
-        while (remotes_iterator.next()) |entry| {
-            const remote = entry.*;
-            remote.deinit();
-            self.allocator.destroy(remote);
-        }
-
         var topics_iter = self.topics.valueIterator();
         while (topics_iter.next()) |entry| {
             const topic = entry.*;
             topic.deinit();
             self.allocator.destroy(topic);
-        }
-
-        var subscribers_iter = self.subscribers.valueIterator();
-        while (subscribers_iter.next()) |entry| {
-            const subscriber = entry.*;
-
-            while (subscriber.queue.dequeue()) |message| {
-                message.deref();
-                if (message.refs() == 0) self.memory_pool.destroy(message);
-            }
-
-            subscriber.deinit();
-            self.allocator.destroy(subscriber);
         }
 
         while (self.inbox.dequeue()) |message| {
@@ -260,14 +221,12 @@ pub const Node = struct {
 
         self.listeners.deinit();
         self.workers.deinit();
-        self.remotes.deinit();
         self.memory_pool.deinit();
         self.io.deinit();
         self.connections.deinit();
         self.topics.deinit();
         self.inbox.deinit();
         self.connection_outboxes.deinit();
-        self.subscribers.deinit();
 
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.connections);
@@ -276,7 +235,6 @@ pub const Node = struct {
         self.allocator.destroy(self.io);
         self.allocator.destroy(self.listeners);
         self.allocator.destroy(self.memory_pool);
-        self.allocator.destroy(self.remotes);
         self.allocator.destroy(self.workers);
     }
 
@@ -337,11 +295,12 @@ pub const Node = struct {
     }
 
     pub fn close(self: *Self) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         switch (self.state) {
             .closed, .closing => return,
             else => {
-                self.mutex.lock();
-                defer self.mutex.unlock();
 
                 // spin down the workers
                 var worker_iterator = self.workers.valueIterator();
@@ -459,21 +418,27 @@ pub const Node = struct {
     }
 
     fn aggregateMessages(self: *Self) !void {
-        var subscribers_iter = self.subscribers.valueIterator();
-        while (subscribers_iter.next()) |subscriber_entry| {
-            const subscriber: *Subscriber = subscriber_entry.*;
-            const connection_outbox = try self.findOrCreateConnectionOutbox(subscriber.conn_id);
+        var topics_iter = self.topics.valueIterator();
+        while (topics_iter.next()) |topic_entry| {
+            const topic: *Topic = topic_entry.*;
+            if (topic.subscribers.count() == 0) continue;
 
-            // We are going to create envelopes here
-            while (connection_outbox.available() > 0 and !subscriber.queue.isEmpty()) {
-                if (subscriber.queue.dequeue()) |message| {
-                    const envelope = Envelope{
-                        .connection_id = subscriber.conn_id,
-                        .message = message,
-                    };
+            var subscribers_iter = topic.subscribers.valueIterator();
+            while (subscribers_iter.next()) |subscriber_entry| {
+                const subscriber: *Subscriber = subscriber_entry.*;
+                const connection_outbox = try self.findOrCreateConnectionOutbox(subscriber.conn_id);
 
-                    // we are checking this loop that adding the envelope will be successful
-                    connection_outbox.enqueue(envelope) catch unreachable;
+                // We are going to create envelopes here
+                while (connection_outbox.available() > 0 and !subscriber.queue.isEmpty()) {
+                    if (subscriber.queue.dequeue()) |message| {
+                        const envelope = Envelope{
+                            .connection_id = subscriber.conn_id,
+                            .message = message,
+                        };
+
+                        // we are checking this loop that adding the envelope will be successful
+                        connection_outbox.enqueue(envelope) catch unreachable;
+                    }
                 }
             }
         }
@@ -531,6 +496,8 @@ pub const Node = struct {
                             message.deref();
                             if (message.refs() == 0) self.memory_pool.destroy(message);
                         }
+
+                        log.debug("removing subscriber to {s} topic", .{topic.topic_name});
 
                         subscriber.deinit();
                         self.allocator.destroy(subscriber);
@@ -687,51 +654,6 @@ pub const Node = struct {
         }
     }
 
-    fn addInboundConnection(self: *Self, socket: posix.socket_t) !void {
-        // we are just gonna try to close this socket if anything blows up
-        errdefer posix.close(socket);
-        // initialize the connection
-        const connection = try self.allocator.create(Connection);
-        errdefer self.allocator.destroy(connection);
-
-        const default_inbound_connection_config = InboundConnectionConfig{};
-
-        const conn_id = uuid.v7.new();
-        connection.* = try Connection.init(
-            conn_id,
-            self.id,
-            .inbound,
-            self.io,
-            socket,
-            self.allocator,
-            self.memory_pool,
-            .{ .inbound = default_inbound_connection_config },
-        );
-        errdefer connection.deinit();
-
-        connection.state = .connecting;
-
-        try self.connections.put(conn_id, connection);
-        errdefer _ = self.connections.remove(conn_id);
-
-        const accept_message = self.memory_pool.create() catch |err| {
-            log.err("unable to create an accept message for connection {any}", .{err});
-            connection.state = .closing;
-            return;
-        };
-        accept_message.* = Message.new();
-        accept_message.headers.message_type = .accept;
-        accept_message.ref();
-
-        var accept_headers: *Accept = accept_message.headers.into(.accept).?;
-        accept_headers.connection_id = conn_id;
-        accept_headers.origin_id = self.id;
-
-        try connection.outbox.enqueue(accept_message);
-
-        log.info("node: {} added connection {}", .{ self.id, conn_id });
-    }
-
     fn addInboundConnectionToNextWorker(self: *Self, socket: posix.socket_t) !void {
         assert(self.workers.count() > 0);
         // we are just gonna try to close this socket if anything blows up
@@ -794,12 +716,16 @@ pub const Node = struct {
         return ch;
     }
 
+    // FIX: need much better error handling here. Slow subscribers simply aren't able to consume as many messages as
+    // can be published at a time. What is the strategy for a flood of publishes?
     fn handlePublish(self: *Self, message: *Message) !void {
         // Publishes actually don't care about the origin of the message so much. Instead, they care much more about
         // the destination of the mssage. The topic is in charge of distributing messages to subscribers. Subscribers
         // are in charge of attaching metadata as to the destination of the message
         const topic = try self.findOrCreateTopic(message.topicName(), .{});
+
         if (topic.queue.available() == 0) {
+            // Try and push messages to subscribers to free up slots in the topic
             try topic.tick();
         }
         message.ref();
@@ -808,8 +734,6 @@ pub const Node = struct {
     }
 
     fn handleSubscribe(self: *Self, message: *Message) !void {
-        // FIX: we should ensure that the outbox has sufficient space before even attempting to process this
-
         const reply = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(reply);
 
@@ -825,9 +749,11 @@ pub const Node = struct {
             return error.ConnectionOutboxFull;
         }
 
+        const topic = try self.findOrCreateTopic(message.topicName(), .{});
+
         // QUESTION: A connection can only be subscribed to a topic ONCE. Is this good behavior???
         const subscriber_key = utils.generateKey(message.topicName(), message.headers.connection_id);
-        if (self.subscribers.get(subscriber_key)) |_| {
+        if (topic.subscribers.get(subscriber_key)) |_| {
             // FIX: pick a better error for this
             reply.setErrorCode(.err);
             log.err("duplicate connection subscription", .{});
@@ -841,22 +767,8 @@ pub const Node = struct {
             return;
         }
 
-        const subscriber = try self.allocator.create(Subscriber);
-        errdefer self.allocator.destroy(subscriber);
-
-        subscriber.* = try Subscriber.init(
-            self.allocator,
-            subscriber_key,
-            message.headers.connection_id,
-            constants.subscriber_max_queue_capacity,
-        );
-        errdefer subscriber.deinit();
-
-        try self.subscribers.put(subscriber_key, subscriber);
-        errdefer _ = self.subscribers.remove(subscriber_key);
-
-        try self.addSubscriber(message.topicName(), subscriber);
-        errdefer self.removeSubscriber(message.topicName(), subscriber_key);
+        try topic.addSubscriber(subscriber_key, message.headers.connection_id);
+        errdefer _ = topic.removeSubscriber(subscriber_key);
 
         const envelope = Envelope{
             .connection_id = message.headers.connection_id,
@@ -868,8 +780,6 @@ pub const Node = struct {
 
     pub fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
         _ = options;
-        self.topics_mutex.lock();
-        defer self.topics_mutex.unlock();
 
         if (self.topics.get(topic_name)) |t| {
             return t;
@@ -883,38 +793,6 @@ pub const Node = struct {
             try self.topics.put(topic_name, topic);
             return topic;
         }
-    }
-
-    pub fn addSubscriber(self: *Self, topic_name: []const u8, subscriber: *Subscriber) !void {
-        const topic = try self.findOrCreateTopic(topic_name, .{});
-
-        try topic.subscribers.put(subscriber.key, subscriber);
-    }
-
-    pub fn removeSubscriber(self: *Self, topic_name: []const u8, subscriber_key: u128) void {
-        const topic = self.findOrCreateTopic(topic_name, .{}) catch |err| {
-            log.err("could not find or create topic {any}", .{err});
-            return;
-        };
-
-        _ = topic.subscribers.remove(subscriber_key);
-    }
-
-    pub fn connect(self: *Self, config: OutboundConnectionConfig, timeout_ns: i64) !ConnectionHandle {
-        const ch = try self.addOutboundConnectionToNextWorker(config);
-        const deadline = std.time.nanoTimestamp() + timeout_ns;
-        while (deadline > std.time.nanoTimestamp()) {
-            if (ch.connection.state == .connected) return ch;
-
-            std.time.sleep(constants.io_tick_ms * std.time.ns_per_ms);
-        } else {
-            return error.DeadlineExceeded;
-        }
-    }
-
-    pub fn disconnect(self: *Self, conn: *Connection) void {
-        _ = self;
-        conn.state = .closing;
     }
 };
 
