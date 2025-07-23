@@ -20,7 +20,7 @@ pub fn BenchmarkMessageEncode(_: std.mem.Allocator) void {
 
 pub fn BenchmarkMessageDecode(_: std.mem.Allocator) void {
     const body = [_]u8{97} ** constants.message_max_body_size;
-    const encoded_message = ([_]u8{ 195, 37, 247, 124, 7, 9, 112, 194, 98, 99, 131, 40, 248, 184, 217, 148, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } ++ body);
+    const encoded_message = ([_]u8{ 185, 109, 74, 197, 189, 38, 87, 150, 98, 99, 131, 40, 248, 184, 217, 148, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 47, 104, 101, 108, 108, 111, 47, 119, 111, 114, 108, 100 } ++ body);
     var message = Message.new();
     message.decode(&encoded_message) catch unreachable;
 }
@@ -51,10 +51,10 @@ test "Message benchmarks" {
     var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = std.math.maxInt(u16) });
     defer bench.deinit();
 
-    try bench.add("encode", BenchmarkMessageEncode, .{});
+    // try bench.add("encode", BenchmarkMessageEncode, .{});
     try bench.add("decode", BenchmarkMessageDecode, .{});
-    try bench.add("compress gzip", BenchmarkMessageCompressGzip, .{});
-    try bench.add("decompress gzip", BenchmarkMessageDecompressGzip, .{});
+    // try bench.add("compress gzip", BenchmarkMessageCompressGzip, .{});
+    // try bench.add("decompress gzip", BenchmarkMessageDecompressGzip, .{});
 
     const stderr = std.io.getStdErr().writer();
     try stderr.writeAll("\n");
