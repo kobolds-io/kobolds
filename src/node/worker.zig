@@ -524,9 +524,7 @@ pub const Worker = struct {
         }
     }
 
-    fn handlePongMessage(self: *Self, conn: *Connection, message: *Message) !void {
-        _ = conn;
-
+    fn handlePongMessage(self: *Self, _: *Connection, message: *Message) !void {
         defer {
             message.deref();
             if (message.refs() == 0) self.node.memory_pool.destroy(message);
