@@ -12,7 +12,6 @@ const IO = @import("../io.zig").IO;
 const Worker = @import("./worker.zig").Worker;
 const Listener = @import("./listener.zig").Listener;
 const ListenerConfig = @import("./listener.zig").ListenerConfig;
-const Remote = @import("./remote.zig").Remote;
 const InboundConnectionConfig = @import("../protocol/connection.zig").InboundConnectionConfig;
 const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 const Metrics = @import("./metrics.zig").Metrics;
@@ -33,8 +32,6 @@ const TopicOptions = @import("../pubsub/topic.zig").TopicOptions;
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 const Envelope = @import("../data_structures/envelope.zig").Envelope;
 
-pub const PingOptions = struct {};
-
 pub const NodeConfig = struct {
     const Self = @This();
 
@@ -45,13 +42,11 @@ pub const NodeConfig = struct {
     outbound_configs: ?[]const OutboundConnectionConfig = null,
 
     pub fn validate(self: Self) ?[]const u8 {
-        const cpu_core_count = std.Thread.getCpuCount() catch {
-            const msg = "could not getCpuCount";
-            @panic(msg);
-        };
+        const cpu_core_count = std.Thread.getCpuCount() catch @panic("could not get getCpuCount");
+
         if (self.worker_threads > cpu_core_count) return "NodeConfig `worker_threads` exceeds cpu core count";
-        if (self.max_connections > 5_000) return "NodeConfig `max_connections` exceeds arbitrary limit";
-        if (self.memory_pool_capacity > 1_000_000) return "NodeConfig `memory_pool_capacity` exceeds arbitrary limit";
+        if (self.max_connections > 1024) return "NodeConfig `max_connections` exceeds arbitrary limit";
+        if (self.memory_pool_capacity > 500_000) return "NodeConfig `memory_pool_capacity` exceeds arbitrary limit";
 
         if (self.listener_configs) |listener_configs| {
             if (listener_configs.len == 0) return "NodeConfig `listener_configs` is non null but contains no entries";
@@ -83,26 +78,23 @@ const NodeState = enum {
 pub const Node = struct {
     const Self = @This();
 
-    id: uuid.Uuid,
-    io: *IO,
     allocator: std.mem.Allocator,
-    config: NodeConfig,
-    listeners: *std.AutoHashMap(usize, *Listener),
     close_channel: *UnbufferedChannel(bool),
-    done_channel: *UnbufferedChannel(bool),
-    state: NodeState,
-    workers: *std.AutoHashMap(usize, *Worker),
-    connections: *std.AutoHashMap(u128, *Connection),
-    memory_pool: *MemoryPool(Message),
-    remotes: *std.AutoHashMap(uuid.Uuid, *Remote),
-    mutex: std.Thread.Mutex,
-    topics: std.StringHashMap(*Topic),
-    topics_mutex: std.Thread.Mutex,
-    subscribers: std.AutoHashMap(u128, *Subscriber),
-    metrics: Metrics,
-    inbox: *RingBuffer(*Message),
+    config: NodeConfig,
     connection_outboxes: std.AutoHashMap(u128, *RingBuffer(Envelope)),
-    connection_outboxes_mutex: std.Thread.Mutex,
+    connections: *std.AutoHashMap(u128, *Connection),
+    done_channel: *UnbufferedChannel(bool),
+    id: uuid.Uuid,
+    inbox: *RingBuffer(*Message),
+    io: *IO,
+    listeners: *std.AutoHashMap(usize, *Listener),
+    memory_pool: *MemoryPool(Message),
+    metrics: Metrics,
+    mutex: std.Thread.Mutex,
+    state: NodeState,
+    subscribers: std.AutoHashMap(u128, *Subscriber),
+    topics: std.StringHashMap(*Topic),
+    workers: *std.AutoHashMap(usize, *Worker),
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
         if (config.validate()) |err_message| {
@@ -154,12 +146,6 @@ pub const Node = struct {
         inbox.* = try RingBuffer(*Message).init(allocator, config.memory_pool_capacity);
         errdefer inbox.deinit();
 
-        const remotes = try allocator.create(std.AutoHashMap(uuid.Uuid, *Remote));
-        errdefer allocator.destroy(remotes);
-
-        remotes.* = std.AutoHashMap(uuid.Uuid, *Remote).init(allocator);
-        errdefer remotes.deinit();
-
         const listeners = try allocator.create(std.AutoHashMap(usize, *Listener));
         errdefer allocator.destroy(listeners);
 
@@ -167,26 +153,23 @@ pub const Node = struct {
         errdefer listeners.deinit();
 
         return Self{
-            .id = uuid.v7.new(),
-            .io = io,
             .allocator = allocator,
-            .config = config,
             .close_channel = close_channel,
-            .done_channel = done_channel,
-            .state = .closed,
-            .workers = workers,
-            .connections = connections,
-            .memory_pool = memory_pool,
-            .remotes = remotes,
-            .listeners = listeners,
-            .topics = std.StringHashMap(*Topic).init(allocator),
-            .topics_mutex = std.Thread.Mutex{},
-            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
-            .mutex = std.Thread.Mutex{},
-            .metrics = .{},
-            .inbox = inbox,
+            .config = config,
             .connection_outboxes = std.AutoHashMap(u128, *RingBuffer(Envelope)).init(allocator),
-            .connection_outboxes_mutex = std.Thread.Mutex{},
+            .connections = connections,
+            .done_channel = done_channel,
+            .id = uuid.v7.new(),
+            .inbox = inbox,
+            .io = io,
+            .listeners = listeners,
+            .memory_pool = memory_pool,
+            .metrics = .{},
+            .mutex = std.Thread.Mutex{},
+            .state = .closed,
+            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
+            .topics = std.StringHashMap(*Topic).init(allocator),
+            .workers = workers,
         };
     }
 
@@ -211,13 +194,6 @@ pub const Node = struct {
             const worker = entry.*;
             worker.deinit();
             self.allocator.destroy(worker);
-        }
-
-        var remotes_iterator = self.remotes.valueIterator();
-        while (remotes_iterator.next()) |entry| {
-            const remote = entry.*;
-            remote.deinit();
-            self.allocator.destroy(remote);
         }
 
         var topics_iter = self.topics.valueIterator();
@@ -260,7 +236,6 @@ pub const Node = struct {
 
         self.listeners.deinit();
         self.workers.deinit();
-        self.remotes.deinit();
         self.memory_pool.deinit();
         self.io.deinit();
         self.connections.deinit();
@@ -276,7 +251,6 @@ pub const Node = struct {
         self.allocator.destroy(self.io);
         self.allocator.destroy(self.listeners);
         self.allocator.destroy(self.memory_pool);
-        self.allocator.destroy(self.remotes);
         self.allocator.destroy(self.workers);
     }
 
@@ -532,9 +506,13 @@ pub const Node = struct {
                             if (message.refs() == 0) self.memory_pool.destroy(message);
                         }
 
+                        log.debug("removing subscriber to {s} topic", .{topic.topic_name});
+
                         subscriber.deinit();
                         self.allocator.destroy(subscriber);
                     }
+
+                    _ = self.subscribers.remove(key);
 
                     // if (topic.publishers.fetchRemove(key)) |publisher_entry| {
                     //     const publisher = publisher_entry.value;
@@ -868,8 +846,6 @@ pub const Node = struct {
 
     pub fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
         _ = options;
-        self.topics_mutex.lock();
-        defer self.topics_mutex.unlock();
 
         if (self.topics.get(topic_name)) |t| {
             return t;
