@@ -5,7 +5,6 @@ const cli = @import("zig-cli");
 const log = std.log.scoped(.CLI);
 
 const constants = @import("../constants.zig");
-const Mailbox = @import("../data_structures/mailbox.zig").Mailbox;
 const Connection = @import("../protocol/connection.zig").Connection;
 const Message = @import("../protocol/message.zig").Message;
 
