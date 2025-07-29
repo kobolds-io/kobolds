@@ -387,10 +387,10 @@ pub const Node = struct {
         if (self.inbox.count == 0) return;
 
         // There should only be `n` messages processed every tick
-        const max_messages_processed_per_tick: usize = 100_000;
+        const max_messages_processed_per_tick: usize = 50_000;
         var i: usize = 0;
         while (i < max_messages_processed_per_tick) : (i += 1) {
-            while (self.inbox.dequeue()) |message| {
+            if (self.inbox.dequeue()) |message| {
                 assert(message.refs() == 1);
                 defer {
                     _ = self.metrics.messages_processed.fetchAdd(1, .seq_cst);
@@ -503,28 +503,20 @@ pub const Node = struct {
                         self.allocator.destroy(subscriber);
                     }
 
-                    // if (topic.publishers.fetchRemove(key)) |publisher_entry| {
-                    //     const publisher = publisher_entry.value;
-                    //     self.allocator.destroy(publisher);
-                    // }
+                    // FIX: we should have topic publishers as well
 
-                    // FIX: we should have publishers as well. Publishers can timeout and that will help
-                    // us determine if we should destroy the topic or not
-                    // // deinit the topic if there are no publishers or subscribers left
-                    // if (topic.subscribers.count() == 0) {
-                    //     const topic_name = topic.topic_name;
-                    //     topic.deinit();
-                    //     self.allocator.destroy(topic);
-                    //     assert(self.topics.remove(topic_name));
-                    // }
                 }
 
-                if (self.connection_outboxes.get(conn_id)) |outbox| {
+                if (self.connection_outboxes.fetchRemove(conn_id)) |outbox_entry| {
+                    const outbox = outbox_entry.value;
                     while (outbox.dequeue()) |envelope| {
                         const message = envelope.message;
                         message.deref();
                         if (message.refs() == 0) self.memory_pool.destroy(message);
                     }
+
+                    outbox.deinit();
+                    self.allocator.destroy(outbox);
                 }
 
                 log.info("node: {} removed connection {}", .{ self.id, conn_id });
@@ -716,21 +708,19 @@ pub const Node = struct {
         return ch;
     }
 
-    // FIX: need much better error handling here. Slow subscribers simply aren't able to consume as many messages as
-    // can be published at a time. What is the strategy for a flood of publishes?
     fn handlePublish(self: *Self, message: *Message) !void {
+        assert(message.refs() == 1);
         // Publishes actually don't care about the origin of the message so much. Instead, they care much more about
         // the destination of the mssage. The topic is in charge of distributing messages to subscribers. Subscribers
         // are in charge of attaching metadata as to the destination of the message
         const topic = try self.findOrCreateTopic(message.topicName(), .{});
-
         if (topic.queue.available() == 0) {
             // Try and push messages to subscribers to free up slots in the topic
             try topic.tick();
         }
+
         message.ref();
-        errdefer message.deref();
-        try topic.queue.enqueue(message);
+        topic.queue.enqueue(message) catch message.deref();
     }
 
     fn handleSubscribe(self: *Self, message: *Message) !void {

@@ -298,7 +298,7 @@ pub fn run() !void {
 
 pub fn nodeListen() !void {
     // creating a client to communicate with the node
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
@@ -486,7 +486,7 @@ pub fn nodePublish() !void {
     var connections = std.ArrayList(*Connection).init(allocator);
     defer connections.deinit();
 
-    const CONNECTION_COUNT = 20;
+    const CONNECTION_COUNT = 1;
 
     for (0..CONNECTION_COUNT) |_| {
         const conn = try client.connect(outbound_connection_config, 10_000 * std.time.ns_per_ms);
@@ -514,11 +514,12 @@ pub fn nodePublish() !void {
                 continue;
             };
         }
-        std.time.sleep(1 * std.time.ns_per_ms);
+        // std.time.sleep(100 * std.time.ns_per_ms);
     }
 }
 
-var subscriber_msg_count: usize = 0;
+var subscriber_msg_count: u64 = 0;
+var subscriber_bytes_count: u64 = 0;
 pub fn nodeSubscribe() !void {
     // creating a client to communicate with the node
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -554,10 +555,15 @@ pub fn nodeSubscribe() !void {
     const callback = struct {
         pub fn callback(message: *Message) void {
             subscriber_msg_count += 1;
-            if (subscriber_msg_count % 10 == 0) {
+            subscriber_bytes_count += message.size();
+            if (subscriber_msg_count % 100 == 0) {
                 log.info(
-                    "received message topic: {s}, count: {}",
-                    .{ message.topicName(), subscriber_msg_count },
+                    "received message topic: {s}, messages_count: {}, bytes_count: {}",
+                    .{
+                        message.topicName(),
+                        subscriber_msg_count,
+                        subscriber_bytes_count,
+                    },
                 );
             }
         }

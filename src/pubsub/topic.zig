@@ -14,6 +14,11 @@ const Subscriber = @import("./subscriber.zig").Subscriber;
 
 pub const TopicOptions = struct {};
 
+pub const TopicError = error{
+    TopicQueueFull,
+    UnableToProcess,
+};
+
 pub const Topic = struct {
     const Self = @This();
 

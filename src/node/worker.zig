@@ -337,8 +337,6 @@ pub const Worker = struct {
                 break;
             };
 
-            // try self.process(conn);
-
             if (conn.state == .connected and conn.connection_id != 0) {
                 // the connection is now valid and ready for events
                 // move the connection to the regular connections map
@@ -445,7 +443,10 @@ pub const Worker = struct {
             const message = envelope.message;
             if (self.connections.get(envelope.connection_id)) |connection| {
                 // FIX: there should be a handler for this issue
-                try connection.outbox.enqueue(message);
+                connection.outbox.enqueue(message) catch {
+                    self.outbox.prepend(envelope) catch unreachable;
+                    break;
+                };
             } else {
                 // The connection has disappeared since and this should be destroyed
                 message.deref();
