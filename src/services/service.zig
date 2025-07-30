@@ -69,6 +69,7 @@ pub const Service = struct {
 
         // I think there should be a single queue, similar to the topic
         // the service will dequeue each message and depending on the message type will do something different.
+
     }
 
     pub fn addAdvertiser(self: *Self, advertiser_key: u128, conn_id: u128) !void {
@@ -86,6 +87,8 @@ pub const Service = struct {
         try self.advertisers.put(advertiser_key, advertiser);
     }
 
+    // FIX: if there are any messages associated with this advertiser, we should see if we can reroute any active
+    //     requests OR something better would be to send the requestor an error.
     pub fn removeAdvertiser(self: *Self, advertiser_key: u128) bool {
         if (self.advertisers.fetchRemove(advertiser_key)) |entry| {
             const advertiser = entry.value;

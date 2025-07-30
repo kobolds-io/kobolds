@@ -405,6 +405,7 @@ pub const Node = struct {
                     .publish => try self.handlePublish(message),
                     .subscribe => try self.handleSubscribe(message),
                     .advertise => try self.handleAdvertise(message),
+                    .unadvertise => try self.handleUnadvertise(message),
                     else => |t| {
                         log.err("received unhandled message type {any}", .{t});
                         @panic("unhandled message!");
@@ -746,21 +747,11 @@ pub const Node = struct {
 
         // QUESTION: A connection can only be subscribed to a topic ONCE. Is this good behavior???
         const subscriber_key = utils.generateKey(message.topicName(), message.headers.connection_id);
-        if (topic.subscribers.get(subscriber_key)) |_| {
-            // FIX: pick a better error for this
+
+        topic.addSubscriber(subscriber_key, message.headers.connection_id) catch |err| {
+            log.err("error adding subscriber: {any}", .{err});
             reply.setErrorCode(.err);
-            log.err("duplicate connection subscription", .{});
-
-            const envelope = Envelope{
-                .connection_id = message.headers.connection_id,
-                .message = reply,
-            };
-
-            try connection_outbox.enqueue(envelope);
-            return;
-        }
-
-        try topic.addSubscriber(subscriber_key, message.headers.connection_id);
+        };
         errdefer _ = topic.removeSubscriber(subscriber_key);
 
         const envelope = Envelope{
@@ -791,21 +782,11 @@ pub const Node = struct {
 
         // QUESTION: A connection can only be subscribed to a service ONCE. Is this good behavior???
         const advertiser_key = utils.generateKey(message.topicName(), message.headers.connection_id);
-        if (service.advertisers.get(advertiser_key)) |_| {
-            // FIX: pick a better error for this
+
+        service.addAdvertiser(advertiser_key, message.headers.connection_id) catch |err| {
+            log.err("error adding advertiser: {any}", .{err});
             reply.setErrorCode(.err);
-            log.err("duplicate connection advertiser", .{});
-
-            const envelope = Envelope{
-                .connection_id = message.headers.connection_id,
-                .message = reply,
-            };
-
-            try connection_outbox.enqueue(envelope);
-            return;
-        }
-
-        try service.addAdvertiser(advertiser_key, message.headers.connection_id);
+        };
         errdefer _ = service.removeAdvertiser(advertiser_key);
 
         const envelope = Envelope{
@@ -816,7 +797,40 @@ pub const Node = struct {
         try connection_outbox.enqueue(envelope);
     }
 
-    pub fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
+    fn handleUnadvertise(self: *Self, message: *Message) !void {
+        const reply = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(reply);
+
+        reply.* = Message.new();
+        reply.headers.message_type = .reply;
+        reply.setTopicName(message.topicName());
+        reply.setTransactionId(message.transactionId());
+        reply.setErrorCode(.ok);
+        reply.ref();
+
+        const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
+        if (connection_outbox.isFull()) {
+            return error.ConnectionOutboxFull;
+        }
+
+        const service = try self.findOrCreateService(message.topicName(), .{});
+
+        // QUESTION: A connection can only be subscribed to a service ONCE. Is this good behavior???
+        const advertiser_key = utils.generateKey(message.topicName(), message.headers.connection_id);
+
+        if (!service.removeAdvertiser(advertiser_key)) {
+            // Advertiser did not exist on service
+            reply.setErrorCode(.err);
+        }
+
+        const envelope = Envelope{
+            .connection_id = message.headers.connection_id,
+            .message = reply,
+        };
+        try connection_outbox.enqueue(envelope);
+    }
+
+    fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
         _ = options;
 
         if (self.topics.get(topic_name)) |t| {
@@ -833,7 +847,7 @@ pub const Node = struct {
         }
     }
 
-    pub fn findOrCreateService(self: *Self, topic_name: []const u8, options: ServiceOptions) !*Service {
+    fn findOrCreateService(self: *Self, topic_name: []const u8, options: ServiceOptions) !*Service {
         _ = options;
 
         if (self.services.get(topic_name)) |t| {
