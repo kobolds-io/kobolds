@@ -265,7 +265,7 @@ pub const Client = struct {
                     break;
                 };
 
-                try self.process(conn);
+                try self.processMessages(conn);
 
                 if (conn.state == .connected and conn.connection_id != 0) {
                     // the connection is now valid and ready for events
@@ -292,13 +292,13 @@ pub const Client = struct {
                     continue;
                 };
 
-                try self.process(conn);
-                try self.distribute(conn);
+                try self.processMessages(conn);
+                try self.aggregateMessages(conn);
             }
         }
     }
 
-    fn process(self: *Self, conn: *Connection) !void {
+    fn processMessages(self: *Self, conn: *Connection) !void {
         // check to see if there are messages
         if (conn.inbox.count == 0) return;
 
@@ -308,6 +308,7 @@ pub const Client = struct {
                 message.deref();
                 if (message.refs() == 0) self.memory_pool.destroy(message);
             }
+
             switch (message.headers.message_type) {
                 .accept => {
                     // ensure that this connection is not fully connected
@@ -371,16 +372,14 @@ pub const Client = struct {
                         _ = self.transactions.remove(message.transactionId());
                     }
                 },
-                else => {
-                    //                     message.deref();
-                },
+                else => {},
             }
         }
 
         assert(conn.inbox.count == 0);
     }
 
-    fn distribute(self: *Self, conn: *Connection) !void {
+    fn aggregateMessages(self: *Self, conn: *Connection) !void {
         self.connection_messages_mutex.lock();
         defer self.connection_messages_mutex.unlock();
 

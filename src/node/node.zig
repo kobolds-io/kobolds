@@ -14,7 +14,7 @@ const Listener = @import("./listener.zig").Listener;
 const ListenerConfig = @import("./listener.zig").ListenerConfig;
 const InboundConnectionConfig = @import("../protocol/connection.zig").InboundConnectionConfig;
 const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
-const Metrics = @import("./metrics.zig").Metrics;
+const NodeMetrics = @import("./metrics.zig").NodeMetrics;
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const MemoryPool = @import("stdx").MemoryPool;
@@ -89,7 +89,7 @@ pub const Node = struct {
     io: *IO,
     listeners: *std.AutoHashMap(usize, *Listener),
     memory_pool: *MemoryPool(Message),
-    metrics: Metrics,
+    metrics: NodeMetrics,
     mutex: std.Thread.Mutex,
     state: NodeState,
     topics: std.StringHashMap(*Topic),
@@ -280,8 +280,8 @@ pub const Node = struct {
                 .running => {
                     self.tick() catch unreachable;
 
-                    self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch unreachable;
-                    // self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
+                    // self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch unreachable;
+                    self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
                 },
                 .closing => {
                     log.info("node {}: closed", .{self.id});
@@ -330,32 +330,21 @@ pub const Node = struct {
         const difference = now_ms - self.metrics.last_printed_at_ms;
         if (difference >= 1_000) {
             self.metrics.last_printed_at_ms = std.time.milliTimestamp();
-            // log.info("last print: {}ms, memory_pool.available: {}", .{
-            //     difference,
-            //     self.memory_pool.available(),
-            // });
 
             const messages_processed = self.metrics.messages_processed.load(.seq_cst);
             const messages_processed_delta = messages_processed - self.metrics.last_messages_processed_printed;
             self.metrics.last_messages_processed_printed = messages_processed;
-            // log.info("messages_processed: {}, messages_processed_delta: {}", .{
-            //     messages_processed,
-            //     messages_processed_delta,
-            // });
 
             const bytes_processed = self.metrics.bytes_processed;
             const bytes_processed_delta = bytes_processed - self.metrics.last_bytes_processed_printed;
             self.metrics.last_bytes_processed_printed = bytes_processed;
-            // log.info("bytes_processed: {}, bytes_processed_delta: {}", .{
-            //     bytes_processed,
-            //     bytes_processed_delta,
-            // });
 
-            log.info("messages_processed: {}, bytes_processed: {}, messages_delta: {}, bytes_delta: {}", .{
+            log.info("messages_processed: {}, bytes_processed: {}, messages_delta: {}, bytes_delta: {}, memory_pool: {}", .{
                 messages_processed,
                 bytes_processed,
                 messages_processed_delta,
                 bytes_processed_delta,
+                self.memory_pool.available(),
             });
         }
 
@@ -387,10 +376,10 @@ pub const Node = struct {
         if (self.inbox.count == 0) return;
 
         // There should only be `n` messages processed every tick
-        const max_messages_processed_per_tick: usize = 100_000;
+        const max_messages_processed_per_tick: usize = 50_000;
         var i: usize = 0;
         while (i < max_messages_processed_per_tick) : (i += 1) {
-            while (self.inbox.dequeue()) |message| {
+            if (self.inbox.dequeue()) |message| {
                 assert(message.refs() == 1);
                 defer {
                     _ = self.metrics.messages_processed.fetchAdd(1, .seq_cst);
@@ -408,12 +397,12 @@ pub const Node = struct {
                     },
                 }
             }
+        }
 
-            var topics_iter = self.topics.valueIterator();
-            while (topics_iter.next()) |topic_entry| {
-                const topic = topic_entry.*;
-                try topic.tick();
-            }
+        var topics_iter = self.topics.valueIterator();
+        while (topics_iter.next()) |topic_entry| {
+            const topic = topic_entry.*;
+            try topic.tick();
         }
     }
 
@@ -503,28 +492,20 @@ pub const Node = struct {
                         self.allocator.destroy(subscriber);
                     }
 
-                    // if (topic.publishers.fetchRemove(key)) |publisher_entry| {
-                    //     const publisher = publisher_entry.value;
-                    //     self.allocator.destroy(publisher);
-                    // }
+                    // FIX: we should have topic publishers as well
 
-                    // FIX: we should have publishers as well. Publishers can timeout and that will help
-                    // us determine if we should destroy the topic or not
-                    // // deinit the topic if there are no publishers or subscribers left
-                    // if (topic.subscribers.count() == 0) {
-                    //     const topic_name = topic.topic_name;
-                    //     topic.deinit();
-                    //     self.allocator.destroy(topic);
-                    //     assert(self.topics.remove(topic_name));
-                    // }
                 }
 
-                if (self.connection_outboxes.get(conn_id)) |outbox| {
+                if (self.connection_outboxes.fetchRemove(conn_id)) |outbox_entry| {
+                    const outbox = outbox_entry.value;
                     while (outbox.dequeue()) |envelope| {
                         const message = envelope.message;
                         message.deref();
                         if (message.refs() == 0) self.memory_pool.destroy(message);
                     }
+
+                    outbox.deinit();
+                    self.allocator.destroy(outbox);
                 }
 
                 log.info("node: {} removed connection {}", .{ self.id, conn_id });
@@ -716,21 +697,19 @@ pub const Node = struct {
         return ch;
     }
 
-    // FIX: need much better error handling here. Slow subscribers simply aren't able to consume as many messages as
-    // can be published at a time. What is the strategy for a flood of publishes?
     fn handlePublish(self: *Self, message: *Message) !void {
+        assert(message.refs() == 1);
         // Publishes actually don't care about the origin of the message so much. Instead, they care much more about
         // the destination of the mssage. The topic is in charge of distributing messages to subscribers. Subscribers
         // are in charge of attaching metadata as to the destination of the message
         const topic = try self.findOrCreateTopic(message.topicName(), .{});
-
         if (topic.queue.available() == 0) {
             // Try and push messages to subscribers to free up slots in the topic
             try topic.tick();
         }
+
         message.ref();
-        errdefer message.deref();
-        try topic.queue.enqueue(message);
+        topic.queue.enqueue(message) catch message.deref();
     }
 
     fn handleSubscribe(self: *Self, message: *Message) !void {
