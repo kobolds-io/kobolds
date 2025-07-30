@@ -29,6 +29,9 @@ const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
 const Topic = @import("../pubsub/topic.zig").Topic;
 const TopicOptions = @import("../pubsub/topic.zig").TopicOptions;
 
+const Service = @import("../services/service.zig").Service;
+const ServiceOptions = @import("../services/service.zig").ServiceOptions;
+
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 const Envelope = @import("../data_structures/envelope.zig").Envelope;
 
@@ -93,6 +96,7 @@ pub const Node = struct {
     mutex: std.Thread.Mutex,
     state: NodeState,
     topics: std.StringHashMap(*Topic),
+    services: std.StringHashMap(*Service),
     workers: *std.AutoHashMap(usize, *Worker),
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
@@ -167,6 +171,7 @@ pub const Node = struct {
             .mutex = std.Thread.Mutex{},
             .state = .closed,
             .topics = std.StringHashMap(*Topic).init(allocator),
+            .services = std.StringHashMap(*Service).init(allocator),
             .workers = workers,
         };
     }
@@ -201,6 +206,13 @@ pub const Node = struct {
             self.allocator.destroy(topic);
         }
 
+        var services_iter = self.services.valueIterator();
+        while (services_iter.next()) |entry| {
+            const service = entry.*;
+            service.deinit();
+            self.allocator.destroy(service);
+        }
+
         while (self.inbox.dequeue()) |message| {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
@@ -225,6 +237,7 @@ pub const Node = struct {
         self.io.deinit();
         self.connections.deinit();
         self.topics.deinit();
+        self.services.deinit();
         self.inbox.deinit();
         self.connection_outboxes.deinit();
 
@@ -391,6 +404,7 @@ pub const Node = struct {
                 switch (message.headers.message_type) {
                     .publish => try self.handlePublish(message),
                     .subscribe => try self.handleSubscribe(message),
+                    .advertise => try self.handleAdvertise(message),
                     else => |t| {
                         log.err("received unhandled message type {any}", .{t});
                         @panic("unhandled message!");
@@ -757,6 +771,51 @@ pub const Node = struct {
         try connection_outbox.enqueue(envelope);
     }
 
+    fn handleAdvertise(self: *Self, message: *Message) !void {
+        const reply = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(reply);
+
+        reply.* = Message.new();
+        reply.headers.message_type = .reply;
+        reply.setTopicName(message.topicName());
+        reply.setTransactionId(message.transactionId());
+        reply.setErrorCode(.ok);
+        reply.ref();
+
+        const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
+        if (connection_outbox.isFull()) {
+            return error.ConnectionOutboxFull;
+        }
+
+        const service = try self.findOrCreateService(message.topicName(), .{});
+
+        // QUESTION: A connection can only be subscribed to a service ONCE. Is this good behavior???
+        const advertiser_key = utils.generateKey(message.topicName(), message.headers.connection_id);
+        if (service.advertisers.get(advertiser_key)) |_| {
+            // FIX: pick a better error for this
+            reply.setErrorCode(.err);
+            log.err("duplicate connection advertiser", .{});
+
+            const envelope = Envelope{
+                .connection_id = message.headers.connection_id,
+                .message = reply,
+            };
+
+            try connection_outbox.enqueue(envelope);
+            return;
+        }
+
+        try service.addAdvertiser(advertiser_key, message.headers.connection_id);
+        errdefer _ = service.removeAdvertiser(advertiser_key);
+
+        const envelope = Envelope{
+            .connection_id = message.headers.connection_id,
+            .message = reply,
+        };
+
+        try connection_outbox.enqueue(envelope);
+    }
+
     pub fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
         _ = options;
 
@@ -771,6 +830,23 @@ pub const Node = struct {
 
             try self.topics.put(topic_name, topic);
             return topic;
+        }
+    }
+
+    pub fn findOrCreateService(self: *Self, topic_name: []const u8, options: ServiceOptions) !*Service {
+        _ = options;
+
+        if (self.services.get(topic_name)) |t| {
+            return t;
+        } else {
+            const service = try self.allocator.create(Service);
+            errdefer self.allocator.destroy(service);
+
+            service.* = try Service.init(self.allocator, self.memory_pool, topic_name);
+            errdefer service.deinit();
+
+            try self.services.put(topic_name, service);
+            return service;
         }
     }
 };

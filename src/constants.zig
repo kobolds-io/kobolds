@@ -42,4 +42,6 @@ pub const topic_max_queue_capacity: usize = 10_000;
 pub const publisher_max_queue_capacity: usize = 5_000;
 pub const subscriber_max_queue_capacity: usize = 5_000;
 
-pub const bus_max_queue_capacity: usize = 10_000;
+pub const service_max_queue_capacity: usize = 10_000;
+pub const advertiser_max_queue_capacity: usize = 5_000;
+pub const requestor_max_queue_capacity: usize = 5_000;
