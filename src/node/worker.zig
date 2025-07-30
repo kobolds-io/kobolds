@@ -155,8 +155,8 @@ pub const Worker = struct {
             switch (self.state) {
                 .running => {
                     self.tick() catch unreachable;
-                    self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch unreachable;
-                    // self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
+                    // self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch unreachable;
+                    self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
                 },
                 .closing => {
                     log.info("worker {}: closed", .{self.id});
@@ -364,10 +364,38 @@ pub const Worker = struct {
                 continue;
             }
 
+            // // FIX: skip this connection if rate limited
+            // if (self.checkConnRateLimit(conn)) continue;
+
             conn.tick() catch |err| {
                 log.err("could not tick connection error: {any}", .{err});
                 continue;
             };
+        }
+    }
+
+    fn checkConnRateLimit(_: Self, conn: *Connection) bool {
+        const now = std.time.milliTimestamp();
+        const messages_recv_rate_limit = 500;
+        const messages_recv_rate_limit_interval_duration = 1_000;
+
+        if (conn.metrics.rate_limited) {
+            const current_rate_limited_duration = now - conn.metrics.rate_limited_at;
+
+            if (current_rate_limited_duration < messages_recv_rate_limit_interval_duration) return true;
+
+            conn.metrics.messages_recv_at_start = conn.metrics.messages_recv_total;
+            conn.metrics.rate_limited = false;
+            conn.metrics.rate_limited_at = 0;
+            return false;
+        } else {
+            const messages_recv_since_interval_start = conn.metrics.messages_recv_total - conn.metrics.messages_recv_at_start;
+            if (messages_recv_since_interval_start < messages_recv_rate_limit) return false;
+
+            conn.metrics.messages_recv_at_start = conn.metrics.messages_recv_total;
+            conn.metrics.rate_limited = true;
+            conn.metrics.rate_limited_at = now;
+            return true;
         }
     }
 

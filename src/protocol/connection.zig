@@ -102,6 +102,20 @@ const ConnectionType = enum {
     outbound,
 };
 
+const ConnectionMetrics = struct {
+    bytes_recv_total: u128 = 0,
+    bytes_send_total: u128 = 0,
+    messages_recv_total: u128 = 0,
+    messages_send_total: u128 = 0,
+    bytes_recv_at_interval_start: u128 = 0,
+    bytes_send_at_interval_start: u128 = 0,
+    messages_recv_at_start: u128 = 0,
+    messages_send_at_interval_start: u128 = 0,
+    interval_start_at: i64 = 0,
+    rate_limited: bool = false,
+    rate_limited_at: i64 = 0,
+};
+
 pub const Connection = struct {
     const Self = @This();
 
@@ -113,31 +127,32 @@ pub const Connection = struct {
     config: ConnectionConfig,
     connect_completion: *IO.Completion,
     connection_id: uuid.Uuid,
-    origin_id: uuid.Uuid,
-    remote_id: uuid.Uuid,
     connection_type: ConnectionType,
     connect_submitted: bool,
     inbox: *RingBuffer(*Message),
     io: *IO,
     memory_pool: *MemoryPool(Message),
+    metrics: ConnectionMetrics,
     messages_recv: u128,
     messages_sent: u128,
+    origin_id: uuid.Uuid,
     outbox: *RingBuffer(*Message),
     parsed_message_ptrs: std.ArrayList(*Message),
     parsed_messages: std.ArrayList(Message),
     parser: Parser,
     recv_buffer: []u8,
+    recv_bytes: usize,
     recv_completion: *IO.Completion,
     recv_submitted: bool,
+    remote_id: uuid.Uuid,
+    send_buffer_list: *std.ArrayList(u8),
     send_buffer_overflow: [constants.message_max_size]u8,
     send_buffer_overflow_count: usize,
-    // send_buffer: []u8,
-    send_buffer_list: *std.ArrayList(u8),
-    tmp_encoding_buffer: []u8,
     send_completion: *IO.Completion,
     send_submitted: bool,
     socket: posix.socket_t,
     state: ConnectionState,
+    tmp_encoding_buffer: []u8,
 
     pub fn init(
         id: uuid.Uuid,
@@ -197,24 +212,18 @@ pub const Connection = struct {
             .inbox = inbox,
             .io = io,
             .memory_pool = memory_pool,
+            .metrics = ConnectionMetrics{},
             .messages_recv = 0,
             .messages_sent = 0,
             .connection_id = id,
             .origin_id = origin_id,
             .remote_id = 0,
             .outbox = outbox,
-            .parsed_messages = try std.ArrayList(Message).initCapacity(
-                allocator,
-                // 50,
-                constants.connection_recv_buffer_size / @sizeOf(Message),
-            ),
-            .parsed_message_ptrs = try std.ArrayList(*Message).initCapacity(
-                allocator,
-                // 100,
-                constants.connection_recv_buffer_size / @sizeOf(Message),
-            ),
+            .parsed_messages = try std.ArrayList(Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
+            .parsed_message_ptrs = try std.ArrayList(*Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
             .parser = Parser.init(allocator),
             .recv_buffer = recv_buffer,
+            .recv_bytes = 0,
             .recv_completion = recv_completion,
             .recv_submitted = false,
             .send_buffer_overflow_count = 0,
@@ -283,6 +292,8 @@ pub const Connection = struct {
     fn handleRecvSubmit(self: *Self) void {
         if (self.recv_submitted) return;
 
+        self.processInboundMessages();
+
         self.io.recv(
             *Connection,
             self,
@@ -315,6 +326,8 @@ pub const Connection = struct {
     }
 
     fn processOutboundMessages(self: *Self) void {
+        assert(!self.send_submitted);
+
         // NOTE: reset the send buffer list. This effectively drops all previous bytes
         self.send_buffer_list.items.len = 0;
 
@@ -381,31 +394,22 @@ pub const Connection = struct {
         }
     }
 
-    pub fn onRecv(self: *Connection, comp: *IO.Completion, res: IO.RecvError!usize) void {
-        defer self.recv_submitted = false;
+    fn processInboundMessages(self: *Self) void {
+        assert(!self.recv_submitted);
 
-        // Handle receive errors
-        const bytes = res catch |err| {
-            log.err("could not parse bytes {any}", .{err});
-            return;
-        };
-        _ = comp;
+        // self.bytes_recv += bytes;
+        self.metrics.bytes_recv_total += self.recv_bytes;
 
-        // Connection closed by peer
-        if (bytes == 0) {
-            log.err("connection {} received no bytes, closing", .{self.connection_id});
-            self.state = .closing;
-            return;
-        }
-
-        self.bytes_recv += bytes;
+        // FIX: there should be an assert that enforces that the parser is being passed the right amount
+        // of bytes to be parsed
 
         // Parse received bytes into messages
-        self.parser.parse(&self.parsed_messages, self.recv_buffer[0..bytes]) catch unreachable;
+        self.parser.parse(&self.parsed_messages, self.recv_buffer[0..self.recv_bytes]) catch unreachable;
 
         if (self.parsed_messages.items.len == 0) return;
 
-        self.messages_recv += self.parsed_messages.items.len;
+        // self.messages_recv += self.parsed_messages.items.len;
+        self.metrics.messages_recv_total += self.parsed_messages.items.len;
 
         // Validate messages
         for (self.parsed_messages.items) |message| {
@@ -444,6 +448,7 @@ pub const Connection = struct {
             assert(message_ptr.refs() == 1);
         }
 
+        // Reset the parsed_messages list
         self.parsed_messages.items.len = 0;
 
         const n = self.inbox.enqueueMany(message_ptrs);
@@ -456,10 +461,30 @@ pub const Connection = struct {
         }
     }
 
+    pub fn onRecv(self: *Connection, comp: *IO.Completion, res: IO.RecvError!usize) void {
+        defer self.recv_submitted = false;
+
+        // Handle receive errors
+        const bytes = res catch |err| {
+            log.err("could not parse bytes {any}", .{err});
+            return;
+        };
+        _ = comp;
+
+        // Connection closed by peer
+        if (bytes == 0) {
+            log.err("connection {} received no bytes, closing", .{self.connection_id});
+            self.state = .closing;
+            return;
+        }
+
+        self.recv_bytes = bytes;
+    }
+
     pub fn onSend(self: *Connection, comp: *IO.Completion, res: IO.SendError!usize) void {
         _ = comp;
         const bytes_sent: usize = res catch 0;
-        _ = bytes_sent;
+        self.metrics.bytes_send_total += bytes_sent;
 
         self.send_submitted = false;
     }

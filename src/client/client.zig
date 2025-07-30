@@ -293,7 +293,7 @@ pub const Client = struct {
                 };
 
                 try self.processMessages(conn);
-                try self.distribute(conn);
+                try self.aggregateMessages(conn);
             }
         }
     }
@@ -379,7 +379,7 @@ pub const Client = struct {
         assert(conn.inbox.count == 0);
     }
 
-    fn distribute(self: *Self, conn: *Connection) !void {
+    fn aggregateMessages(self: *Self, conn: *Connection) !void {
         self.connection_messages_mutex.lock();
         defer self.connection_messages_mutex.unlock();
 

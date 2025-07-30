@@ -501,8 +501,8 @@ pub fn nodePublish() !void {
     }
 
     const topic_name = "/test";
-    // const body = "";
-    const body = "a" ** constants.message_max_body_size;
+    const body = "";
+    // const body = "a" ** constants.message_max_body_size;
 
     registerSigintHandler();
 

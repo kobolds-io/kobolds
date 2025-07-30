@@ -14,7 +14,7 @@ const Listener = @import("./listener.zig").Listener;
 const ListenerConfig = @import("./listener.zig").ListenerConfig;
 const InboundConnectionConfig = @import("../protocol/connection.zig").InboundConnectionConfig;
 const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
-const Metrics = @import("./metrics.zig").Metrics;
+const NodeMetrics = @import("./metrics.zig").NodeMetrics;
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const MemoryPool = @import("stdx").MemoryPool;
@@ -89,7 +89,7 @@ pub const Node = struct {
     io: *IO,
     listeners: *std.AutoHashMap(usize, *Listener),
     memory_pool: *MemoryPool(Message),
-    metrics: Metrics,
+    metrics: NodeMetrics,
     mutex: std.Thread.Mutex,
     state: NodeState,
     topics: std.StringHashMap(*Topic),
@@ -280,8 +280,8 @@ pub const Node = struct {
                 .running => {
                     self.tick() catch unreachable;
 
-                    self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch unreachable;
-                    // self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
+                    // self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch unreachable;
+                    self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
                 },
                 .closing => {
                     log.info("node {}: closed", .{self.id});
@@ -330,32 +330,21 @@ pub const Node = struct {
         const difference = now_ms - self.metrics.last_printed_at_ms;
         if (difference >= 1_000) {
             self.metrics.last_printed_at_ms = std.time.milliTimestamp();
-            // log.info("last print: {}ms, memory_pool.available: {}", .{
-            //     difference,
-            //     self.memory_pool.available(),
-            // });
 
             const messages_processed = self.metrics.messages_processed.load(.seq_cst);
             const messages_processed_delta = messages_processed - self.metrics.last_messages_processed_printed;
             self.metrics.last_messages_processed_printed = messages_processed;
-            // log.info("messages_processed: {}, messages_processed_delta: {}", .{
-            //     messages_processed,
-            //     messages_processed_delta,
-            // });
 
             const bytes_processed = self.metrics.bytes_processed;
             const bytes_processed_delta = bytes_processed - self.metrics.last_bytes_processed_printed;
             self.metrics.last_bytes_processed_printed = bytes_processed;
-            // log.info("bytes_processed: {}, bytes_processed_delta: {}", .{
-            //     bytes_processed,
-            //     bytes_processed_delta,
-            // });
 
-            log.info("messages_processed: {}, bytes_processed: {}, messages_delta: {}, bytes_delta: {}", .{
+            log.info("messages_processed: {}, bytes_processed: {}, messages_delta: {}, bytes_delta: {}, memory_pool: {}", .{
                 messages_processed,
                 bytes_processed,
                 messages_processed_delta,
                 bytes_processed_delta,
+                self.memory_pool.available(),
             });
         }
 
@@ -408,12 +397,12 @@ pub const Node = struct {
                     },
                 }
             }
+        }
 
-            var topics_iter = self.topics.valueIterator();
-            while (topics_iter.next()) |topic_entry| {
-                const topic = topic_entry.*;
-                try topic.tick();
-            }
+        var topics_iter = self.topics.valueIterator();
+        while (topics_iter.next()) |topic_entry| {
+            const topic = topic_entry.*;
+            try topic.tick();
         }
     }
 
