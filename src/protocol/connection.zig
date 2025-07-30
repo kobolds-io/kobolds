@@ -285,11 +285,11 @@ pub const Connection = struct {
             else => {},
         }
 
-        self.handleRecvSubmit();
-        self.handleSendSubmit();
+        self.handleRecv();
+        self.handleSend();
     }
 
-    fn handleRecvSubmit(self: *Self) void {
+    fn handleRecv(self: *Self) void {
         if (self.recv_submitted) return;
 
         self.processInboundMessages();
@@ -306,7 +306,7 @@ pub const Connection = struct {
         self.recv_submitted = true;
     }
 
-    fn handleSendSubmit(self: *Self) void {
+    fn handleSend(self: *Self) void {
         if (self.send_submitted) return;
 
         self.processOutboundMessages();
@@ -399,6 +399,7 @@ pub const Connection = struct {
 
         // self.bytes_recv += bytes;
         self.metrics.bytes_recv_total += self.recv_bytes;
+        defer self.recv_bytes = 0;
 
         // FIX: there should be an assert that enforces that the parser is being passed the right amount
         // of bytes to be parsed
@@ -408,7 +409,6 @@ pub const Connection = struct {
 
         if (self.parsed_messages.items.len == 0) return;
 
-        // self.messages_recv += self.parsed_messages.items.len;
         self.metrics.messages_recv_total += self.parsed_messages.items.len;
 
         // Validate messages
@@ -421,6 +421,7 @@ pub const Connection = struct {
             }
         }
 
+        // FIX: does this need to actually just be in the init?
         assert(self.parsed_message_ptrs.items.len >= self.parsed_message_ptrs.items.len);
 
         const message_ptrs = self.memory_pool.createN(
