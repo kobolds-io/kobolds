@@ -877,7 +877,6 @@ pub const Node = struct {
         assert(message.refs() == 1);
 
         const service = try self.findOrCreateService(message.topicName(), .{});
-
         if (service.queue.available() == 0) {
             try service.tick();
         }

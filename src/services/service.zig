@@ -65,7 +65,7 @@ pub const Service = struct {
     }
 
     pub fn tick(self: *Self) !void {
-        _ = self;
+        if (self.queue.count == 0) return;
 
         // I think there should be a single queue, similar to the topic
         // the service will dequeue each message and depending on the message type will do something different.
@@ -105,5 +105,10 @@ pub const Service = struct {
         }
 
         return false;
+    }
+
+    fn getNextAdvertiser(self: *Self) ?*Advertiser {
+        if (self.advertisers.count() == 0) return null;
+        return null;
     }
 };
