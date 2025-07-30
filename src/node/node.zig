@@ -406,6 +406,8 @@ pub const Node = struct {
                     .subscribe => try self.handleSubscribe(message),
                     .advertise => try self.handleAdvertise(message),
                     .unadvertise => try self.handleUnadvertise(message),
+                    .request => try self.handleRequest(message),
+                    .reply => try self.handleReply(message),
                     else => |t| {
                         log.err("received unhandled message type {any}", .{t});
                         @panic("unhandled message!");
@@ -737,6 +739,7 @@ pub const Node = struct {
         reply.setTransactionId(message.transactionId());
         reply.setErrorCode(.ok);
         reply.ref();
+        errdefer reply.deref();
 
         const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
         if (connection_outbox.isFull()) {
@@ -772,6 +775,7 @@ pub const Node = struct {
         reply.setTransactionId(message.transactionId());
         reply.setErrorCode(.ok);
         reply.ref();
+        errdefer reply.deref();
 
         const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
         if (connection_outbox.isFull()) {
@@ -807,6 +811,7 @@ pub const Node = struct {
         reply.setTransactionId(message.transactionId());
         reply.setErrorCode(.ok);
         reply.ref();
+        errdefer reply.deref();
 
         const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
         if (connection_outbox.isFull()) {
@@ -828,6 +833,57 @@ pub const Node = struct {
             .message = reply,
         };
         try connection_outbox.enqueue(envelope);
+    }
+
+    fn handleRequest(self: *Self, message: *Message) !void {
+        assert(message.refs() == 1);
+        const service = try self.findOrCreateService(message.topicName(), .{});
+
+        if (service.queue.available() == 0) {
+            try service.tick();
+        }
+
+        if (service.queue.available() > 0) {
+            message.ref();
+            try service.queue.enqueue(message);
+            return;
+        }
+
+        const reply = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(reply);
+
+        reply.* = Message.new();
+        reply.headers.message_type = .reply;
+        reply.setTopicName(message.topicName());
+        reply.setTransactionId(message.transactionId());
+        reply.setErrorCode(.err);
+        reply.ref();
+        errdefer reply.deref();
+
+        const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
+        if (connection_outbox.isFull()) {
+            return error.ConnectionOutboxFull;
+        }
+
+        const envelope = Envelope{
+            .connection_id = message.headers.connection_id,
+            .message = reply,
+        };
+
+        try connection_outbox.enqueue(envelope);
+    }
+
+    fn handleReply(self: *Self, message: *Message) !void {
+        assert(message.refs() == 1);
+
+        const service = try self.findOrCreateService(message.topicName(), .{});
+
+        if (service.queue.available() == 0) {
+            try service.tick();
+        }
+
+        message.ref();
+        service.queue.enqueue(message) catch message.deref();
     }
 
     fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
