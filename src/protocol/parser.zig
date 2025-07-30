@@ -30,7 +30,6 @@ pub const Parser = struct {
         }
 
         // append the new data to the parser buffer
-        // self.buffer.appendSliceAssumeCapacity(data);
         try self.buffer.appendSlice(data);
 
         // if able to append new data to the buffer loop over the data in the buffer
@@ -48,7 +47,6 @@ pub const Parser = struct {
                 else => return err,
             };
 
-            // append the message to the messages
             try messages.append(message);
 
             // remove the parsed message from the buffer
