@@ -38,14 +38,14 @@ test "Parser benchmarks" {
     var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = std.math.maxInt(u16) });
     defer bench.deinit();
 
-    var parser_messages_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var parser_messages_gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     defer _ = parser_messages_gpa.deinit();
     const parser_messages_allocator = parser_messages_gpa.allocator();
 
     parser_messages = std.ArrayList(Message).initCapacity(parser_messages_allocator, std.math.maxInt(u16)) catch unreachable;
     defer parser_messages.deinit();
 
-    var parser_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var parser_gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     defer _ = parser_gpa.deinit();
     const parser_allocator = parser_gpa.allocator();
 

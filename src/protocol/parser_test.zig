@@ -25,7 +25,7 @@ test "parse parses a message" {
 
     message.encode(encoded_message);
 
-    var messages_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var messages_gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     defer _ = messages_gpa.deinit();
     const messages_allocator = messages_gpa.allocator();
 
@@ -68,7 +68,7 @@ test "parse parses multiple messages" {
         try data.appendSlice(encoded_message);
     }
 
-    var messages_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var messages_gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     defer _ = messages_gpa.deinit();
     const messages_allocator = messages_gpa.allocator();
 

@@ -22,7 +22,7 @@ fn getenvOwned(alloc: std.mem.Allocator, key: []const u8) ?[]u8 {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 12 }){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 12 }).init;
     const alloc = gpa.allocator();
     const fail_first = blk: {
         if (getenvOwned(alloc, "TEST_FAIL_FIRST")) |e| {

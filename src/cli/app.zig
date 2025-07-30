@@ -54,7 +54,7 @@ var config = struct {
 }{};
 
 pub fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -331,7 +331,7 @@ pub fn nodeListen() !void {
 
 pub fn nodePing() !void {
     // creating a client to communicate with the node
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
@@ -420,7 +420,7 @@ pub fn nodePing() !void {
 }
 
 pub fn nodeConnect() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
@@ -458,7 +458,7 @@ pub fn nodeConnect() !void {
 
 pub fn nodePublish() !void {
     // creating a client to communicate with the node
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
@@ -522,7 +522,7 @@ var subscriber_msg_count: u64 = 0;
 var subscriber_bytes_count: u64 = 0;
 pub fn nodeSubscribe() !void {
     // creating a client to communicate with the node
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
