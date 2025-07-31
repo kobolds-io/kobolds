@@ -1,5 +1,8 @@
 const std = @import("std");
+const assert = std.debug.assert;
+
 const constants = @import("../constants.zig");
+const utils = @import("../utils.zig");
 
 const RingBuffer = @import("stdx").RingBuffer;
 const MemoryPool = @import("stdx").MemoryPool;
@@ -7,6 +10,7 @@ const MemoryPool = @import("stdx").MemoryPool;
 const Message = @import("../protocol/message.zig").Message;
 
 const Advertiser = @import("./advertiser.zig").Advertiser;
+const Requestor = @import("./requestor.zig").Requestor;
 const Transaction = @import("./transaction.zig").Transaction;
 
 pub const ServiceOptions = struct {};
@@ -15,9 +19,11 @@ pub const Service = struct {
     const Self = @This();
 
     advertisers: std.AutoHashMap(u128, *Advertiser),
+    requestors: std.AutoHashMap(u128, *Requestor),
     allocator: std.mem.Allocator,
     memory_pool: *MemoryPool(Message),
-    queue: *RingBuffer(*Message),
+    requests_queue: *RingBuffer(*Message),
+    replies_queue: *RingBuffer(*Message),
     topic_name: []const u8,
     transactions: std.AutoHashMap(u128, Transaction),
 
@@ -26,21 +32,28 @@ pub const Service = struct {
         memory_pool: *MemoryPool(Message),
         topic_name: []const u8,
     ) !Self {
-        const queue = try allocator.create(RingBuffer(*Message));
-        errdefer allocator.destroy(queue);
+        const requests_queue = try allocator.create(RingBuffer(*Message));
+        errdefer allocator.destroy(requests_queue);
 
-        // TODO: the buffer size should be configured. perhaps this could be a NodeConfig thing
-        queue.* = try RingBuffer(*Message).init(allocator, constants.topic_max_queue_capacity);
-        errdefer queue.deinit();
+        requests_queue.* = try RingBuffer(*Message).init(allocator, constants.service_max_requests_queue_capacity);
+        errdefer requests_queue.deinit();
 
-        const tmp_copy_buffer = try allocator.alloc(*Message, constants.subscriber_max_queue_capacity);
+        const replies_queue = try allocator.create(RingBuffer(*Message));
+        errdefer allocator.destroy(replies_queue);
+
+        replies_queue.* = try RingBuffer(*Message).init(allocator, constants.service_max_replies_queue_capacity);
+        errdefer replies_queue.deinit();
+
+        const tmp_copy_buffer = try allocator.alloc(*Message, constants.advertiser_max_queue_capacity);
         errdefer allocator.free(tmp_copy_buffer);
 
         return Self{
             .advertisers = std.AutoHashMap(u128, *Advertiser).init(allocator),
+            .requestors = std.AutoHashMap(u128, *Requestor).init(allocator),
             .allocator = allocator,
             .memory_pool = memory_pool,
-            .queue = queue,
+            .requests_queue = requests_queue,
+            .replies_queue = replies_queue,
             .topic_name = topic_name,
             .transactions = std.AutoHashMap(u128, Transaction).init(allocator),
         };
@@ -60,16 +73,125 @@ pub const Service = struct {
             self.allocator.destroy(advertiser);
         }
 
+        var requestors_iter = self.requestors.valueIterator();
+        while (requestors_iter.next()) |entry| {
+            const requestor = entry.*;
+
+            while (requestor.queue.dequeue()) |message| {
+                message.deref();
+                if (message.refs() == 0) self.memory_pool.destroy(message);
+            }
+
+            requestor.deinit();
+            self.allocator.destroy(requestor);
+        }
+
         self.advertisers.deinit();
+        self.requestors.deinit();
         self.transactions.deinit();
+        self.requests_queue.deinit();
+        self.replies_queue.deinit();
+
+        self.allocator.destroy(self.replies_queue);
+        self.allocator.destroy(self.requests_queue);
     }
 
     pub fn tick(self: *Self) !void {
-        if (self.queue.count == 0) return;
+        if (self.requests_queue.count == 0 and self.replies_queue.count == 0) return;
 
-        // I think there should be a single queue, similar to the topic
-        // the service will dequeue each message and depending on the message type will do something different.
+        try self.handleRequests();
+        try self.handleReplies();
+        try self.handleTransactions();
+    }
 
+    fn handleRequests(self: *Self) !void {
+        if (self.requests_queue.count == 0) return;
+
+        if (self.advertisers.count() == 0) return;
+
+        const now = std.time.milliTimestamp();
+
+        while (self.requests_queue.dequeue()) |request| {
+            const requestor = self.findOrCreateRequestor(request.headers.connection_id) catch @panic("could not create requestor");
+            const advertiser = self.getNextAdvertiser();
+
+            const transaction = Transaction{
+                .requestor = requestor,
+                .advertiser = advertiser,
+                .transaction_id = request.transactionId(),
+                .recieved_at = now,
+                .timeout = now + 5_000 * std.time.ns_per_ms,
+            };
+
+            try self.transactions.put(transaction.transaction_id, transaction);
+            errdefer _ = self.transactions.remove(transaction.transaction_id);
+
+            try advertiser.queue.enqueue(request);
+        }
+    }
+
+    fn handleReplies(self: *Self) !void {
+        if (self.replies_queue.count == 0) return;
+        while (self.replies_queue.dequeue()) |reply| {
+            if (self.transactions.fetchRemove(reply.transactionId())) |entry| {
+                const transaction = entry.value;
+                // FIX: there should be better error handling if we are unable to enqueue the reply
+                try transaction.requestor.queue.enqueue(reply);
+            } else {
+                // drop this reply completely
+                reply.deref();
+                if (reply.refs() == 0) self.memory_pool.destroy(reply);
+            }
+        }
+    }
+
+    fn handleTransactions(self: *Self) !void {
+        const now = std.time.milliTimestamp();
+        var transactions_iter = self.transactions.valueIterator();
+        while (transactions_iter.next()) |entry| {
+            const transaction = entry.*;
+            const deadline = transaction.recieved_at + transaction.timeout;
+            if (now >= deadline) {
+                // if this transaction is already dead, we should try to enqueue a reply for it telling the client
+                // that this transaction has timed out. The problem with doing this is that the client will likely
+                // have it's own timeout functionality so it may recieve a duplicate timeout.
+                const reply = try self.memory_pool.create();
+                errdefer self.memory_pool.destroy(reply);
+
+                reply.* = Message.new();
+                reply.headers.message_type = .reply;
+                reply.setTopicName(self.topic_name);
+                reply.setTransactionId(transaction.transaction_id);
+                reply.setErrorCode(.timeout);
+                reply.ref();
+                errdefer reply.deref();
+
+                try transaction.requestor.queue.enqueue(reply);
+                _ = self.transactions.remove(transaction.transaction_id);
+            }
+        }
+    }
+
+    fn findOrCreateRequestor(self: *Self, conn_id: u128) !*Requestor {
+        const requestor_key = utils.generateKey(self.topic_name, conn_id);
+
+        if (self.requestors.get(requestor_key)) |requestor| {
+            return requestor;
+        } else {
+            const requestor = try self.allocator.create(Requestor);
+            errdefer self.allocator.destroy(requestor);
+
+            requestor.* = try Requestor.init(
+                self.allocator,
+                requestor_key,
+                conn_id,
+                constants.requestor_max_queue_capacity,
+            );
+            errdefer requestor.deinit();
+
+            try self.requestors.put(requestor_key, requestor);
+            return requestor;
+        }
     }
 
     pub fn addAdvertiser(self: *Self, advertiser_key: u128, conn_id: u128) !void {
@@ -107,8 +229,16 @@ pub const Service = struct {
         return false;
     }
 
-    fn getNextAdvertiser(self: *Self) ?*Advertiser {
-        if (self.advertisers.count() == 0) return null;
-        return null;
+    fn getNextAdvertiser(self: *Self) *Advertiser {
+        assert(self.advertisers.count() > 0);
+        var advertisers_iter = self.advertisers.valueIterator();
+        while (advertisers_iter.next()) |entry| {
+            const advertiser = entry.*;
+
+            // TODO: figure out a better algorithm for this
+            return advertiser;
+        }
+
+        unreachable;
     }
 };

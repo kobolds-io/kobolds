@@ -31,6 +31,8 @@ const TopicOptions = @import("../pubsub/topic.zig").TopicOptions;
 
 const Service = @import("../services/service.zig").Service;
 const ServiceOptions = @import("../services/service.zig").ServiceOptions;
+const Advertiser = @import("../services/advertiser.zig").Advertiser;
+const Requestor = @import("../services/requestor.zig").Requestor;
 
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 const Envelope = @import("../data_structures/envelope.zig").Envelope;
@@ -421,6 +423,12 @@ pub const Node = struct {
             const topic = topic_entry.*;
             try topic.tick();
         }
+
+        var services_iter = self.services.valueIterator();
+        while (services_iter.next()) |service_entry| {
+            const service = service_entry.*;
+            try service.tick();
+        }
     }
 
     fn aggregateMessages(self: *Self) !void {
@@ -439,6 +447,49 @@ pub const Node = struct {
                     if (subscriber.queue.dequeue()) |message| {
                         const envelope = Envelope{
                             .connection_id = subscriber.conn_id,
+                            .message = message,
+                        };
+
+                        // we are checking this loop that adding the envelope will be successful
+                        connection_outbox.enqueue(envelope) catch unreachable;
+                    }
+                }
+            }
+        }
+
+        var services_iter = self.services.valueIterator();
+        while (services_iter.next()) |service_entry| {
+            const service: *Service = service_entry.*;
+
+            var advertisers_iter = service.advertisers.valueIterator();
+            while (advertisers_iter.next()) |advertiser_entry| {
+                const advertiser: *Advertiser = advertiser_entry.*;
+                const connection_outbox = try self.findOrCreateConnectionOutbox(advertiser.conn_id);
+
+                // We are going to create envelopes here
+                while (connection_outbox.available() > 0 and !advertiser.queue.isEmpty()) {
+                    if (advertiser.queue.dequeue()) |message| {
+                        const envelope = Envelope{
+                            .connection_id = advertiser.conn_id,
+                            .message = message,
+                        };
+
+                        // we are checking this loop that adding the envelope will be successful
+                        connection_outbox.enqueue(envelope) catch unreachable;
+                    }
+                }
+            }
+
+            var requestors_iter = service.requestors.valueIterator();
+            while (requestors_iter.next()) |requestor_entry| {
+                const requestor: *Requestor = requestor_entry.*;
+                const connection_outbox = try self.findOrCreateConnectionOutbox(requestor.conn_id);
+
+                // We are going to create envelopes here
+                while (connection_outbox.available() > 0 and !requestor.queue.isEmpty()) {
+                    if (requestor.queue.dequeue()) |message| {
+                        const envelope = Envelope{
+                            .connection_id = requestor.conn_id,
                             .message = message,
                         };
 
@@ -839,13 +890,13 @@ pub const Node = struct {
         assert(message.refs() == 1);
         const service = try self.findOrCreateService(message.topicName(), .{});
 
-        if (service.queue.available() == 0) {
+        if (service.requests_queue.available() == 0) {
             try service.tick();
         }
 
-        if (service.queue.available() > 0) {
+        if (service.requests_queue.available() > 0) {
             message.ref();
-            try service.queue.enqueue(message);
+            try service.requests_queue.enqueue(message);
             return;
         }
 
@@ -877,12 +928,12 @@ pub const Node = struct {
         assert(message.refs() == 1);
 
         const service = try self.findOrCreateService(message.topicName(), .{});
-        if (service.queue.available() == 0) {
+        if (service.requests_queue.available() == 0) {
             try service.tick();
         }
 
         message.ref();
-        service.queue.enqueue(message) catch message.deref();
+        service.requests_queue.enqueue(message) catch message.deref();
     }
 
     fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
