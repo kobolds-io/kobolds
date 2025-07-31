@@ -23,6 +23,7 @@ const Connection = @import("../protocol/connection.zig").Connection;
 const PingOptions = struct {};
 const PublishOptions = struct {};
 const SubscribeOptions = struct {};
+const RequestOptions = struct {};
 
 pub const ClientConfig = struct {
     max_connections: u16 = 100,
@@ -606,14 +607,6 @@ pub const Client = struct {
         _ = options;
     }
 
-    // const subscriber = try client.subscribe(conn, topic_name, )
-    // defer client.unsubscribe(subscriber);
-    //
-    // const subscriber = Subscriber.new();
-    // defer subscriber.unsubscribe();
-    //
-    // subscriber.subscribe(conn, topic_name);
-
     pub fn unsubscribe(
         self: *Self,
         conn: *Connection,
@@ -651,6 +644,41 @@ pub const Client = struct {
             defer self.transactions_mutex.unlock();
 
             try self.transactions.put(unsubscribe_message.transactionId(), signal);
+        }
+    }
+
+    pub fn request(
+        self: *Self,
+        conn: *Connection,
+        signal: *Signal(*Message),
+        topic_name: []const u8,
+        body: []const u8,
+        options: RequestOptions,
+    ) !void {
+        _ = options;
+        const req = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(req);
+
+        req.* = Message.new();
+        req.headers.message_type = .request;
+        req.setTransactionId(uuid.v7.new());
+        req.setTopicName(topic_name);
+        req.setBody(body);
+        req.ref();
+        errdefer req.deref();
+
+        {
+            self.connection_messages_mutex.lock();
+            defer self.connection_messages_mutex.unlock();
+
+            try self.connection_messages.append(conn.connection_id, req);
+        }
+
+        {
+            self.transactions_mutex.lock();
+            defer self.transactions_mutex.unlock();
+
+            try self.transactions.put(req.transactionId(), signal);
         }
     }
 };

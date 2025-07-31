@@ -106,11 +106,9 @@ pub const Service = struct {
 
     fn handleRequests(self: *Self) !void {
         if (self.requests_queue.count == 0) return;
-
         if (self.advertisers.count() == 0) return;
 
         const now = std.time.milliTimestamp();
-
         while (self.requests_queue.dequeue()) |request| {
             const requestor = self.findOrCreateRequestor(request.headers.connection_id) catch @panic("could not create requestor");
             const advertiser = self.getNextAdvertiser();
@@ -120,7 +118,7 @@ pub const Service = struct {
                 .advertiser = advertiser,
                 .transaction_id = request.transactionId(),
                 .recieved_at = now,
-                .timeout = now + 5_000 * std.time.ns_per_ms,
+                .timeout = now + 5_000 * std.time.ns_per_ms, // FIX: this should be a timeout provided by the `request`
             };
 
             try self.transactions.put(transaction.transaction_id, transaction);
@@ -147,14 +145,16 @@ pub const Service = struct {
 
     fn handleTransactions(self: *Self) !void {
         const now = std.time.milliTimestamp();
+
         var transactions_iter = self.transactions.valueIterator();
         while (transactions_iter.next()) |entry| {
             const transaction = entry.*;
             const deadline = transaction.recieved_at + transaction.timeout;
+
+            // if this transaction is already timedout, we should try to enqueue a reply for it telling the client
+            // that this transaction has timed out. The problem with doing this is that the client will likely
+            // have it's own timeout functionality so it may recieve a duplicate timeout.
             if (now >= deadline) {
-                // if this transaction is already dead, we should try to enqueue a reply for it telling the client
-                // that this transaction has timed out. The problem with doing this is that the client will likely
-                // have it's own timeout functionality so it may recieve a duplicate timeout.
                 const reply = try self.memory_pool.create();
                 errdefer self.memory_pool.destroy(reply);
 

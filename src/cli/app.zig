@@ -200,24 +200,24 @@ pub fn run() !void {
     //     .target = .{ .action = .{ .exec = nodeBench } },
     // };
 
-    // const node_request_command = cli.Command{
-    //     .name = "request",
-    //     .description = cli.Description{ .one_line = "send a request to a node" },
-    //     .options = &.{
-    //         .{
-    //             .long_name = "host",
-    //             .help = "host to listen on",
-    //             .value_ref = app_runner.mkRef(&client_config.host),
-    //         },
-    //         .{
-    //             .long_name = "port",
-    //             .help = "port to bind to",
-    //             .value_ref = app_runner.mkRef(&client_config.port),
-    //         },
-    //         // TODO: Should capture input and add it as the body of the request
-    //     },
-    //     .target = .{ .action = .{ .exec = nodeRequest } },
-    // };
+    const node_request_command = cli.Command{
+        .name = "request",
+        .description = cli.Description{ .one_line = "send a request" },
+        .options = &.{
+            // .{
+            //     .long_name = "host",
+            //     .help = "host to listen on",
+            //     .value_ref = app_runner.mkRef(&client_config.host),
+            // },
+            // .{
+            //     .long_name = "port",
+            //     .help = "port to bind to",
+            //     .value_ref = app_runner.mkRef(&client_config.port),
+            // },
+            // TODO: Should capture input and add it as the body of the request
+        },
+        .target = .{ .action = .{ .exec = nodeRequest } },
+    };
 
     // const node_reply_command = cli.Command{
     //     .name = "reply",
@@ -266,7 +266,7 @@ pub fn run() !void {
                 node_listen_command,
                 node_connect_command,
                 node_ping_command,
-                // node_request_command,
+                node_request_command,
                 // node_bench_command,
                 // node_reply_command,
                 node_publish_command,
@@ -585,6 +585,56 @@ pub fn nodeSubscribe() !void {
 
         log.debug("successfully subscribed", .{});
     }
+
+    registerSigintHandler();
+
+    while (!sigint_received) {
+        std.time.sleep(1 * std.time.ns_per_ms);
+    }
+}
+
+pub fn nodeRequest() !void {
+    // creating a client to communicate with the node
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+
+    const outbound_connection_config = OutboundConnectionConfig{
+        .host = "127.0.0.1",
+        .port = 8000,
+        .transport = .tcp,
+        .reconnect_config = .{
+            .enabled = true,
+            .max_attempts = 0,
+            .reconnection_strategy = .timed,
+        },
+        .keep_alive_config = .{
+            .enabled = true,
+            .interval_ms = 300,
+        },
+    };
+
+    var client = try Client.init(allocator, client_config);
+    defer client.deinit();
+
+    try client.start();
+    defer client.close();
+
+    const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
+    defer client.disconnect(conn);
+
+    const topic_name = "/test";
+
+    var req_signal = Signal(*Message).new();
+    try client.request(conn, &req_signal, topic_name, "hello world", .{});
+
+    const reply = try req_signal.tryReceive(10_000 * std.time.ns_per_ms);
+    defer {
+        reply.deref();
+        if (reply.refs() == 0) client.memory_pool.destroy(reply);
+    }
+
+    if (reply.errorCode() != .ok) return error.BadRequest;
 
     registerSigintHandler();
 
