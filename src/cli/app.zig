@@ -634,13 +634,16 @@ pub fn nodeRequest() !void {
         if (reply.refs() == 0) client.memory_pool.destroy(reply);
     }
 
-    if (reply.errorCode() != .ok) return error.BadRequest;
-
-    registerSigintHandler();
-
-    while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+    if (reply.errorCode() != .ok) {
+        log.err("reply error_code: {any}", .{reply.errorCode()});
+        return;
     }
+
+    // registerSigintHandler();
+
+    // while (!sigint_received) {
+    //     std.time.sleep(1 * std.time.ns_per_ms);
+    // }
 }
 
 pub fn version() !void {

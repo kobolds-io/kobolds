@@ -106,7 +106,20 @@ pub const Service = struct {
 
     fn handleRequests(self: *Self) !void {
         if (self.requests_queue.count == 0) return;
-        if (self.advertisers.count() == 0) return;
+
+        // FIX: this is a shit implementation
+        if (self.advertisers.count() == 0) {
+            while (self.requests_queue.dequeue()) |request| {
+                const requestor = self.findOrCreateRequestor(request.headers.connection_id) catch @panic("could not create requestor");
+                request.headers.message_type = .reply;
+                request.setBody("");
+                request.setErrorCode(.err);
+
+                try requestor.queue.enqueue(request);
+            }
+
+            return;
+        }
 
         const now = std.time.milliTimestamp();
         while (self.requests_queue.dequeue()) |request| {
