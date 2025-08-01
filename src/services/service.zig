@@ -1,5 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
+const log = std.log.scoped(.Service);
 
 const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
@@ -13,12 +14,41 @@ const Advertiser = @import("./advertiser.zig").Advertiser;
 const Requestor = @import("./requestor.zig").Requestor;
 const Transaction = @import("./transaction.zig").Transaction;
 
+const ServiceLoadBalancingStrategy = enum {
+    round_robin,
+};
+
+const ServiceLoadBalancer = union(ServiceLoadBalancingStrategy) {
+    round_robin: RoundRobinLoadBalancer,
+};
+
+const RoundRobinLoadBalancer = struct {
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
+    current_index: usize,
+    keys: std.ArrayList(u128),
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return Self{
+            .allocator = allocator,
+            .current_index = 0,
+            .keys = std.ArrayList(u128).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.keys.deinit();
+    }
+};
+
 pub const ServiceOptions = struct {};
 
 pub const Service = struct {
     const Self = @This();
 
     advertisers: std.AutoHashMap(u128, *Advertiser),
+    advertiser_keys: std.ArrayList(u128),
     requestors: std.AutoHashMap(u128, *Requestor),
     allocator: std.mem.Allocator,
     memory_pool: *MemoryPool(Message),
@@ -26,6 +56,8 @@ pub const Service = struct {
     replies_queue: *RingBuffer(*Message),
     topic_name: []const u8,
     transactions: std.AutoHashMap(u128, Transaction),
+    load_balancing_strategy: ServiceLoadBalancer,
+    tmp_copy_buffer: []*Message,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -49,6 +81,7 @@ pub const Service = struct {
 
         return Self{
             .advertisers = std.AutoHashMap(u128, *Advertiser).init(allocator),
+            .advertiser_keys = std.ArrayList(u128).init(allocator),
             .requestors = std.AutoHashMap(u128, *Requestor).init(allocator),
             .allocator = allocator,
             .memory_pool = memory_pool,
@@ -56,6 +89,8 @@ pub const Service = struct {
             .replies_queue = replies_queue,
             .topic_name = topic_name,
             .transactions = std.AutoHashMap(u128, Transaction).init(allocator),
+            .load_balancing_strategy = ServiceLoadBalancer{ .round_robin = RoundRobinLoadBalancer.init(allocator) },
+            .tmp_copy_buffer = tmp_copy_buffer,
         };
     }
 
@@ -86,7 +121,12 @@ pub const Service = struct {
             self.allocator.destroy(requestor);
         }
 
+        switch (self.load_balancing_strategy) {
+            .round_robin => self.load_balancing_strategy.round_robin.deinit(),
+        }
+
         self.advertisers.deinit();
+        self.advertiser_keys.deinit();
         self.requestors.deinit();
         self.transactions.deinit();
         self.requests_queue.deinit();
@@ -94,6 +134,7 @@ pub const Service = struct {
 
         self.allocator.destroy(self.replies_queue);
         self.allocator.destroy(self.requests_queue);
+        self.allocator.free(self.tmp_copy_buffer);
     }
 
     pub fn tick(self: *Self) !void {
@@ -102,6 +143,7 @@ pub const Service = struct {
         try self.handleRequests();
         try self.handleReplies();
         try self.handleTransactions();
+        try self.getNextAdvertiserRoundRobin();
     }
 
     fn handleRequests(self: *Self) !void {
@@ -220,11 +262,34 @@ pub const Service = struct {
         errdefer advertiser.deinit();
 
         try self.advertisers.put(advertiser_key, advertiser);
+        errdefer _ = self.advertisers.remove(advertiser_key);
+
+        switch (self.load_balancing_strategy) {
+            .round_robin => |*lb| {
+                try lb.keys.append(advertiser_key);
+                errdefer _ = lb.keys.pop();
+
+                std.mem.sort(u128, lb.keys.items, {}, std.sort.asc(u128));
+            },
+        }
     }
 
     // FIX: if there are any messages associated with this advertiser, we should see if we can reroute any active
     //     requests OR something better would be to send the requestor an error.
     pub fn removeAdvertiser(self: *Self, advertiser_key: u128) bool {
+        switch (self.load_balancing_strategy) {
+            .round_robin => |*lb| {
+                for (lb.keys.items, 0..lb.keys.items.len) |k, index| {
+                    if (k == advertiser_key) {
+                        // NOTE: I'm like 99% sure that we don't need to resort the list at all if we do an ordered remove
+                        //     i'm dumb though
+                        _ = lb.keys.orderedRemove(index);
+                        break;
+                    }
+                }
+            },
+        }
+
         if (self.advertisers.fetchRemove(advertiser_key)) |entry| {
             const advertiser = entry.value;
 
@@ -253,5 +318,39 @@ pub const Service = struct {
         }
 
         unreachable;
+    }
+
+    fn getNextAdvertiserRoundRobin(self: *Self) !void {
+        if (self.advertisers.count() == 0) return;
+
+        assert(self.load_balancing_strategy == .round_robin);
+        const lb = self.load_balancing_strategy.round_robin;
+
+        assert(lb.keys.items.len == self.advertisers.count());
+        assert(lb.keys.items.len > 0);
+        // assert(self.advertiser_keys.items.len == self.advertisers.count());
+
+        // self.load_balancing_strategy.round_robin.current_index = @min(
+        //     self.advertiser_keys.items.len - 1,
+        //     self.load_balancing_strategy.round_robin.current_index,
+        // );
+        // defer log.info("load_balancer.current_index {}", .{self.load_balancing_strategy.round_robin.current_index});
+
+        // // const advertiser_key = self.advertiser_keys[self.load_balancing_strategy.round_robin.current_index];
+
+        // // if (self.advertisers.get(advertiser_key)) |advertiser| {
+        // //     // try advertiser.queue.enqueue(message);
+        // // }
+
+        // // increment the current index so we select the next advertiser
+        // self.load_balancing_strategy.round_robin.current_index = (self.load_balancing_strategy.round_robin.current_index + 1) % self.advertiser_keys.items.len;
+
+        // var advertisers_iter = self.advertisers.valueIterator();
+        // while (advertisers_iter.next()) |entry| {
+        //     const advertiser = entry.*;
+
+        //     // TODO: figure out a better algorithm for this
+        //     return advertiser;
+        // }
     }
 };
