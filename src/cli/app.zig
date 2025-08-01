@@ -219,44 +219,24 @@ pub fn run() !void {
         .target = .{ .action = .{ .exec = nodeRequest } },
     };
 
-    // const node_reply_command = cli.Command{
-    //     .name = "reply",
-    //     .description = cli.Description{ .one_line = "reply to requests sent to a topic" },
-    //     .options = &.{
-    //         cli.Option{
-    //             .long_name = "host",
-    //             .help = "host to listen on",
-    //             .value_ref = app_runner.mkRef(&client_config.host),
-    //         },
-    //         cli.Option{
-    //             .long_name = "port",
-    //             .help = "port to bind to",
-    //             .value_ref = app_runner.mkRef(&client_config.port),
-    //         },
-    //         // TODO: Should capture input and add it as the body of the request
-    //     },
-    //     .target = cli.CommandTarget{
-    //         .action = cli.CommandAction{
-    //             .positional_args = cli.PositionalArgs{
-    //                 .required = &.{
-    //                     .{
-    //                         .name = "topic",
-    //                         .help = "topic of the reply",
-    //                         .value_ref = app_runner.mkRef(&reply_config.topic),
-    //                     },
-    //                 },
-    //                 .optional = &.{
-    //                     .{
-    //                         .name = "body",
-    //                         .help = "body of the reply",
-    //                         .value_ref = app_runner.mkRef(&reply_config.body),
-    //                     },
-    //                 },
-    //             },
-    //             .exec = nodeReply,
-    //         },
-    //     },
-    // };
+    const node_advertise_command = cli.Command{
+        .name = "advertise",
+        .description = cli.Description{ .one_line = "advertise a service" },
+        .options = &.{
+            // .{
+            //     .long_name = "host",
+            //     .help = "host to listen on",
+            //     .value_ref = app_runner.mkRef(&client_config.host),
+            // },
+            // .{
+            //     .long_name = "port",
+            //     .help = "port to bind to",
+            //     .value_ref = app_runner.mkRef(&client_config.port),
+            // },
+            // TODO: Should capture input and add it as the body of the request
+        },
+        .target = .{ .action = .{ .exec = nodeAdvertise } },
+    };
 
     const node_root_command = cli.Command{
         .name = "node",
@@ -267,8 +247,7 @@ pub fn run() !void {
                 node_connect_command,
                 node_ping_command,
                 node_request_command,
-                // node_bench_command,
-                // node_reply_command,
+                node_advertise_command,
                 node_publish_command,
                 node_subscribe_command,
             },
@@ -644,6 +623,80 @@ pub fn nodeRequest() !void {
     // while (!sigint_received) {
     //     std.time.sleep(1 * std.time.ns_per_ms);
     // }
+}
+
+var advertiser_msg_count: u64 = 0;
+var advertiser_bytes_count: u64 = 0;
+pub fn nodeAdvertise() !void {
+    // creating a client to communicate with the node
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+
+    const outbound_connection_config = OutboundConnectionConfig{
+        .host = "127.0.0.1",
+        .port = 8000,
+        .transport = .tcp,
+        .reconnect_config = .{
+            .enabled = true,
+            .max_attempts = 0,
+            .reconnection_strategy = .timed,
+        },
+        .keep_alive_config = .{
+            .enabled = true,
+            .interval_ms = 300,
+        },
+    };
+
+    var client = try Client.init(allocator, client_config);
+    defer client.deinit();
+
+    try client.start();
+    defer client.close();
+
+    const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
+    defer client.disconnect(conn);
+
+    const topic_name = "/test";
+
+    const callback = struct {
+        pub fn callback(req: *Message, rep: *Message) void {
+            _ = rep;
+            advertiser_msg_count += 1;
+            advertiser_bytes_count += req.size();
+            if (advertiser_msg_count % 100 == 0) {
+                log.info(
+                    "received message service: {s}, messages_count: {}, bytes_count: {}",
+                    .{
+                        req.topicName(),
+                        advertiser_msg_count,
+                        advertiser_bytes_count,
+                    },
+                );
+            }
+        }
+    }.callback;
+
+    var advertise_signal = Signal(*Message).new();
+    try client.advertise(conn, &advertise_signal, topic_name, callback, .{});
+
+    {
+        const advertise_reply = try advertise_signal.tryReceive(5_000 * std.time.ns_per_ms);
+        defer {
+            advertise_reply.deref();
+            if (advertise_reply.refs() == 0) client.memory_pool.destroy(advertise_reply);
+        }
+
+        if (advertise_reply.errorCode() != .ok) return error.BadRequest;
+
+        log.debug("successfully subscribed", .{});
+    }
+
+    registerSigintHandler();
+
+    while (!sigint_received) {
+        std.time.sleep(1 * std.time.ns_per_ms);
+    }
 }
 
 pub fn version() !void {

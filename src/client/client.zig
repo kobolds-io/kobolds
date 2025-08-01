@@ -16,6 +16,7 @@ const ConnectionMessages = @import("../data_structures/connection_messages.zig")
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const Signal = @import("stdx").Signal;
 const MemoryPool = @import("stdx").MemoryPool;
+const RingBuffer = @import("stdx").RingBuffer;
 
 const Message = @import("../protocol/message.zig").Message;
 const Connection = @import("../protocol/connection.zig").Connection;
@@ -24,6 +25,7 @@ const PingOptions = struct {};
 const PublishOptions = struct {};
 const SubscribeOptions = struct {};
 const RequestOptions = struct {};
+const AdvertiseOptions = struct {};
 
 pub const ClientConfig = struct {
     max_connections: u16 = 100,
@@ -681,6 +683,59 @@ pub const Client = struct {
             try self.transactions.put(req.transactionId(), signal);
         }
     }
+
+    pub fn advertise(
+        self: *Self,
+        conn: *Connection,
+        signal: *Signal(*Message),
+        topic_name: []const u8,
+        callback: Service.AdvertiseCallback,
+        options: AdvertiseOptions,
+    ) !void {
+        _ = self;
+        _ = conn;
+        _ = signal;
+        _ = topic_name;
+        _ = callback;
+        _ = options;
+    }
+};
+
+const Service = struct {
+    const Self = @This();
+
+    const AdvertiseCallback = *const fn (req: *Message, rep: *Message) void;
+    allocator: std.mem.Allocator,
+    advertisers: std.AutoHashMap(u128, AdvertiseCallback),
+    topic_name: []const u8,
+    requests_queue: *RingBuffer(*Message),
+
+    pub fn init(allocator: std.mem.Allocator, topic_name: []const u8) !Self {
+        const requests_queue = try allocator.create(RingBuffer(*Message));
+        errdefer allocator.destroy(requests_queue);
+
+        requests_queue.* = try RingBuffer(*Message).init(allocator, constants.advertiser_max_queue_capacity);
+        errdefer requests_queue.deinit();
+
+        return Self{
+            .allocator = allocator,
+            .topic_name = topic_name,
+            .adveritsers = std.AutoHashMap(u128, AdvertiseCallback).init(allocator),
+            .requests_queue = requests_queue,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.advertisers.deinit();
+    }
+
+    pub fn tick(self: *Self) void {
+        _ = self;
+    }
+};
+
+const Advertiser = struct {
+    const Self = @This();
 };
 
 const Topic = struct {
