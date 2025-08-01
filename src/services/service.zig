@@ -309,6 +309,12 @@ pub const Service = struct {
 
     fn getNextAdvertiser(self: *Self) *Advertiser {
         assert(self.advertisers.count() > 0);
+
+        // switch (self.load_balancing_strategy) {
+        //     .round_robin => |*lb| {
+        //         if (lb.keys.items.len == 0) {}
+        //     },
+        // }
         var advertisers_iter = self.advertisers.valueIterator();
         while (advertisers_iter.next()) |entry| {
             const advertiser = entry.*;
@@ -321,8 +327,6 @@ pub const Service = struct {
     }
 
     fn getNextAdvertiserRoundRobin(self: *Self) !void {
-        if (self.advertisers.count() == 0) return;
-
         assert(self.load_balancing_strategy == .round_robin);
         const lb = self.load_balancing_strategy.round_robin;
 
