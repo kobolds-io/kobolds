@@ -602,23 +602,83 @@ pub fn nodeRequest() !void {
     const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
     defer client.disconnect(conn);
 
+    var signals = std.ArrayList(*Signal(*Message)).init(allocator);
+    defer signals.deinit();
+
+    const ITERATIONS: usize = 1;
+
+    var timer = try std.time.Timer.start();
+    const total_start = timer.read();
+    for (0..ITERATIONS) |_| {
+        const signal = try allocator.create(Signal(*Message));
+        errdefer allocator.destroy(signal);
+
+        signal.* = Signal(*Message).new();
+        try signals.append(signal);
+    }
+    defer {
+        for (signals.items) |signal| {
+            allocator.destroy(signal);
+        }
+    }
+
     const topic_name = "/test";
 
-    var req_signal = Signal(*Message).new();
-    try client.request(conn, &req_signal, topic_name, "hello from requestor", .{});
+    var i: usize = 0;
+    while (i < ITERATIONS) {
+        const send_start = timer.read();
+        const signal = signals.items[i];
+        client.request(conn, signal, topic_name, "hello from requestor", .{}) catch {
+            std.time.sleep(1 * std.time.ns_per_ms);
+            continue;
+        };
+        const send_end = timer.read();
 
-    const reply = try req_signal.tryReceive(10_000 * std.time.ns_per_ms);
-    defer {
-        reply.deref();
-        if (reply.refs() == 0) client.memory_pool.destroy(reply);
+        const send_time = (send_end - send_start) / std.time.ns_per_ms;
+        if (send_time > 1) {
+            log.err("send took > 1ms: {}ms", .{send_time});
+        }
+
+        i += 1;
     }
 
-    if (reply.errorCode() != .ok) {
-        log.err("reply error_code: {any}", .{reply.errorCode()});
-        return;
+    for (signals.items) |signal| {
+        const receive_start = timer.read();
+        const rep = try signal.tryReceive(5_000 * std.time.ns_per_ms);
+        const receive_end = timer.read();
+
+        const error_code = rep.errorCode();
+        if (error_code != .ok) return error.BadRequest;
+
+        rep.deref();
+        if (rep.refs() == 0) client.memory_pool.destroy(rep);
+
+        const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
+        if (receive_time > 1) {
+            log.err("receive took > 1ms: {}ms", .{receive_time});
+        }
     }
 
-    log.info("reply.body: {s}", .{reply.body()});
+    const total_end = timer.read();
+    const total_time = (total_end - total_start) / std.time.ns_per_ms;
+    log.err("total time took: {}ms", .{total_time});
+
+    // const topic_name = "/test";
+
+    // var req_signal = Signal(*Message).new();
+
+    // const reply = try req_signal.tryReceive(10_000 * std.time.ns_per_ms);
+    // defer {
+    //     reply.deref();
+    //     if (reply.refs() == 0) client.memory_pool.destroy(reply);
+    // }
+
+    // if (reply.errorCode() != .ok) {
+    //     log.err("reply error_code: {any}", .{reply.errorCode()});
+    //     return;
+    // }
+
+    // log.info("reply.body: {s}", .{reply.body()});
 }
 
 var advertiser_msg_count: u64 = 0;
@@ -669,7 +729,7 @@ pub fn nodeAdvertise() !void {
                 );
             }
 
-            log.info("request.body {s}", .{req.body()});
+            // log.info("request.body {s}", .{req.body()});
             // std.time.sleep(8 * std.time.ns_per_s);
             rep.setBody("hello from advertiser!");
         }
