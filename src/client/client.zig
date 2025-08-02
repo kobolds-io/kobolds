@@ -21,6 +21,10 @@ const RingBuffer = @import("stdx").RingBuffer;
 const Message = @import("../protocol/message.zig").Message;
 const Connection = @import("../protocol/connection.zig").Connection;
 
+const Service = @import("../services/service.zig").Service;
+const Advertiser = @import("../services/advertiser.zig").Advertiser;
+const Requestor = @import("../services/requestor.zig").Requestor;
+
 const PingOptions = struct {};
 const PublishOptions = struct {};
 const SubscribeOptions = struct {};
@@ -58,6 +62,8 @@ pub const Client = struct {
     connection_messages: ConnectionMessages,
     connection_messages_mutex: std.Thread.Mutex,
     topics: std.StringHashMap(*Topic),
+    services: std.StringHashMap(*Service),
+    inbox: *RingBuffer(*Message),
 
     pub fn init(allocator: std.mem.Allocator, config: ClientConfig) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -80,8 +86,13 @@ pub const Client = struct {
         errdefer allocator.destroy(memory_pool);
 
         memory_pool.* = try MemoryPool(Message).init(allocator, 100_000);
-        // memory_pool.* = try MemoryPool(Message).init(allocator, config.memory_pool_capacity);
         errdefer memory_pool.deinit();
+
+        const inbox = try allocator.create(RingBuffer(*Message));
+        errdefer allocator.destroy(inbox);
+
+        inbox.* = try RingBuffer(*Message).init(allocator, 10_000);
+        errdefer inbox.deinit();
 
         return Self{
             .id = uuid.v7.new(),
@@ -101,6 +112,8 @@ pub const Client = struct {
             .connection_messages = ConnectionMessages.init(allocator, memory_pool),
             .connection_messages_mutex = std.Thread.Mutex{},
             .topics = std.StringHashMap(*Topic).init(allocator),
+            .services = std.StringHashMap(*Service).init(allocator),
+            .inbox = inbox,
         };
     }
 
@@ -135,17 +148,33 @@ pub const Client = struct {
             self.allocator.destroy(topic);
         }
 
+        var services_iterator = self.services.valueIterator();
+        while (services_iterator.next()) |entry| {
+            const service = entry.*;
+
+            service.deinit();
+            self.allocator.destroy(service);
+        }
+
+        while (self.inbox.dequeue()) |message| {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
         self.io.deinit();
         self.memory_pool.deinit();
         self.connections.deinit();
         self.uninitialized_connections.deinit();
         self.transactions.deinit();
         self.topics.deinit();
+        self.services.deinit();
+        self.inbox.deinit();
 
         self.allocator.destroy(self.memory_pool);
         self.allocator.destroy(self.io);
         self.allocator.destroy(self.done_channel);
         self.allocator.destroy(self.close_channel);
+        self.allocator.destroy(self.inbox);
     }
 
     pub fn start(self: *Self) !void {
@@ -248,139 +277,189 @@ pub const Client = struct {
     }
 
     fn tick(self: *Self) !void {
-        {
-            self.connections_mutex.lock();
-            defer self.connections_mutex.unlock();
+        try self.tickConnections();
+        try self.tickUninitializedConnections();
+        try self.processInboundConnectionMessages();
+        try self.processUninitializedConnectionMessages();
+        try self.aggregateOutboundMessages();
+    }
 
-            var uninitialized_connections_iter = self.uninitialized_connections.iterator();
-            while (uninitialized_connections_iter.next()) |entry| {
-                const tmp_id = entry.key_ptr.*;
-                const conn = entry.value_ptr.*;
+    fn tickConnections(self: *Self) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
 
-                // check if this connection was closed for whatever reason
-                if (conn.state == .closed) {
-                    try self.cleanupUninitializedConnection(tmp_id, conn);
-                    break;
-                }
+        // loop over all connections and gather their messages
+        var connections_iter = self.connections.iterator();
+        while (connections_iter.next()) |entry| {
+            const conn = entry.value_ptr.*;
 
-                conn.tick() catch |err| {
-                    log.err("could not tick uninitialized_connection error: {any}", .{err});
-                    break;
-                };
-
-                try self.processMessages(conn);
-
-                if (conn.state == .connected and conn.connection_id != 0) {
-                    // the connection is now valid and ready for events
-                    // move the connection to the regular connections map
-                    try self.connections.put(conn.connection_id, conn);
-                    // remove the connection from the uninitialized_connections map
-                    assert(self.uninitialized_connections.remove(tmp_id));
-                }
+            // check if this connection was closed for whatever reason
+            if (conn.state == .closed) {
+                // try self.cleanupConnection(conn);
+                continue;
             }
 
-            // loop over all connections and gather their messages
-            var connections_iter = self.connections.iterator();
-            while (connections_iter.next()) |entry| {
-                const conn = entry.value_ptr.*;
+            conn.tick() catch |err| {
+                log.err("could not tick connection error: {any}", .{err});
+                continue;
+            };
+        }
+    }
 
-                // check if this connection was closed for whatever reason
-                if (conn.state == .closed) {
-                    // try self.cleanupConnection(conn);
-                    continue;
-                }
+    fn tickUninitializedConnections(self: *Self) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
 
-                conn.tick() catch |err| {
-                    log.err("could not tick connection error: {any}", .{err});
-                    continue;
-                };
+        var uninitialized_connections_iter = self.uninitialized_connections.iterator();
+        while (uninitialized_connections_iter.next()) |entry| {
+            const tmp_id = entry.key_ptr.*;
+            const conn = entry.value_ptr.*;
 
-                try self.processMessages(conn);
-                try self.aggregateMessages(conn);
+            // check if this connection was closed for whatever reason
+            if (conn.state == .closed) {
+                try self.cleanupUninitializedConnection(tmp_id, conn);
+                break;
+            }
+
+            conn.tick() catch |err| {
+                log.err("could not tick uninitialized_connection error: {any}", .{err});
+                break;
+            };
+
+            if (conn.state == .connected and conn.connection_id != 0) {
+                // the connection is now valid and ready for events
+                // move the connection to the regular connections map
+                try self.connections.put(conn.connection_id, conn);
+                // remove the connection from the uninitialized_connections map
+                assert(self.uninitialized_connections.remove(tmp_id));
             }
         }
     }
 
-    fn processMessages(self: *Self, conn: *Connection) !void {
-        // check to see if there are messages
-        if (conn.inbox.count == 0) return;
+    fn processInboundConnectionMessages(self: *Self) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
 
-        while (conn.inbox.dequeue()) |message| {
-            // defer self.node.processed_messages_count += 1;
-            defer {
-                message.deref();
-                if (message.refs() == 0) self.memory_pool.destroy(message);
-            }
+        var connections_iter = self.connections.valueIterator();
+        while (connections_iter.next()) |connection_entry| {
+            const conn = connection_entry.*;
 
-            switch (message.headers.message_type) {
-                .accept => {
-                    // ensure that this connection is not fully connected
-                    assert(conn.state != .connected);
+            if (conn.inbox.count == 0) continue;
+            while (conn.inbox.dequeue()) |message| {
+                log.debug("received message {any}", .{message});
+                // if this message has more than a single ref, something has not been initialized
+                // or deinitialized correctly.
+                assert(message.refs() == 1);
 
-                    assert(conn.connection_id == 0);
-                    // An error here would be a protocol error
-                    assert(conn.remote_id != message.headers.origin_id);
-                    assert(conn.connection_id != message.headers.connection_id);
-
-                    conn.connection_id = message.headers.connection_id;
-                    conn.remote_id = message.headers.origin_id;
-
-                    // enqueue a message to immediately convey the node id of this Node
-                    message.headers.origin_id = conn.origin_id;
-                    message.headers.connection_id = conn.connection_id;
-
-                    message.ref();
-                    try conn.outbox.enqueue(message);
-
-                    assert(conn.connection_type == .outbound);
-
-                    conn.state = .connected;
-                    log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
-                        conn.origin_id,
-                        conn.connection_id,
-                        conn.remote_id,
-                    });
-                },
-                .pong => {
-                    message.ref();
-                    self.transactions_mutex.lock();
-                    defer self.transactions_mutex.unlock();
-
-                    // check if this pong message is part of transaction
-                    if (self.transactions.get(message.transactionId())) |signal| {
-                        message.ref();
-                        // log.info("message.refs() {}", .{message.refs()});
-                        signal.send(message);
-                        _ = self.transactions.remove(message.transactionId());
-                    }
-                },
-                .publish => {
-                    if (self.topics.get(message.topicName())) |topic| {
-                        topic.process(message);
-                    } else {
-                        return error.TopicDoesNotExist;
-                    }
-                },
-                .reply => {
-                    log.debug("reply received", .{});
-                    message.ref();
-                    self.transactions_mutex.lock();
-                    defer self.transactions_mutex.unlock();
-
-                    // check if this pong message is part of transaction
-                    if (self.transactions.get(message.transactionId())) |signal| {
-                        message.ref();
-                        // log.info("message.refs() {}", .{message.refs()});
-                        signal.send(message);
-                        _ = self.transactions.remove(message.transactionId());
-                    }
-                },
-                else => {},
+                switch (message.headers.message_type) {
+                    .pong => try self.handlePongMessage(conn, message),
+                    else => {
+                        self.inbox.enqueue(message) catch |err| {
+                            log.err("could not enqueue message {any}", .{err});
+                            try conn.inbox.prepend(message);
+                        };
+                    },
+                }
             }
         }
-
-        assert(conn.inbox.count == 0);
     }
+
+    fn processUninitializedConnectionMessages(self: *Self) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        var uninitialized_connections_iter = self.uninitialized_connections.valueIterator();
+        while (uninitialized_connections_iter.next()) |uninitialized_connection_entry| {
+            const conn = uninitialized_connection_entry.*;
+
+            if (conn.inbox.count == 0) continue;
+            while (conn.inbox.dequeue()) |message| {
+                log.debug("received message {any}", .{message});
+                // if this message has more than a single ref, something has not been initialized
+                // or deinitialized correctly.
+                assert(message.refs() == 1);
+
+                switch (message.headers.message_type) {
+                    .accept => try self.handleAcceptMessage(conn, message),
+                    else => {
+                        log.err("received unexpected message {any}", .{message.headers.message_type});
+                        message.deref();
+                        if (message.refs() == 0) self.memory_pool.destroy(message);
+                    },
+                }
+            }
+        }
+    }
+
+    fn aggregateOutboundMessages(self: *Self) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        self.connection_messages_mutex.lock();
+        defer self.connection_messages_mutex.unlock();
+
+        var connections_iter = self.connections.valueIterator();
+        while (connections_iter.next()) |connection_entry| {
+            const conn = connection_entry.*;
+
+            if (self.connection_messages.map.get(conn.connection_id)) |messages| {
+                conn.outbox.concatenateAvailable(messages);
+            }
+        }
+    }
+
+    // fn processMessages(self: *Self, conn: *Connection) !void {
+    //     // check to see if there are messages
+    //     if (conn.inbox.count == 0) return;
+
+    //     while (conn.inbox.dequeue()) |message| {
+    //         // defer self.node.processed_messages_count += 1;
+    //         defer {
+    //             message.deref();
+    //             if (message.refs() == 0) self.memory_pool.destroy(message);
+    //         }
+
+    //         switch (message.headers.message_type) {
+    //             .accept => try self.handleAcceptMessage(conn, message),
+    //             .pong => try self.handlePongMessage(conn, message),
+    //             .publish => {
+    //                 if (self.topics.get(message.topicName())) |topic| {
+    //                     topic.process(message);
+    //                 } else {
+    //                     return error.TopicDoesNotExist;
+    //                 }
+    //             },
+    //             .reply => {
+    //                 log.debug("reply received", .{});
+    //                 message.ref();
+    //                 self.transactions_mutex.lock();
+    //                 defer self.transactions_mutex.unlock();
+
+    //                 // check if this pong message is part of transaction
+    //                 if (self.transactions.get(message.transactionId())) |signal| {
+    //                     message.ref();
+    //                     signal.send(message);
+    //                     _ = self.transactions.remove(message.transactionId());
+    //                 }
+    //             },
+    //             .request => {
+    //                 log.debug("request received", .{});
+    //                 // get local service
+    //                 if (self.services.get(message.topicName())) |service| {
+    //                     // create a transaction
+    //                     log.debug("found service {any}", .{service});
+    //                 }
+
+    //                 // TODO: we should return an error to this caller if we were routed a service request
+    //                 // for a service we are not advertising. This might actually need to be an assert because
+    //                 // this could potentially expose critical data to someone who doesn't need it.
+    //             },
+    //             else => {},
+    //         }
+    //     }
+
+    //     assert(conn.inbox.count == 0);
+    // }
 
     fn aggregateMessages(self: *Self, conn: *Connection) !void {
         self.connection_messages_mutex.lock();
@@ -388,6 +467,58 @@ pub const Client = struct {
 
         if (self.connection_messages.map.get(conn.connection_id)) |messages| {
             conn.outbox.concatenateAvailable(messages);
+        }
+    }
+
+    fn handleAcceptMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        // ensure that this connection is not fully connected
+        assert(conn.state != .connected);
+
+        assert(conn.connection_id == 0);
+        // An error here would be a protocol error
+        assert(conn.remote_id != message.headers.origin_id);
+        assert(conn.connection_id != message.headers.connection_id);
+
+        conn.connection_id = message.headers.connection_id;
+        conn.remote_id = message.headers.origin_id;
+
+        // enqueue a message to immediately convey the node id of this Node
+        message.headers.origin_id = conn.origin_id;
+        message.headers.connection_id = conn.connection_id;
+
+        message.ref();
+        try conn.outbox.enqueue(message);
+
+        assert(conn.connection_type == .outbound);
+
+        conn.state = .connected;
+        log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
+            conn.origin_id,
+            conn.connection_id,
+            conn.remote_id,
+        });
+    }
+
+    fn handlePongMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        _ = conn;
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        self.transactions_mutex.lock();
+        defer self.transactions_mutex.unlock();
+
+        // check if this pong message is part of transaction
+        if (self.transactions.get(message.transactionId())) |signal| {
+            message.ref();
+            signal.send(message);
+            _ = self.transactions.remove(message.transactionId());
         }
     }
 
@@ -689,54 +820,87 @@ pub const Client = struct {
         conn: *Connection,
         signal: *Signal(*Message),
         topic_name: []const u8,
-        callback: Service.AdvertiseCallback,
+        // callback: Service.AdvertiseCallback,
         options: AdvertiseOptions,
     ) !void {
-        _ = self;
-        _ = conn;
-        _ = signal;
-        _ = topic_name;
-        _ = callback;
+        _ = options;
+        const req = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(req);
+
+        req.* = Message.new();
+        req.headers.message_type = .advertise;
+        req.setTransactionId(uuid.v7.new());
+        req.setTopicName(topic_name);
+        req.ref();
+        errdefer req.deref();
+
+        {
+            self.connection_messages_mutex.lock();
+            defer self.connection_messages_mutex.unlock();
+
+            try self.connection_messages.append(conn.connection_id, req);
+        }
+
+        {
+            self.transactions_mutex.lock();
+            defer self.transactions_mutex.unlock();
+
+            try self.transactions.put(req.transactionId(), signal);
+        }
+
+        // _ = callback;
         _ = options;
     }
 };
 
-const Service = struct {
-    const Self = @This();
+// const Service = struct {
+//     const Self = @This();
 
-    const AdvertiseCallback = *const fn (req: *Message, rep: *Message) void;
-    allocator: std.mem.Allocator,
-    advertisers: std.AutoHashMap(u128, AdvertiseCallback),
-    topic_name: []const u8,
-    requests_queue: *RingBuffer(*Message),
+//     const AdvertiseCallback = *const fn (req: *Message, rep: *Message) void;
+//     allocator: std.mem.Allocator,
+//     advertisers: std.AutoHashMap(u128, AdvertiseCallback),
+//     topic_name: []const u8,
+//     requests_queue: *RingBuffer(*Message),
 
-    pub fn init(allocator: std.mem.Allocator, topic_name: []const u8) !Self {
-        const requests_queue = try allocator.create(RingBuffer(*Message));
-        errdefer allocator.destroy(requests_queue);
+//     pub fn init(allocator: std.mem.Allocator, topic_name: []const u8) !Self {
+//         const requests_queue = try allocator.create(RingBuffer(*Message));
+//         errdefer allocator.destroy(requests_queue);
 
-        requests_queue.* = try RingBuffer(*Message).init(allocator, constants.advertiser_max_queue_capacity);
-        errdefer requests_queue.deinit();
+//         requests_queue.* = try RingBuffer(*Message).init(allocator, constants.service_max_requests_queue_capacity);
+//         errdefer requests_queue.deinit();
 
-        return Self{
-            .allocator = allocator,
-            .topic_name = topic_name,
-            .adveritsers = std.AutoHashMap(u128, AdvertiseCallback).init(allocator),
-            .requests_queue = requests_queue,
-        };
-    }
+//         return Self{
+//             .allocator = allocator,
+//             .topic_name = topic_name,
+//             .adveritsers = std.AutoHashMap(u128, AdvertiseCallback).init(allocator),
+//             .requests_queue = requests_queue,
+//         };
+//     }
 
-    pub fn deinit(self: *Self) void {
-        self.advertisers.deinit();
-    }
+//     pub fn deinit(self: *Self) void {
+//         self.advertisers.deinit();
+//     }
 
-    pub fn tick(self: *Self) void {
-        _ = self;
-    }
-};
+//     pub fn tick(self: *Self) void {
+//         _ = self;
+//     }
+// };
 
-const Advertiser = struct {
-    const Self = @This();
-};
+// const Advertiser = struct {
+//     const Self = @This();
+// };
+
+// const ClientService = struct {
+//     const Self = @This();
+
+//     allocator: std.mem.Allocator,
+//     requests_queue: *RingBuffer(*Message),
+//     replies_queue: *RingBuffer(*Message),
+//     advertisers: std.AutoHashMap(u128, *Advertiser),
+//     requestors: std.AutoHashMap(u128, *Requestor),
+//     topic_name: []const u8,
+//     transactions: std.AutoHashMap(u128, Transaction),
+// };
 
 const Topic = struct {
     const Self = @This();
@@ -754,15 +918,12 @@ const Topic = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        // var subscribers_iter = self.subscribers.valueIterator();
-        // while (subscribers_iter.next()) |entry| {
-        //     const subscriber = entry.*;
-
-        //     self.allocator.destroy(subscriber);
-        // }
-
         self.subscribers.deinit();
     }
+
+    // pub fn tick(self: *Self) !void {
+    //     if (self.queue.count == 0) return;
+    // }
 
     pub fn process(self: *Self, message: *Message) void {
         assert(message.headers.message_type == .publish);

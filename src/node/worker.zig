@@ -417,7 +417,6 @@ pub const Worker = struct {
                     .accept => try self.handleAcceptMessage(conn, message),
                     .ping => try self.handlePingMessage(conn, message),
                     .pong => try self.handlePongMessage(conn, message),
-                    // .subscribe => try self.handleSubscribeMessage(conn, message),
                     else => {
                         // NOTE: This message type is meant to be handled by the node
                         self.inbox_mutex.lock();

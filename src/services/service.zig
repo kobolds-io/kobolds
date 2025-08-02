@@ -56,7 +56,6 @@ pub const Service = struct {
     topic_name: []const u8,
     transactions: std.AutoHashMap(u128, Transaction),
     load_balancing_strategy: ServiceLoadBalancer,
-    tmp_copy_buffer: []*Message,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -75,9 +74,6 @@ pub const Service = struct {
         replies_queue.* = try RingBuffer(*Message).init(allocator, constants.service_max_replies_queue_capacity);
         errdefer replies_queue.deinit();
 
-        const tmp_copy_buffer = try allocator.alloc(*Message, constants.advertiser_max_queue_capacity);
-        errdefer allocator.free(tmp_copy_buffer);
-
         return Self{
             .advertisers = std.AutoHashMap(u128, *Advertiser).init(allocator),
             .requestors = std.AutoHashMap(u128, *Requestor).init(allocator),
@@ -88,7 +84,6 @@ pub const Service = struct {
             .topic_name = topic_name,
             .transactions = std.AutoHashMap(u128, Transaction).init(allocator),
             .load_balancing_strategy = ServiceLoadBalancer{ .round_robin = RoundRobinLoadBalancer.init(allocator) },
-            .tmp_copy_buffer = tmp_copy_buffer,
         };
     }
 
@@ -131,7 +126,6 @@ pub const Service = struct {
 
         self.allocator.destroy(self.replies_queue);
         self.allocator.destroy(self.requests_queue);
-        self.allocator.free(self.tmp_copy_buffer);
     }
 
     pub fn tick(self: *Self) !void {
