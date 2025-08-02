@@ -48,7 +48,6 @@ pub const Service = struct {
     const Self = @This();
 
     advertisers: std.AutoHashMap(u128, *Advertiser),
-    advertiser_keys: std.ArrayList(u128),
     requestors: std.AutoHashMap(u128, *Requestor),
     allocator: std.mem.Allocator,
     memory_pool: *MemoryPool(Message),
@@ -81,7 +80,6 @@ pub const Service = struct {
 
         return Self{
             .advertisers = std.AutoHashMap(u128, *Advertiser).init(allocator),
-            .advertiser_keys = std.ArrayList(u128).init(allocator),
             .requestors = std.AutoHashMap(u128, *Requestor).init(allocator),
             .allocator = allocator,
             .memory_pool = memory_pool,
@@ -126,7 +124,6 @@ pub const Service = struct {
         }
 
         self.advertisers.deinit();
-        self.advertiser_keys.deinit();
         self.requestors.deinit();
         self.transactions.deinit();
         self.requests_queue.deinit();
@@ -313,7 +310,7 @@ pub const Service = struct {
             .round_robin => |*lb| {
                 assert(lb.keys.items.len > 0);
 
-                lb.current_index = @min(self.advertiser_keys.items.len - 1, lb.current_index);
+                lb.current_index = @min(lb.keys.items.len - 1, lb.current_index);
                 const advertiser_key = lb.keys.items[lb.current_index];
 
                 lb.current_index = (lb.current_index + 1) % lb.keys.items.len;
