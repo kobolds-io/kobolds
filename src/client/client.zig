@@ -21,6 +21,10 @@ const RingBuffer = @import("stdx").RingBuffer;
 const Message = @import("../protocol/message.zig").Message;
 const Connection = @import("../protocol/connection.zig").Connection;
 
+const Topic = @import("../pubsub/topic.zig").Topic;
+const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
+const SubscriberCallback = *const fn (message: *Message) void;
+
 const Service = @import("../services/service.zig").Service;
 const Advertiser = @import("../services/advertiser.zig").Advertiser;
 const Requestor = @import("../services/requestor.zig").Requestor;
@@ -62,8 +66,11 @@ pub const Client = struct {
     connection_messages: ConnectionMessages,
     connection_messages_mutex: std.Thread.Mutex,
     topics: std.StringHashMap(*Topic),
+    topics_mutex: std.Thread.Mutex,
+    subscriber_callbacks: std.AutoHashMap(u128, SubscriberCallback),
     services: std.StringHashMap(*Service),
     inbox: *RingBuffer(*Message),
+    inbox_mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, config: ClientConfig) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -112,8 +119,11 @@ pub const Client = struct {
             .connection_messages = ConnectionMessages.init(allocator, memory_pool),
             .connection_messages_mutex = std.Thread.Mutex{},
             .topics = std.StringHashMap(*Topic).init(allocator),
+            .topics_mutex = std.Thread.Mutex{},
+            .subscriber_callbacks = std.AutoHashMap(u128, SubscriberCallback).init(allocator),
             .services = std.StringHashMap(*Service).init(allocator),
             .inbox = inbox,
+            .inbox_mutex = std.Thread.Mutex{},
         };
     }
 
@@ -167,6 +177,7 @@ pub const Client = struct {
         self.uninitialized_connections.deinit();
         self.transactions.deinit();
         self.topics.deinit();
+        self.subscriber_callbacks.deinit();
         self.services.deinit();
         self.inbox.deinit();
 
@@ -281,6 +292,7 @@ pub const Client = struct {
         try self.tickUninitializedConnections();
         try self.processInboundConnectionMessages();
         try self.processUninitializedConnectionMessages();
+        try self.processClientMessages();
         try self.aggregateOutboundMessages();
     }
 
@@ -346,7 +358,6 @@ pub const Client = struct {
 
             if (conn.inbox.count == 0) continue;
             while (conn.inbox.dequeue()) |message| {
-                log.debug("received message {any}", .{message});
                 // if this message has more than a single ref, something has not been initialized
                 // or deinitialized correctly.
                 assert(message.refs() == 1);
@@ -354,6 +365,9 @@ pub const Client = struct {
                 switch (message.headers.message_type) {
                     .pong => try self.handlePongMessage(conn, message),
                     else => {
+                        self.inbox_mutex.lock();
+                        defer self.inbox_mutex.unlock();
+
                         self.inbox.enqueue(message) catch |err| {
                             log.err("could not enqueue message {any}", .{err});
                             try conn.inbox.prepend(message);
@@ -386,6 +400,47 @@ pub const Client = struct {
                         message.deref();
                         if (message.refs() == 0) self.memory_pool.destroy(message);
                     },
+                }
+            }
+        }
+    }
+
+    fn processClientMessages(self: *Self) !void {
+        if (self.inbox.count == 0) return;
+
+        {
+            self.inbox_mutex.lock();
+            defer self.inbox_mutex.unlock();
+
+            while (self.inbox.dequeue()) |message| {
+                switch (message.headers.message_type) {
+                    .reply => try self.handleReplyMessage(message),
+                    .publish => try self.handlePublishMessage(message),
+                    else => unreachable,
+                }
+            }
+        }
+
+        {
+            self.topics_mutex.lock();
+            defer self.topics_mutex.unlock();
+
+            var topics_iter = self.topics.valueIterator();
+            while (topics_iter.next()) |topic_entry| {
+                const topic = topic_entry.*;
+
+                try topic.tick();
+
+                var subscribers_iter = topic.subscribers.valueIterator();
+                while (subscribers_iter.next()) |subscriber_entry| {
+                    const subscriber: *Subscriber = subscriber_entry.*;
+                    if (subscriber.queue.count == 0) continue;
+
+                    // get the callback for this subscriber and process all the messages
+                    const cb = self.subscriber_callbacks.get(subscriber.key).?;
+                    while (subscriber.queue.dequeue()) |message| {
+                        cb(message);
+                    }
                 }
             }
         }
@@ -520,6 +575,34 @@ pub const Client = struct {
             signal.send(message);
             _ = self.transactions.remove(message.transactionId());
         }
+    }
+
+    fn handleReplyMessage(self: *Self, message: *Message) !void {
+        // log.debug("reply received", .{});
+        self.transactions_mutex.lock();
+        defer self.transactions_mutex.unlock();
+
+        // check if this pong message is part of transaction
+        if (self.transactions.get(message.transactionId())) |signal| {
+            message.ref();
+            signal.send(message);
+            _ = self.transactions.remove(message.transactionId());
+        }
+    }
+
+    fn handlePublishMessage(self: *Self, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        self.topics_mutex.lock();
+        defer self.topics_mutex.unlock();
+
+        if (self.topics.get(message.topicName())) |topic| {
+            message.ref();
+            topic.queue.enqueue(message) catch message.deref();
+        } else unreachable;
     }
 
     fn cleanupUninitializedConnection(self: *Self, tmp_id: uuid.Uuid, conn: *Connection) !void {
@@ -689,10 +772,13 @@ pub const Client = struct {
         conn: *Connection,
         signal: *Signal(*Message),
         topic_name: []const u8,
-        callback: Topic.SubscriptionCallback,
+        callback: SubscriberCallback,
         options: SubscribeOptions,
     ) !void {
         assert(conn.state == .connected);
+
+        self.topics_mutex.lock();
+        defer self.topics_mutex.unlock();
 
         var topic: *Topic = undefined;
         if (self.topics.get(topic_name)) |t| {
@@ -701,16 +787,23 @@ pub const Client = struct {
             topic = try self.allocator.create(Topic);
             errdefer self.allocator.destroy(topic);
 
-            topic.* = Topic.init(self.allocator, topic_name);
+            topic.* = try Topic.init(self.allocator, self.memory_pool, topic_name);
             errdefer topic.deinit();
 
             try self.topics.put(topic_name, topic);
         }
 
-        // Add the callback to the list of subscribers to this topic
         const subscriber_key = utils.generateKey(topic_name, conn.connection_id);
-        try topic.subscribers.put(subscriber_key, callback);
-        errdefer _ = topic.subscribers.remove(subscriber_key);
+
+        try topic.addSubscriber(subscriber_key, conn.connection_id);
+        errdefer _ = topic.removeSubscriber(subscriber_key);
+
+        // Add the subscriber_callback which is tied to this THIS subscriber
+        try self.subscriber_callbacks.put(subscriber_key, callback);
+        errdefer _ = self.subscriber_callbacks.remove(subscriber_key);
+
+        // try topic.subscribers.put(subscriber_key, callback);
+        // errdefer _ = topic.subscribers.remove(subscriber_key);
 
         const subscribe_message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(subscribe_message);
@@ -745,9 +838,9 @@ pub const Client = struct {
         conn: *Connection,
         signal: *Signal(*Message),
         topic_name: []const u8,
-        callback: Topic.SubscriptionCallback,
+        // callback: Topic.SubscriptionCallback,
     ) !void {
-        _ = callback;
+        // _ = callback;
         if (self.topics.get(topic_name)) |topic| {
             const subscriber_key = utils.generateKey(topic_name, conn.connection_id);
             _ = topic.subscribers.remove(subscriber_key);
@@ -902,60 +995,60 @@ pub const Client = struct {
 //     transactions: std.AutoHashMap(u128, Transaction),
 // };
 
-const Topic = struct {
-    const Self = @This();
-    const SubscriptionCallback = *const fn (message: *Message) void;
-    allocator: std.mem.Allocator,
-    subscribers: std.AutoHashMap(u128, SubscriptionCallback),
-    topic_name: []const u8,
+// const Topic = struct {
+//     const Self = @This();
+//     const SubscriptionCallback = *const fn (message: *Message) void;
+//     allocator: std.mem.Allocator,
+//     subscribers: std.AutoHashMap(u128, SubscriptionCallback),
+//     topic_name: []const u8,
 
-    pub fn init(allocator: std.mem.Allocator, topic_name: []const u8) Self {
-        return Self{
-            .allocator = allocator,
-            .topic_name = topic_name,
-            .subscribers = std.AutoHashMap(u128, SubscriptionCallback).init(allocator),
-        };
-    }
+//     pub fn init(allocator: std.mem.Allocator, topic_name: []const u8) Self {
+//         return Self{
+//             .allocator = allocator,
+//             .topic_name = topic_name,
+//             .subscribers = std.AutoHashMap(u128, SubscriptionCallback).init(allocator),
+//         };
+//     }
 
-    pub fn deinit(self: *Self) void {
-        self.subscribers.deinit();
-    }
+//     pub fn deinit(self: *Self) void {
+//         self.subscribers.deinit();
+//     }
 
-    // pub fn tick(self: *Self) !void {
-    //     if (self.queue.count == 0) return;
-    // }
+//     // pub fn tick(self: *Self) !void {
+//     //     if (self.queue.count == 0) return;
+//     // }
 
-    pub fn process(self: *Self, message: *Message) void {
-        assert(message.headers.message_type == .publish);
-        assert(std.mem.eql(u8, message.topicName(), self.topic_name));
+//     pub fn tick(self: *Self, message: *Message) void {
+//         assert(message.headers.message_type == .publish);
+//         assert(std.mem.eql(u8, message.topicName(), self.topic_name));
 
-        var subscribers_iter = self.subscribers.valueIterator();
-        while (subscribers_iter.next()) |entry| {
-            const callback = entry.*;
+//         var subscribers_iter = self.subscribers.valueIterator();
+//         while (subscribers_iter.next()) |entry| {
+//             const callback = entry.*;
 
-            callback(message);
-        }
-    }
-};
+//             callback(message);
+//         }
+//     }
+// };
 
-const Publisher = struct {};
-const Subscriber = struct {
-    const Self = @This();
+// const Publisher = struct {};
+// const Subscriber = struct {
+//     const Self = @This();
 
-    id: u128,
-    callback: *const fn (message: *Message) void,
-    messages_recv: u128,
-    topic: *Topic,
+//     id: u128,
+//     callback: *const fn (message: *Message) void,
+//     messages_recv: u128,
+//     topic: *Topic,
 
-    pub fn new(id: uuid.Uuid, topic: *Topic, callback: *const fn (message: *Message) void) Self {
-        return Self{
-            .id = id,
-            .callback = callback,
-            .messages_recv = 0,
-            .topic = topic,
-        };
-    }
-};
+//     pub fn new(id: uuid.Uuid, topic: *Topic, callback: *const fn (message: *Message) void) Self {
+//         return Self{
+//             .id = id,
+//             .callback = callback,
+//             .messages_recv = 0,
+//             .topic = topic,
+//         };
+//     }
+// };
 
 test "init/deinit" {
     const allocator = testing.allocator;
