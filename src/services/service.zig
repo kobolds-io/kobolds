@@ -129,8 +129,6 @@ pub const Service = struct {
     }
 
     pub fn tick(self: *Self) !void {
-        if (self.requests_queue.count == 0 and self.replies_queue.count == 0) return;
-
         try self.handleRequests();
         try self.handleReplies();
         try self.handleTransactions();
@@ -163,7 +161,7 @@ pub const Service = struct {
                 .advertiser = advertiser,
                 .transaction_id = request.transactionId(),
                 .recieved_at = now,
-                .timeout = now + 5_000 * std.time.ns_per_ms, // FIX: this should be a timeout provided by the `request`
+                .timeout = 5_000, // FIX: this should be a timeout provided by the `request`
             };
 
             try self.transactions.put(transaction.transaction_id, transaction);
@@ -200,6 +198,7 @@ pub const Service = struct {
             // that this transaction has timed out. The problem with doing this is that the client will likely
             // have it's own timeout functionality so it may recieve a duplicate timeout.
             if (now >= deadline) {
+                log.info("transaction timed out", .{});
                 const reply = try self.memory_pool.create();
                 errdefer self.memory_pool.destroy(reply);
 

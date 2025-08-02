@@ -388,8 +388,6 @@ pub const Node = struct {
     }
 
     fn processMessages(self: *Self) !void {
-        if (self.inbox.count == 0) return;
-
         // There should only be `n` messages processed every tick
         const max_messages_processed_per_tick: usize = 50_000;
         var i: usize = 0;
@@ -415,7 +413,7 @@ pub const Node = struct {
                         @panic("unhandled message!");
                     },
                 }
-            }
+            } else break;
         }
 
         var topics_iter = self.topics.valueIterator();
@@ -928,12 +926,12 @@ pub const Node = struct {
         assert(message.refs() == 1);
 
         const service = try self.findOrCreateService(message.topicName(), .{});
-        if (service.requests_queue.available() == 0) {
+        if (service.replies_queue.available() == 0) {
             try service.tick();
         }
 
         message.ref();
-        service.requests_queue.enqueue(message) catch message.deref();
+        service.replies_queue.enqueue(message) catch message.deref();
     }
 
     fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {

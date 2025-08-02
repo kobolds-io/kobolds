@@ -605,7 +605,7 @@ pub fn nodeRequest() !void {
     const topic_name = "/test";
 
     var req_signal = Signal(*Message).new();
-    try client.request(conn, &req_signal, topic_name, "hello world", .{});
+    try client.request(conn, &req_signal, topic_name, "hello from requestor", .{});
 
     const reply = try req_signal.tryReceive(10_000 * std.time.ns_per_ms);
     defer {
@@ -618,85 +618,83 @@ pub fn nodeRequest() !void {
         return;
     }
 
-    // registerSigintHandler();
-
-    // while (!sigint_received) {
-    //     std.time.sleep(1 * std.time.ns_per_ms);
-    // }
+    log.info("reply.body: {s}", .{reply.body()});
 }
 
 var advertiser_msg_count: u64 = 0;
 var advertiser_bytes_count: u64 = 0;
 pub fn nodeAdvertise() !void {
-    //     // creating a client to communicate with the node
-    //     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
-    //     const allocator = gpa.allocator();
-    //     defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
-    //     const outbound_connection_config = OutboundConnectionConfig{
-    //         .host = "127.0.0.1",
-    //         .port = 8000,
-    //         .transport = .tcp,
-    //         .reconnect_config = .{
-    //             .enabled = true,
-    //             .max_attempts = 0,
-    //             .reconnection_strategy = .timed,
-    //         },
-    //         .keep_alive_config = .{
-    //             .enabled = true,
-    //             .interval_ms = 300,
-    //         },
-    //     };
+    const outbound_connection_config = OutboundConnectionConfig{
+        .host = "127.0.0.1",
+        .port = 8000,
+        .transport = .tcp,
+        .reconnect_config = .{
+            .enabled = true,
+            .max_attempts = 0,
+            .reconnection_strategy = .timed,
+        },
+        .keep_alive_config = .{
+            .enabled = true,
+            .interval_ms = 300,
+        },
+    };
 
-    //     var client = try Client.init(allocator, client_config);
-    //     defer client.deinit();
+    var client = try Client.init(allocator, client_config);
+    defer client.deinit();
 
-    //     try client.start();
-    //     defer client.close();
+    try client.start();
+    defer client.close();
 
-    //     const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
-    //     defer client.disconnect(conn);
+    const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
+    defer client.disconnect(conn);
 
-    //     const topic_name = "/test";
+    const topic_name = "/test";
 
-    //     const callback = struct {
-    //         pub fn callback(req: *Message, rep: *Message) void {
-    //             _ = rep;
-    //             advertiser_msg_count += 1;
-    //             advertiser_bytes_count += req.size();
-    //             if (advertiser_msg_count % 100 == 0) {
-    //                 log.info(
-    //                     "received message service: {s}, messages_count: {}, bytes_count: {}",
-    //                     .{
-    //                         req.topicName(),
-    //                         advertiser_msg_count,
-    //                         advertiser_bytes_count,
-    //                     },
-    //                 );
-    //             }
-    //         }
-    //     }.callback;
+    const callback = struct {
+        pub fn callback(req: *Message, rep: *Message) void {
+            advertiser_msg_count += 1;
+            advertiser_bytes_count += req.size();
+            if (advertiser_msg_count % 100 == 0) {
+                log.info(
+                    "received message service: {s}, messages_count: {}, bytes_count: {}",
+                    .{
+                        req.topicName(),
+                        advertiser_msg_count,
+                        advertiser_bytes_count,
+                    },
+                );
+            }
 
-    //     var advertise_signal = Signal(*Message).new();
-    //     try client.advertise(conn, &advertise_signal, topic_name, callback, .{});
+            log.info("request.body {s}", .{req.body()});
+            // std.time.sleep(8 * std.time.ns_per_s);
+            rep.setBody("hello from advertiser!");
+        }
+    }.callback;
 
-    //     {
-    //         const advertise_reply = try advertise_signal.tryReceive(5_000 * std.time.ns_per_ms);
-    //         defer {
-    //             advertise_reply.deref();
-    //             if (advertise_reply.refs() == 0) client.memory_pool.destroy(advertise_reply);
-    //         }
+    var advertise_signal = Signal(*Message).new();
+    try client.advertise(conn, &advertise_signal, topic_name, callback, .{});
 
-    //         if (advertise_reply.errorCode() != .ok) return error.BadRequest;
+    {
+        const advertise_reply = try advertise_signal.tryReceive(5_000 * std.time.ns_per_ms);
+        defer {
+            advertise_reply.deref();
+            if (advertise_reply.refs() == 0) client.memory_pool.destroy(advertise_reply);
+        }
 
-    //         log.debug("successfully subscribed", .{});
-    //     }
+        if (advertise_reply.errorCode() != .ok) return error.BadRequest;
 
-    //     registerSigintHandler();
+        log.debug("successfully advertising {s}", .{topic_name});
+    }
 
-    //     while (!sigint_received) {
-    //         std.time.sleep(1 * std.time.ns_per_ms);
-    //     }
+    registerSigintHandler();
+
+    while (!sigint_received) {
+        std.time.sleep(1 * std.time.ns_per_ms);
+    }
 }
 
 pub fn version() !void {

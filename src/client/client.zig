@@ -28,6 +28,7 @@ const SubscriberCallback = *const fn (message: *Message) void;
 const Service = @import("../services/service.zig").Service;
 const Advertiser = @import("../services/advertiser.zig").Advertiser;
 const Requestor = @import("../services/requestor.zig").Requestor;
+const AdvertiserCallback = *const fn (request: *Message, reply: *Message) void;
 
 const PingOptions = struct {};
 const PublishOptions = struct {};
@@ -69,6 +70,8 @@ pub const Client = struct {
     topics_mutex: std.Thread.Mutex,
     subscriber_callbacks: std.AutoHashMap(u128, SubscriberCallback),
     services: std.StringHashMap(*Service),
+    services_mutex: std.Thread.Mutex,
+    advertiser_callbacks: std.AutoHashMap(u128, AdvertiserCallback),
     inbox: *RingBuffer(*Message),
     inbox_mutex: std.Thread.Mutex,
 
@@ -122,6 +125,8 @@ pub const Client = struct {
             .topics_mutex = std.Thread.Mutex{},
             .subscriber_callbacks = std.AutoHashMap(u128, SubscriberCallback).init(allocator),
             .services = std.StringHashMap(*Service).init(allocator),
+            .services_mutex = std.Thread.Mutex{},
+            .advertiser_callbacks = std.AutoHashMap(u128, AdvertiserCallback).init(allocator),
             .inbox = inbox,
             .inbox_mutex = std.Thread.Mutex{},
         };
@@ -179,6 +184,7 @@ pub const Client = struct {
         self.topics.deinit();
         self.subscriber_callbacks.deinit();
         self.services.deinit();
+        self.advertiser_callbacks.deinit();
         self.inbox.deinit();
 
         self.allocator.destroy(self.memory_pool);
@@ -388,7 +394,6 @@ pub const Client = struct {
 
             if (conn.inbox.count == 0) continue;
             while (conn.inbox.dequeue()) |message| {
-                log.debug("received message {any}", .{message});
                 // if this message has more than a single ref, something has not been initialized
                 // or deinitialized correctly.
                 assert(message.refs() == 1);
@@ -406,8 +411,6 @@ pub const Client = struct {
     }
 
     fn processClientMessages(self: *Self) !void {
-        if (self.inbox.count == 0) return;
-
         {
             self.inbox_mutex.lock();
             defer self.inbox_mutex.unlock();
@@ -415,6 +418,7 @@ pub const Client = struct {
             while (self.inbox.dequeue()) |message| {
                 switch (message.headers.message_type) {
                     .reply => try self.handleReplyMessage(message),
+                    .request => try self.handleRequestMessage(message),
                     .publish => try self.handlePublishMessage(message),
                     else => unreachable,
                 }
@@ -438,9 +442,57 @@ pub const Client = struct {
 
                     // get the callback for this subscriber and process all the messages
                     const cb = self.subscriber_callbacks.get(subscriber.key).?;
-                    while (subscriber.queue.dequeue()) |message| {
-                        cb(message);
+                    while (subscriber.queue.dequeue()) |message| cb(message);
+                }
+            }
+        }
+
+        {
+            self.services_mutex.lock();
+            defer self.services_mutex.unlock();
+
+            var services_iter = self.services.valueIterator();
+            while (services_iter.next()) |service_entry| {
+                const service = service_entry.*;
+
+                try service.tick();
+
+                var advertisers_iter = service.advertisers.valueIterator();
+                while (advertisers_iter.next()) |advertiser_entry| {
+                    const advertiser: *Advertiser = advertiser_entry.*;
+                    if (advertiser.queue.count == 0) continue;
+
+                    // get the callback for this advertiser and process all the messages
+                    const cb = self.advertiser_callbacks.get(advertiser.key).?;
+                    while (advertiser.queue.dequeue()) |req| {
+                        const rep = try self.memory_pool.create();
+                        errdefer self.memory_pool.destroy(rep);
+
+                        rep.* = Message.new();
+                        rep.headers.message_type = .reply;
+                        rep.setTopicName(req.topicName());
+                        rep.setTransactionId(req.transactionId());
+                        rep.setErrorCode(.ok);
+                        rep.ref();
+                        errdefer rep.deref();
+
+                        cb(req, rep);
+
+                        try service.replies_queue.enqueue(rep);
                     }
+                }
+
+                var requestors_iter = service.requestors.valueIterator();
+                if (requestors_iter.next()) |requestor_entry| {
+                    const requestor: *Requestor = requestor_entry.*;
+                    if (requestor.queue.count == 0) continue;
+
+                    self.connection_messages_mutex.lock();
+                    defer self.connection_messages_mutex.unlock();
+
+                    if (self.connection_messages.map.get(requestor.conn_id)) |connection_messages| {
+                        connection_messages.concatenateAvailable(requestor.queue);
+                    } else unreachable;
                 }
             }
         }
@@ -460,68 +512,6 @@ pub const Client = struct {
             if (self.connection_messages.map.get(conn.connection_id)) |messages| {
                 conn.outbox.concatenateAvailable(messages);
             }
-        }
-    }
-
-    // fn processMessages(self: *Self, conn: *Connection) !void {
-    //     // check to see if there are messages
-    //     if (conn.inbox.count == 0) return;
-
-    //     while (conn.inbox.dequeue()) |message| {
-    //         // defer self.node.processed_messages_count += 1;
-    //         defer {
-    //             message.deref();
-    //             if (message.refs() == 0) self.memory_pool.destroy(message);
-    //         }
-
-    //         switch (message.headers.message_type) {
-    //             .accept => try self.handleAcceptMessage(conn, message),
-    //             .pong => try self.handlePongMessage(conn, message),
-    //             .publish => {
-    //                 if (self.topics.get(message.topicName())) |topic| {
-    //                     topic.process(message);
-    //                 } else {
-    //                     return error.TopicDoesNotExist;
-    //                 }
-    //             },
-    //             .reply => {
-    //                 log.debug("reply received", .{});
-    //                 message.ref();
-    //                 self.transactions_mutex.lock();
-    //                 defer self.transactions_mutex.unlock();
-
-    //                 // check if this pong message is part of transaction
-    //                 if (self.transactions.get(message.transactionId())) |signal| {
-    //                     message.ref();
-    //                     signal.send(message);
-    //                     _ = self.transactions.remove(message.transactionId());
-    //                 }
-    //             },
-    //             .request => {
-    //                 log.debug("request received", .{});
-    //                 // get local service
-    //                 if (self.services.get(message.topicName())) |service| {
-    //                     // create a transaction
-    //                     log.debug("found service {any}", .{service});
-    //                 }
-
-    //                 // TODO: we should return an error to this caller if we were routed a service request
-    //                 // for a service we are not advertising. This might actually need to be an assert because
-    //                 // this could potentially expose critical data to someone who doesn't need it.
-    //             },
-    //             else => {},
-    //         }
-    //     }
-
-    //     assert(conn.inbox.count == 0);
-    // }
-
-    fn aggregateMessages(self: *Self, conn: *Connection) !void {
-        self.connection_messages_mutex.lock();
-        defer self.connection_messages_mutex.unlock();
-
-        if (self.connection_messages.map.get(conn.connection_id)) |messages| {
-            conn.outbox.concatenateAvailable(messages);
         }
     }
 
@@ -577,8 +567,22 @@ pub const Client = struct {
         }
     }
 
+    fn handleRequestMessage(self: *Self, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        self.services_mutex.lock();
+        defer self.services_mutex.unlock();
+
+        if (self.services.get(message.topicName())) |service| {
+            message.ref();
+            service.requests_queue.enqueue(message) catch message.deref();
+        } else unreachable;
+    }
+
     fn handleReplyMessage(self: *Self, message: *Message) !void {
-        // log.debug("reply received", .{});
         self.transactions_mutex.lock();
         defer self.transactions_mutex.unlock();
 
@@ -913,142 +917,64 @@ pub const Client = struct {
         conn: *Connection,
         signal: *Signal(*Message),
         topic_name: []const u8,
-        // callback: Service.AdvertiseCallback,
+        callback: AdvertiserCallback,
         options: AdvertiseOptions,
     ) !void {
-        _ = options;
-        const req = try self.memory_pool.create();
-        errdefer self.memory_pool.destroy(req);
+        assert(conn.state == .connected);
 
-        req.* = Message.new();
-        req.headers.message_type = .advertise;
-        req.setTransactionId(uuid.v7.new());
-        req.setTopicName(topic_name);
-        req.ref();
-        errdefer req.deref();
+        self.services_mutex.lock();
+        defer self.services_mutex.unlock();
+
+        var service: *Service = undefined;
+        if (self.services.get(topic_name)) |s| {
+            service = s;
+        } else {
+            service = try self.allocator.create(Service);
+            errdefer self.allocator.destroy(service);
+
+            service.* = try Service.init(self.allocator, self.memory_pool, topic_name);
+            errdefer service.deinit();
+
+            try self.services.put(topic_name, service);
+        }
+
+        const advertiser_key = utils.generateKey(topic_name, conn.connection_id);
+
+        try service.addAdvertiser(advertiser_key, conn.connection_id);
+        errdefer _ = service.removeAdvertiser(advertiser_key);
+
+        // Add the advertiser_callback which is tied to this THIS advertiser
+        try self.advertiser_callbacks.put(advertiser_key, callback);
+        errdefer _ = self.advertiser_callbacks.remove(advertiser_key);
+
+        const advertise_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(advertise_message);
+
+        advertise_message.* = Message.new();
+        advertise_message.headers.message_type = .advertise;
+        advertise_message.setTransactionId(uuid.v7.new());
+        advertise_message.setTopicName(topic_name);
+        advertise_message.ref();
+        errdefer advertise_message.deref();
 
         {
             self.connection_messages_mutex.lock();
             defer self.connection_messages_mutex.unlock();
 
-            try self.connection_messages.append(conn.connection_id, req);
+            try self.connection_messages.append(conn.connection_id, advertise_message);
         }
 
         {
             self.transactions_mutex.lock();
             defer self.transactions_mutex.unlock();
 
-            try self.transactions.put(req.transactionId(), signal);
+            try self.transactions.put(advertise_message.transactionId(), signal);
         }
 
-        // _ = callback;
+        // register the callback to be executed when we receive a new message on the matching topic
         _ = options;
     }
 };
-
-// const Service = struct {
-//     const Self = @This();
-
-//     const AdvertiseCallback = *const fn (req: *Message, rep: *Message) void;
-//     allocator: std.mem.Allocator,
-//     advertisers: std.AutoHashMap(u128, AdvertiseCallback),
-//     topic_name: []const u8,
-//     requests_queue: *RingBuffer(*Message),
-
-//     pub fn init(allocator: std.mem.Allocator, topic_name: []const u8) !Self {
-//         const requests_queue = try allocator.create(RingBuffer(*Message));
-//         errdefer allocator.destroy(requests_queue);
-
-//         requests_queue.* = try RingBuffer(*Message).init(allocator, constants.service_max_requests_queue_capacity);
-//         errdefer requests_queue.deinit();
-
-//         return Self{
-//             .allocator = allocator,
-//             .topic_name = topic_name,
-//             .adveritsers = std.AutoHashMap(u128, AdvertiseCallback).init(allocator),
-//             .requests_queue = requests_queue,
-//         };
-//     }
-
-//     pub fn deinit(self: *Self) void {
-//         self.advertisers.deinit();
-//     }
-
-//     pub fn tick(self: *Self) void {
-//         _ = self;
-//     }
-// };
-
-// const Advertiser = struct {
-//     const Self = @This();
-// };
-
-// const ClientService = struct {
-//     const Self = @This();
-
-//     allocator: std.mem.Allocator,
-//     requests_queue: *RingBuffer(*Message),
-//     replies_queue: *RingBuffer(*Message),
-//     advertisers: std.AutoHashMap(u128, *Advertiser),
-//     requestors: std.AutoHashMap(u128, *Requestor),
-//     topic_name: []const u8,
-//     transactions: std.AutoHashMap(u128, Transaction),
-// };
-
-// const Topic = struct {
-//     const Self = @This();
-//     const SubscriptionCallback = *const fn (message: *Message) void;
-//     allocator: std.mem.Allocator,
-//     subscribers: std.AutoHashMap(u128, SubscriptionCallback),
-//     topic_name: []const u8,
-
-//     pub fn init(allocator: std.mem.Allocator, topic_name: []const u8) Self {
-//         return Self{
-//             .allocator = allocator,
-//             .topic_name = topic_name,
-//             .subscribers = std.AutoHashMap(u128, SubscriptionCallback).init(allocator),
-//         };
-//     }
-
-//     pub fn deinit(self: *Self) void {
-//         self.subscribers.deinit();
-//     }
-
-//     // pub fn tick(self: *Self) !void {
-//     //     if (self.queue.count == 0) return;
-//     // }
-
-//     pub fn tick(self: *Self, message: *Message) void {
-//         assert(message.headers.message_type == .publish);
-//         assert(std.mem.eql(u8, message.topicName(), self.topic_name));
-
-//         var subscribers_iter = self.subscribers.valueIterator();
-//         while (subscribers_iter.next()) |entry| {
-//             const callback = entry.*;
-
-//             callback(message);
-//         }
-//     }
-// };
-
-// const Publisher = struct {};
-// const Subscriber = struct {
-//     const Self = @This();
-
-//     id: u128,
-//     callback: *const fn (message: *Message) void,
-//     messages_recv: u128,
-//     topic: *Topic,
-
-//     pub fn new(id: uuid.Uuid, topic: *Topic, callback: *const fn (message: *Message) void) Self {
-//         return Self{
-//             .id = id,
-//             .callback = callback,
-//             .messages_recv = 0,
-//             .topic = topic,
-//         };
-//     }
-// };
 
 test "init/deinit" {
     const allocator = testing.allocator;
