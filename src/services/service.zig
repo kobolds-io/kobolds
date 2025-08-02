@@ -143,7 +143,6 @@ pub const Service = struct {
         try self.handleRequests();
         try self.handleReplies();
         try self.handleTransactions();
-        try self.getNextAdvertiserRoundRobin();
     }
 
     fn handleRequests(self: *Self) !void {
@@ -310,51 +309,20 @@ pub const Service = struct {
     fn getNextAdvertiser(self: *Self) *Advertiser {
         assert(self.advertisers.count() > 0);
 
-        // switch (self.load_balancing_strategy) {
-        //     .round_robin => |*lb| {
-        //         if (lb.keys.items.len == 0) {}
-        //     },
-        // }
-        var advertisers_iter = self.advertisers.valueIterator();
-        while (advertisers_iter.next()) |entry| {
-            const advertiser = entry.*;
+        switch (self.load_balancing_strategy) {
+            .round_robin => |*lb| {
+                assert(lb.keys.items.len > 0);
 
-            // TODO: figure out a better algorithm for this
-            return advertiser;
+                lb.current_index = @min(self.advertiser_keys.items.len - 1, lb.current_index);
+                const advertiser_key = lb.keys.items[lb.current_index];
+
+                lb.current_index = (lb.current_index + 1) % lb.keys.items.len;
+
+                // if there is no key here then something is borked. just explode
+                return self.advertisers.get(advertiser_key).?;
+            },
         }
 
         unreachable;
-    }
-
-    fn getNextAdvertiserRoundRobin(self: *Self) !void {
-        assert(self.load_balancing_strategy == .round_robin);
-        const lb = self.load_balancing_strategy.round_robin;
-
-        assert(lb.keys.items.len == self.advertisers.count());
-        assert(lb.keys.items.len > 0);
-        // assert(self.advertiser_keys.items.len == self.advertisers.count());
-
-        // self.load_balancing_strategy.round_robin.current_index = @min(
-        //     self.advertiser_keys.items.len - 1,
-        //     self.load_balancing_strategy.round_robin.current_index,
-        // );
-        // defer log.info("load_balancer.current_index {}", .{self.load_balancing_strategy.round_robin.current_index});
-
-        // // const advertiser_key = self.advertiser_keys[self.load_balancing_strategy.round_robin.current_index];
-
-        // // if (self.advertisers.get(advertiser_key)) |advertiser| {
-        // //     // try advertiser.queue.enqueue(message);
-        // // }
-
-        // // increment the current index so we select the next advertiser
-        // self.load_balancing_strategy.round_robin.current_index = (self.load_balancing_strategy.round_robin.current_index + 1) % self.advertiser_keys.items.len;
-
-        // var advertisers_iter = self.advertisers.valueIterator();
-        // while (advertisers_iter.next()) |entry| {
-        //     const advertiser = entry.*;
-
-        //     // TODO: figure out a better algorithm for this
-        //     return advertiser;
-        // }
     }
 };
