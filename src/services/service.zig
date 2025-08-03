@@ -13,36 +13,13 @@ const Message = @import("../protocol/message.zig").Message;
 const Advertiser = @import("./advertiser.zig").Advertiser;
 const Requestor = @import("./requestor.zig").Requestor;
 const Transaction = @import("./transaction.zig").Transaction;
+const ServiceLoadBalancer = @import("./load_balancers.zig").ServiceLoadBalancer;
+const RoundRobinLoadBalancer = @import("./load_balancers.zig").RoundRobinLoadBalancer;
 
-const ServiceLoadBalancingStrategy = enum {
-    round_robin,
+pub const ServiceOptions = struct {
+    requests_queue_capacity: usize = constants.service_max_requests_queue_capacity,
+    replies_queue_capacity: usize = constants.service_max_replies_queue_capacity,
 };
-
-const ServiceLoadBalancer = union(ServiceLoadBalancingStrategy) {
-    round_robin: RoundRobinLoadBalancer,
-};
-
-const RoundRobinLoadBalancer = struct {
-    const Self = @This();
-
-    allocator: std.mem.Allocator,
-    current_index: usize,
-    keys: std.ArrayList(u128),
-
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return Self{
-            .allocator = allocator,
-            .current_index = 0,
-            .keys = std.ArrayList(u128).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.keys.deinit();
-    }
-};
-
-pub const ServiceOptions = struct {};
 
 pub const Service = struct {
     const Self = @This();
@@ -61,17 +38,18 @@ pub const Service = struct {
         allocator: std.mem.Allocator,
         memory_pool: *MemoryPool(Message),
         topic_name: []const u8,
+        options: ServiceOptions,
     ) !Self {
         const requests_queue = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(requests_queue);
 
-        requests_queue.* = try RingBuffer(*Message).init(allocator, constants.service_max_requests_queue_capacity);
+        requests_queue.* = try RingBuffer(*Message).init(allocator, options.requests_queue_capacity);
         errdefer requests_queue.deinit();
 
         const replies_queue = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(replies_queue);
 
-        replies_queue.* = try RingBuffer(*Message).init(allocator, constants.service_max_replies_queue_capacity);
+        replies_queue.* = try RingBuffer(*Message).init(allocator, options.replies_queue_capacity);
         errdefer replies_queue.deinit();
 
         return Self{

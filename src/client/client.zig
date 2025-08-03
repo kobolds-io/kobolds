@@ -791,7 +791,7 @@ pub const Client = struct {
             topic = try self.allocator.create(Topic);
             errdefer self.allocator.destroy(topic);
 
-            topic.* = try Topic.init(self.allocator, self.memory_pool, topic_name);
+            topic.* = try Topic.init(self.allocator, self.memory_pool, topic_name, .{});
             errdefer topic.deinit();
 
             try self.topics.put(topic_name, topic);
@@ -932,7 +932,7 @@ pub const Client = struct {
             service = try self.allocator.create(Service);
             errdefer self.allocator.destroy(service);
 
-            service.* = try Service.init(self.allocator, self.memory_pool, topic_name);
+            service.* = try Service.init(self.allocator, self.memory_pool, topic_name, .{});
             errdefer service.deinit();
 
             try self.services.put(topic_name, service);
