@@ -605,7 +605,7 @@ pub fn nodeRequest() !void {
     var signals = std.ArrayList(*Signal(*Message)).init(allocator);
     defer signals.deinit();
 
-    const ITERATIONS: usize = 500;
+    const ITERATIONS: usize = 1;
 
     var timer = try std.time.Timer.start();
     const total_start = timer.read();
