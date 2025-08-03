@@ -51,15 +51,10 @@ It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and esp
 
 | Pattern | Description |
 | --- | --- |
-| Request/Reply | send a transactional request to an advertised service and receive a reply |
 | Publish/Subscribe | publish a message to `n` subscribers |
-
-**Non Core patterns**
-
-| Pattern         | Description                                      |
-| --------------- | ------------------------------------------------ |
-| Worker Queue    | create a queue that can be accessed by `n` nodes |
-| Key value store | manage key value pairs                           |
+| Request/Reply | send a transactional request to an advertised service and receive a reply |
+| Worker Queue | create a queue that can be accessed by `n` nodes |
+| Key value store | manage key value pairs |
 
 ## Roadmap
 
@@ -73,51 +68,48 @@ It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and esp
 | ✔️ | [create basic cli](https://github.com/kobolds-io/kobolds/issues/7) | high |
 | ✔️ | [create single node publish/subscribe](https://github.com/kobolds-io/kobolds/issues/8) | high |
 | ✔️ | [create single node request/reply](https://github.com/kobolds-io/kobolds/issues/9) | high |
+| ✔️ | single node service load balancing | low |
 
 ### Version 0.2.x
 
-| complete | name                               | priority |
-| -------- | ---------------------------------- | -------- |
-| ❌       | node to node keep alive            | medium   |
-| ❌       | node info                          | high     |
-| ❌       | node info                          | high     |
-| ❌       | single node service load balancing | low      |
-| ❌       | authentication/authorization       | high     |
+| complete | name                            | priority |
+| -------- | ------------------------------- | -------- |
+| ❌       | node to node message forwarding | high     |
+| ❌       | reserved services and topics    | medium   |
+| ❌       | node to node keep alive         | medium   |
+| ❌       | client to node keep alive       | medium   |
+| ❌       | node info                       | high     |
+| ❌       | authentication/authorization    | high     |
+| ❌       | memory usage reduction          | low      |
 
 ### Version 0.3.x
 
 | complete | name                              | priority |
 | -------- | --------------------------------- | -------- |
-| ❌       | node to node communication        | high     |
-| ❌       | node to node keep alive           | medium   |
 | ❌       | multi node publish/subscribe      | high     |
 | ❌       | multi node request/reply          | high     |
+| ❌       | demo application                  | high     |
 | ❌       | multi node service load balancing | low      |
 
 ### Version 0.4.x
 
-| complete | name                          | priority |
-| -------- | ----------------------------- | -------- |
-| ❌       | queues                        | medium   |
-| ❌       | support for `json` encodings  | medium   |
-| ❌       | public web page               | low      |
-| ❌       | node to node `tls` encryption | high     |
-| ❌       | node to node `tls` encryption | high     |
+| complete | name                                   | priority |
+| -------- | -------------------------------------- | -------- |
+| ❌       | worker queues                          | high     |
+| ❌       | node to node `tls` encryption          | high     |
+| ❌       | public web page                        | medium   |
+| ❌       | support for `json` or `cbor` encodings | low      |
+| ❌       | connection rate limiting               | medium   |
 
 ### Version 0.5.x
 
-| complete | name                           | priority |
-| -------- | ------------------------------ | -------- |
-| ❌       | QoS implementation             | low      |
-| ❌       | `icp` transport support        | low      |
-| ❌       | typescript node implementation | medium   |
-| ❌       | static type enforcement        | medium   |
-
-### Version 0.6.x
-
-| complete | name             | priority |
-| -------- | ---------------- | -------- |
-| ❌       | demo application | high     |
+| complete | name                             | priority |
+| -------- | -------------------------------- | -------- |
+| ❌       | QoS implementation               | low      |
+| ❌       | `icp` transport support          | low      |
+| ❌       | typescript client implementation | medium   |
+| ❌       | client sdk implementation        | medium   |
+| ❌       | static type enforcement          | medium   |
 
 ### Version 1.0.0
 
@@ -125,7 +117,8 @@ It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and esp
 | -------- | ------------------------- | -------- |
 | ❌       | full protol definition    | high     |
 | ❌       | deprecation documentation | high     |
-| ❌       | website                   | high     |
+| ❌       | public website            | high     |
+| ❌       | company formed            | high     |
 
 ## Zig
 
