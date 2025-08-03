@@ -758,7 +758,7 @@ pub fn nodeAdvertise() !void {
 }
 
 pub fn version() !void {
-    std.log.debug("0.0.0", .{});
+    log.info("0.1.0", .{});
 }
 
 pub fn noop() !void {}
