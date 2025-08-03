@@ -12,7 +12,10 @@ const Message = @import("../protocol/message.zig").Message;
 const Publisher = @import("./publisher.zig").Publisher;
 const Subscriber = @import("./subscriber.zig").Subscriber;
 
-pub const TopicOptions = struct {};
+pub const TopicOptions = struct {
+    queue_capacity: usize = constants.topic_max_queue_capacity,
+    subscriber_queue_capacity: usize = constants.subscriber_max_queue_capacity,
+};
 
 pub const TopicError = error{
     TopicQueueFull,
@@ -35,15 +38,16 @@ pub const Topic = struct {
         allocator: std.mem.Allocator,
         memory_pool: *MemoryPool(Message),
         topic_name: []const u8,
+        options: TopicOptions,
     ) !Self {
         const queue = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(queue);
 
         // TODO: the buffer size should be configured. perhaps this could be a NodeConfig thing
-        queue.* = try RingBuffer(*Message).init(allocator, constants.topic_max_queue_capacity);
+        queue.* = try RingBuffer(*Message).init(allocator, options.queue_capacity);
         errdefer queue.deinit();
 
-        const tmp_copy_buffer = try allocator.alloc(*Message, constants.subscriber_max_queue_capacity);
+        const tmp_copy_buffer = try allocator.alloc(*Message, options.subscriber_queue_capacity);
         errdefer allocator.free(tmp_copy_buffer);
 
         return Self{

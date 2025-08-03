@@ -29,6 +29,11 @@ const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
 const Topic = @import("../pubsub/topic.zig").Topic;
 const TopicOptions = @import("../pubsub/topic.zig").TopicOptions;
 
+const Service = @import("../services/service.zig").Service;
+const ServiceOptions = @import("../services/service.zig").ServiceOptions;
+const Advertiser = @import("../services/advertiser.zig").Advertiser;
+const Requestor = @import("../services/requestor.zig").Requestor;
+
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 const Envelope = @import("../data_structures/envelope.zig").Envelope;
 
@@ -93,6 +98,7 @@ pub const Node = struct {
     mutex: std.Thread.Mutex,
     state: NodeState,
     topics: std.StringHashMap(*Topic),
+    services: std.StringHashMap(*Service),
     workers: *std.AutoHashMap(usize, *Worker),
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
@@ -167,6 +173,7 @@ pub const Node = struct {
             .mutex = std.Thread.Mutex{},
             .state = .closed,
             .topics = std.StringHashMap(*Topic).init(allocator),
+            .services = std.StringHashMap(*Service).init(allocator),
             .workers = workers,
         };
     }
@@ -201,6 +208,13 @@ pub const Node = struct {
             self.allocator.destroy(topic);
         }
 
+        var services_iter = self.services.valueIterator();
+        while (services_iter.next()) |entry| {
+            const service = entry.*;
+            service.deinit();
+            self.allocator.destroy(service);
+        }
+
         while (self.inbox.dequeue()) |message| {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
@@ -225,6 +239,7 @@ pub const Node = struct {
         self.io.deinit();
         self.connections.deinit();
         self.topics.deinit();
+        self.services.deinit();
         self.inbox.deinit();
         self.connection_outboxes.deinit();
 
@@ -373,8 +388,6 @@ pub const Node = struct {
     }
 
     fn processMessages(self: *Self) !void {
-        if (self.inbox.count == 0) return;
-
         // There should only be `n` messages processed every tick
         const max_messages_processed_per_tick: usize = 50_000;
         var i: usize = 0;
@@ -391,18 +404,28 @@ pub const Node = struct {
                 switch (message.headers.message_type) {
                     .publish => try self.handlePublish(message),
                     .subscribe => try self.handleSubscribe(message),
+                    .advertise => try self.handleAdvertise(message),
+                    .unadvertise => try self.handleUnadvertise(message),
+                    .request => try self.handleRequest(message),
+                    .reply => try self.handleReply(message),
                     else => |t| {
                         log.err("received unhandled message type {any}", .{t});
                         @panic("unhandled message!");
                     },
                 }
-            }
+            } else break;
         }
 
         var topics_iter = self.topics.valueIterator();
         while (topics_iter.next()) |topic_entry| {
             const topic = topic_entry.*;
             try topic.tick();
+        }
+
+        var services_iter = self.services.valueIterator();
+        while (services_iter.next()) |service_entry| {
+            const service = service_entry.*;
+            try service.tick();
         }
     }
 
@@ -422,6 +445,49 @@ pub const Node = struct {
                     if (subscriber.queue.dequeue()) |message| {
                         const envelope = Envelope{
                             .connection_id = subscriber.conn_id,
+                            .message = message,
+                        };
+
+                        // we are checking this loop that adding the envelope will be successful
+                        connection_outbox.enqueue(envelope) catch unreachable;
+                    }
+                }
+            }
+        }
+
+        var services_iter = self.services.valueIterator();
+        while (services_iter.next()) |service_entry| {
+            const service: *Service = service_entry.*;
+
+            var advertisers_iter = service.advertisers.valueIterator();
+            while (advertisers_iter.next()) |advertiser_entry| {
+                const advertiser: *Advertiser = advertiser_entry.*;
+                const connection_outbox = try self.findOrCreateConnectionOutbox(advertiser.conn_id);
+
+                // We are going to create envelopes here
+                while (connection_outbox.available() > 0 and !advertiser.queue.isEmpty()) {
+                    if (advertiser.queue.dequeue()) |message| {
+                        const envelope = Envelope{
+                            .connection_id = advertiser.conn_id,
+                            .message = message,
+                        };
+
+                        // we are checking this loop that adding the envelope will be successful
+                        connection_outbox.enqueue(envelope) catch unreachable;
+                    }
+                }
+            }
+
+            var requestors_iter = service.requestors.valueIterator();
+            while (requestors_iter.next()) |requestor_entry| {
+                const requestor: *Requestor = requestor_entry.*;
+                const connection_outbox = try self.findOrCreateConnectionOutbox(requestor.conn_id);
+
+                // We are going to create envelopes here
+                while (connection_outbox.available() > 0 and !requestor.queue.isEmpty()) {
+                    if (requestor.queue.dequeue()) |message| {
+                        const envelope = Envelope{
+                            .connection_id = requestor.conn_id,
                             .message = message,
                         };
 
@@ -722,6 +788,7 @@ pub const Node = struct {
         reply.setTransactionId(message.transactionId());
         reply.setErrorCode(.ok);
         reply.ref();
+        errdefer reply.deref();
 
         const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
         if (connection_outbox.isFull()) {
@@ -732,21 +799,11 @@ pub const Node = struct {
 
         // QUESTION: A connection can only be subscribed to a topic ONCE. Is this good behavior???
         const subscriber_key = utils.generateKey(message.topicName(), message.headers.connection_id);
-        if (topic.subscribers.get(subscriber_key)) |_| {
-            // FIX: pick a better error for this
+
+        topic.addSubscriber(subscriber_key, message.headers.connection_id) catch |err| {
+            log.err("error adding subscriber: {any}", .{err});
             reply.setErrorCode(.err);
-            log.err("duplicate connection subscription", .{});
-
-            const envelope = Envelope{
-                .connection_id = message.headers.connection_id,
-                .message = reply,
-            };
-
-            try connection_outbox.enqueue(envelope);
-            return;
-        }
-
-        try topic.addSubscriber(subscriber_key, message.headers.connection_id);
+        };
         errdefer _ = topic.removeSubscriber(subscriber_key);
 
         const envelope = Envelope{
@@ -757,7 +814,127 @@ pub const Node = struct {
         try connection_outbox.enqueue(envelope);
     }
 
-    pub fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
+    fn handleAdvertise(self: *Self, message: *Message) !void {
+        const reply = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(reply);
+
+        reply.* = Message.new();
+        reply.headers.message_type = .reply;
+        reply.setTopicName(message.topicName());
+        reply.setTransactionId(message.transactionId());
+        reply.setErrorCode(.ok);
+        reply.ref();
+        errdefer reply.deref();
+
+        const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
+        if (connection_outbox.isFull()) {
+            return error.ConnectionOutboxFull;
+        }
+
+        const service = try self.findOrCreateService(message.topicName(), .{});
+
+        // QUESTION: A connection can only be subscribed to a service ONCE. Is this good behavior???
+        const advertiser_key = utils.generateKey(message.topicName(), message.headers.connection_id);
+
+        service.addAdvertiser(advertiser_key, message.headers.connection_id) catch |err| {
+            log.err("error adding advertiser: {any}", .{err});
+            reply.setErrorCode(.err);
+        };
+        errdefer _ = service.removeAdvertiser(advertiser_key);
+
+        const envelope = Envelope{
+            .connection_id = message.headers.connection_id,
+            .message = reply,
+        };
+
+        try connection_outbox.enqueue(envelope);
+    }
+
+    fn handleUnadvertise(self: *Self, message: *Message) !void {
+        const reply = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(reply);
+
+        reply.* = Message.new();
+        reply.headers.message_type = .reply;
+        reply.setTopicName(message.topicName());
+        reply.setTransactionId(message.transactionId());
+        reply.setErrorCode(.ok);
+        reply.ref();
+        errdefer reply.deref();
+
+        const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
+        if (connection_outbox.isFull()) {
+            return error.ConnectionOutboxFull;
+        }
+
+        const service = try self.findOrCreateService(message.topicName(), .{});
+
+        // QUESTION: A connection can only be subscribed to a service ONCE. Is this good behavior???
+        const advertiser_key = utils.generateKey(message.topicName(), message.headers.connection_id);
+
+        if (!service.removeAdvertiser(advertiser_key)) {
+            // Advertiser did not exist on service
+            reply.setErrorCode(.err);
+        }
+
+        const envelope = Envelope{
+            .connection_id = message.headers.connection_id,
+            .message = reply,
+        };
+        try connection_outbox.enqueue(envelope);
+    }
+
+    fn handleRequest(self: *Self, message: *Message) !void {
+        assert(message.refs() == 1);
+        const service = try self.findOrCreateService(message.topicName(), .{});
+
+        if (service.requests_queue.available() == 0) {
+            try service.tick();
+        }
+
+        if (service.requests_queue.available() > 0) {
+            message.ref();
+            try service.requests_queue.enqueue(message);
+            return;
+        }
+
+        const reply = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(reply);
+
+        reply.* = Message.new();
+        reply.headers.message_type = .reply;
+        reply.setTopicName(message.topicName());
+        reply.setTransactionId(message.transactionId());
+        reply.setErrorCode(.err);
+        reply.ref();
+        errdefer reply.deref();
+
+        const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
+        if (connection_outbox.isFull()) {
+            return error.ConnectionOutboxFull;
+        }
+
+        const envelope = Envelope{
+            .connection_id = message.headers.connection_id,
+            .message = reply,
+        };
+
+        try connection_outbox.enqueue(envelope);
+    }
+
+    fn handleReply(self: *Self, message: *Message) !void {
+        assert(message.refs() == 1);
+
+        const service = try self.findOrCreateService(message.topicName(), .{});
+        if (service.replies_queue.available() == 0) {
+            try service.tick();
+        }
+
+        message.ref();
+        service.replies_queue.enqueue(message) catch message.deref();
+    }
+
+    fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
         _ = options;
 
         if (self.topics.get(topic_name)) |t| {
@@ -766,11 +943,28 @@ pub const Node = struct {
             const topic = try self.allocator.create(Topic);
             errdefer self.allocator.destroy(topic);
 
-            topic.* = try Topic.init(self.allocator, self.memory_pool, topic_name);
+            topic.* = try Topic.init(self.allocator, self.memory_pool, topic_name, .{});
             errdefer topic.deinit();
 
             try self.topics.put(topic_name, topic);
             return topic;
+        }
+    }
+
+    fn findOrCreateService(self: *Self, topic_name: []const u8, options: ServiceOptions) !*Service {
+        _ = options;
+
+        if (self.services.get(topic_name)) |t| {
+            return t;
+        } else {
+            const service = try self.allocator.create(Service);
+            errdefer self.allocator.destroy(service);
+
+            service.* = try Service.init(self.allocator, self.memory_pool, topic_name, .{});
+            errdefer service.deinit();
+
+            try self.services.put(topic_name, service);
+            return service;
         }
     }
 };

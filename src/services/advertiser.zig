@@ -6,13 +6,14 @@ const RingBuffer = @import("stdx").RingBuffer;
 
 const Message = @import("../protocol/message.zig").Message;
 
-pub const Subscriber = struct {
+pub const Advertiser = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
     conn_id: uuid.Uuid,
     key: u128,
     queue: *RingBuffer(*Message),
+    priority: usize,
 
     pub fn init(allocator: std.mem.Allocator, key: u128, conn_id: uuid.Uuid, queue_capacity: usize) !Self {
         const queue = try allocator.create(RingBuffer(*Message));
@@ -26,6 +27,7 @@ pub const Subscriber = struct {
             .conn_id = conn_id,
             .key = key,
             .queue = queue,
+            .priority = 0,
         };
     }
 

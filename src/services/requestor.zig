@@ -6,7 +6,7 @@ const RingBuffer = @import("stdx").RingBuffer;
 
 const Message = @import("../protocol/message.zig").Message;
 
-pub const Subscriber = struct {
+pub const Requestor = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
