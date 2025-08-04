@@ -623,12 +623,15 @@ pub fn nodeRequest() !void {
     }
 
     const topic_name = "/test";
+    const body = "hello from requstor!";
+    // const body = "a" ** constants.message_max_body_size;
 
     var i: usize = 0;
     while (i < ITERATIONS) {
         const send_start = timer.read();
         const signal = signals.items[i];
-        client.request(conn, signal, topic_name, "hello from requestor", .{}) catch {
+
+        client.request(conn, signal, topic_name, body, .{}) catch {
             std.time.sleep(1 * std.time.ns_per_ms);
             continue;
         };
@@ -662,23 +665,6 @@ pub fn nodeRequest() !void {
     const total_end = timer.read();
     const total_time = (total_end - total_start) / std.time.ns_per_ms;
     log.err("total time took: {}ms", .{total_time});
-
-    // const topic_name = "/test";
-
-    // var req_signal = Signal(*Message).new();
-
-    // const reply = try req_signal.tryReceive(10_000 * std.time.ns_per_ms);
-    // defer {
-    //     reply.deref();
-    //     if (reply.refs() == 0) client.memory_pool.destroy(reply);
-    // }
-
-    // if (reply.errorCode() != .ok) {
-    //     log.err("reply error_code: {any}", .{reply.errorCode()});
-    //     return;
-    // }
-
-    // log.info("reply.body: {s}", .{reply.body()});
 }
 
 var advertiser_msg_count: u64 = 0;
@@ -729,9 +715,9 @@ pub fn nodeAdvertise() !void {
                 );
             }
 
-            // log.info("request.body {s}", .{req.body()});
-            // std.time.sleep(8 * std.time.ns_per_s);
-            rep.setBody("hello from advertiser!");
+            const body = "hello from advertiser!";
+            // const body = "a" ** constants.message_max_body_size;
+            rep.setBody(body);
         }
     }.callback;
 
