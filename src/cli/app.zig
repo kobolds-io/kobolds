@@ -715,6 +715,7 @@ pub fn nodeAdvertise() !void {
                 );
             }
 
+            log.info("received request", .{});
             const body = "hello from advertiser!";
             // const body = "a" ** constants.message_max_body_size;
             rep.setBody(body);

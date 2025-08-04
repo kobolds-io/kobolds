@@ -223,8 +223,8 @@ pub const Client = struct {
                 .running => {
                     self.tick() catch unreachable;
 
-                    // self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch |err| {
-                    self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch |err| {
+                    self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch |err| {
+                        // self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch |err| {
                         log.err("client failed to run io {any}", .{err});
                     };
                 },
