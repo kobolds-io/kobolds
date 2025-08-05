@@ -33,6 +33,7 @@ const Service = @import("../services/service.zig").Service;
 const ServiceOptions = @import("../services/service.zig").ServiceOptions;
 const Advertiser = @import("../services/advertiser.zig").Advertiser;
 const Requestor = @import("../services/requestor.zig").Requestor;
+const Transaction = @import("../services/transaction.zig").Transaction;
 
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 const Envelope = @import("../data_structures/envelope.zig").Envelope;
@@ -565,25 +566,8 @@ pub const Node = struct {
                 while (services_iter.next()) |entry| {
                     const service = entry.*;
 
-                    const key = utils.generateKey(service.service_name, conn_id);
-                    if (service.advertisers.fetchRemove(key)) |advertiser_entry| {
-                        const advertiser = advertiser_entry.value;
-                        while (advertiser.queue.dequeue()) |message| {
-                            // FIX: we should take these services that have not yet been sent to the advertiser
-                            // and redirect them to a different advertiser before just simply dropping them
-
-                            message.deref();
-                            if (message.refs() == 0) self.memory_pool.destroy(message);
-                        }
-
-                        log.debug("removing advertiser from {s} service", .{service.topic_name});
-
-                        advertiser.deinit();
-                        self.allocator.destroy(advertiser);
-                    }
-
-                    // FIX: we should have service publishers as well
-
+                    const advertiser_key = utils.generateKey(service.topic_name, conn_id);
+                    _ = service.removeAdvertiser(advertiser_key);
                 }
 
                 if (self.connection_outboxes.fetchRemove(conn_id)) |outbox_entry| {
