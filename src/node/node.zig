@@ -33,7 +33,6 @@ const Service = @import("../services/service.zig").Service;
 const ServiceOptions = @import("../services/service.zig").ServiceOptions;
 const Advertiser = @import("../services/advertiser.zig").Advertiser;
 const Requestor = @import("../services/requestor.zig").Requestor;
-const Transaction = @import("../services/transaction.zig").Transaction;
 
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 const Envelope = @import("../data_structures/envelope.zig").Envelope;
