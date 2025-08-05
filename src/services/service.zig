@@ -161,6 +161,8 @@ pub const Service = struct {
                 reply.deref();
                 if (reply.refs() == 0) self.memory_pool.destroy(reply);
             }
+
+            // TODO: if there are no more transactions with this requestor, we should destroy the requestor.
         }
     }
 
