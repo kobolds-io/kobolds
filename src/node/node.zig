@@ -559,7 +559,14 @@ pub const Node = struct {
                     }
 
                     // FIX: we should have topic publishers as well
+                }
 
+                var services_iter = self.services.valueIterator();
+                while (services_iter.next()) |entry| {
+                    const service = entry.*;
+
+                    const advertiser_key = utils.generateKey(service.topic_name, conn_id);
+                    _ = service.removeAdvertiser(advertiser_key);
                 }
 
                 if (self.connection_outboxes.fetchRemove(conn_id)) |outbox_entry| {
