@@ -559,6 +559,30 @@ pub const Node = struct {
                     }
 
                     // FIX: we should have topic publishers as well
+                }
+
+                var services_iter = self.services.valueIterator();
+                while (services_iter.next()) |entry| {
+                    const service = entry.*;
+
+                    const key = utils.generateKey(service.service_name, conn_id);
+                    if (service.advertisers.fetchRemove(key)) |advertiser_entry| {
+                        const advertiser = advertiser_entry.value;
+                        while (advertiser.queue.dequeue()) |message| {
+                            // FIX: we should take these services that have not yet been sent to the advertiser
+                            // and redirect them to a different advertiser before just simply dropping them
+
+                            message.deref();
+                            if (message.refs() == 0) self.memory_pool.destroy(message);
+                        }
+
+                        log.debug("removing advertiser from {s} service", .{service.topic_name});
+
+                        advertiser.deinit();
+                        self.allocator.destroy(advertiser);
+                    }
+
+                    // FIX: we should have service publishers as well
 
                 }
 
