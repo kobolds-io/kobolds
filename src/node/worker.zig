@@ -193,7 +193,7 @@ pub const Worker = struct {
         try self.processOutboundConnectionMessages();
     }
 
-    pub fn addInboundConnection(self: *Self, socket: posix.socket_t) !void {
+    pub fn addInboundConnection(self: *Self, socket: posix.socket_t, config: InboundConnectionConfig) !void {
         // we are just gonna try to close this socket if anything blows up
         errdefer posix.close(socket);
 
@@ -201,18 +201,15 @@ pub const Worker = struct {
         const connection = try self.allocator.create(Connection);
         errdefer self.allocator.destroy(connection);
 
-        const default_inbound_connection_config = InboundConnectionConfig{};
-
         const conn_id = uuid.v7.new();
         connection.* = try Connection.init(
             conn_id,
             self.node.id,
-            .inbound,
             self.io,
             socket,
             self.allocator,
             self.node.memory_pool,
-            .{ .inbound = default_inbound_connection_config },
+            .{ .inbound = config },
         );
         errdefer connection.deinit();
 
@@ -236,6 +233,8 @@ pub const Worker = struct {
         var accept_headers: *Accept = accept_message.headers.into(.accept).?;
         accept_headers.connection_id = conn_id;
         accept_headers.origin_id = self.node.id;
+
+        assert(accept_message.validate() == null);
 
         try connection.outbox.enqueue(accept_message);
 
@@ -262,7 +261,6 @@ pub const Worker = struct {
         conn.* = try Connection.init(
             0,
             self.node.id,
-            .outbound,
             self.io,
             socket,
             self.allocator,
@@ -407,7 +405,7 @@ pub const Worker = struct {
         while (connections_iter.next()) |connection_entry| {
             const conn = connection_entry.*;
 
-            if (conn.inbox.count == 0) continue;
+            if (conn.inbox.isEmpty()) continue;
             while (conn.inbox.dequeue()) |message| {
                 // if this message has more than a single ref, something has not been initialized
                 // or deinitialized correctly.
@@ -448,7 +446,7 @@ pub const Worker = struct {
                 assert(message.refs() == 1);
 
                 switch (message.headers.message_type) {
-                    .accept => try self.handleAcceptMessage(conn, message),
+                    .accept => self.handleAcceptMessage(conn, message) catch break,
                     else => {
                         log.err("unexpected message received from uninitialized connection", .{});
                         conn.state = .closing;
@@ -491,42 +489,43 @@ pub const Worker = struct {
         // ensure that this connection is not fully connected
         assert(conn.state != .connected);
 
-        switch (conn.connection_type) {
-            .outbound => {
+        switch (conn.config) {
+            .outbound => |config| {
                 assert(conn.connection_id == 0);
                 // An error here would be a protocol error
-                assert(conn.remote_id != message.headers.origin_id);
+                assert(conn.peer_id != message.headers.origin_id);
                 assert(conn.connection_id != message.headers.connection_id);
 
                 conn.connection_id = message.headers.connection_id;
-                conn.remote_id = message.headers.origin_id;
+                conn.peer_id = message.headers.origin_id;
 
-                // enqueue a message to immediately convey the node id of this Node
                 message.headers.origin_id = conn.origin_id;
                 message.headers.connection_id = conn.connection_id;
 
+                // enqueue a message to immediately convey the node id of this Node
                 message.ref();
                 try conn.outbox.enqueue(message);
 
-                assert(conn.connection_type == .outbound);
-
                 conn.state = .connected;
-                log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
+                log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
                     conn.origin_id,
                     conn.connection_id,
-                    conn.remote_id,
+                    conn.peer_id,
+                    config.peer_type,
                 });
             },
-            .inbound => {
+            .inbound => |config| {
                 assert(conn.connection_id == message.headers.connection_id);
                 assert(conn.origin_id != message.headers.origin_id);
 
-                conn.remote_id = message.headers.origin_id;
+                conn.peer_id = message.headers.origin_id;
                 conn.state = .connected;
-                log.info("inbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
+
+                log.info("inbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
                     conn.origin_id,
                     conn.connection_id,
-                    conn.remote_id,
+                    conn.peer_id,
+                    config.peer_type,
                 });
             },
         }

@@ -24,6 +24,7 @@ pub const InboundConnectionConfig = struct {
     host: []const u8 = "0.0.0.0",
     port: u16 = 0,
     transport: Transport = .tcp,
+    peer_type: PeerType = .client,
 };
 
 // TODO: a user should be able to provide a token/key for authentication to remotes
@@ -31,8 +32,10 @@ pub const OutboundConnectionConfig = struct {
     host: []const u8,
     port: u16,
     transport: Transport = .tcp,
-    /// The reconnection configuration to be used. If `null`, no reconnection attempts will be performed.
+    peer_type: PeerType = .node,
+    /// If `null`, no reconnection attempts will be performed.
     reconnect_config: ?ReconnectionConfig = null,
+    /// If `null`, no keep alive messages will be performed.
     keep_alive_config: ?KeepAliveConfig = null,
 
     pub fn validate(self: OutboundConnectionConfig) ?[]const u8 {
@@ -85,6 +88,16 @@ pub const Transport = enum {
     tcp,
 };
 
+pub const PeerType = enum(u8) {
+    client,
+    node,
+};
+
+const ConnectionType = enum {
+    inbound,
+    outbound,
+};
+
 const ConnectionConfig = union(ConnectionType) {
     inbound: InboundConnectionConfig,
     outbound: OutboundConnectionConfig,
@@ -95,11 +108,6 @@ const ConnectionState = enum {
     closed,
     connected,
     connecting,
-};
-
-const ConnectionType = enum {
-    inbound,
-    outbound,
 };
 
 const ConnectionMetrics = struct {
@@ -127,7 +135,6 @@ pub const Connection = struct {
     config: ConnectionConfig,
     connect_completion: *IO.Completion,
     connection_id: uuid.Uuid,
-    connection_type: ConnectionType,
     connect_submitted: bool,
     inbox: *RingBuffer(*Message),
     io: *IO,
@@ -144,7 +151,7 @@ pub const Connection = struct {
     recv_bytes: usize,
     recv_completion: *IO.Completion,
     recv_submitted: bool,
-    remote_id: uuid.Uuid,
+    peer_id: uuid.Uuid,
     send_buffer_list: *std.ArrayList(u8),
     send_buffer_overflow: [constants.message_max_size]u8,
     send_buffer_overflow_count: usize,
@@ -157,7 +164,6 @@ pub const Connection = struct {
     pub fn init(
         id: uuid.Uuid,
         origin_id: uuid.Uuid,
-        connection_type: ConnectionType,
         io: *IO,
         socket: posix.socket_t,
         allocator: std.mem.Allocator,
@@ -207,7 +213,6 @@ pub const Connection = struct {
             .close_completion = close_completion,
             .close_submitted = false,
             .connect_completion = connect_completion,
-            .connection_type = connection_type,
             .connect_submitted = false,
             .inbox = inbox,
             .io = io,
@@ -217,7 +222,7 @@ pub const Connection = struct {
             .messages_sent = 0,
             .connection_id = id,
             .origin_id = origin_id,
-            .remote_id = 0,
+            .peer_id = 0,
             .outbox = outbox,
             .parsed_messages = try std.ArrayList(Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
             .parsed_message_ptrs = try std.ArrayList(*Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
@@ -271,6 +276,9 @@ pub const Connection = struct {
     pub fn tick(self: *Connection) !void {
         switch (self.state) {
             .closing => {
+                // NOTE: uncommenting this line will lead the client to hang when closing connections because
+                // self.recv_submitted is never flipped to false
+                // if (!self.recv_submitted and !self.send_submitted and !self.connect_submitted) {
                 if (self.connection_id == 0) {
                     log.info("uninitialized connection closed {}", .{self.connection_id});
                 } else {
@@ -278,8 +286,10 @@ pub const Connection = struct {
                 }
 
                 self.state = .closed;
+                posix.close(self.socket);
                 // break out of the tick
                 return;
+                // }
             },
             .closed => return,
             else => {},
@@ -403,6 +413,7 @@ pub const Connection = struct {
 
         // FIX: there should be an assert that enforces that the parser is being passed the right amount
         // of bytes to be parsed
+        assert(self.parsed_message_ptrs.items.len == self.parsed_messages.items.len);
 
         // Parse received bytes into messages
         self.parser.parse(&self.parsed_messages, self.recv_buffer[0..self.recv_bytes]) catch unreachable;
@@ -420,9 +431,6 @@ pub const Connection = struct {
                 return;
             }
         }
-
-        // FIX: does this need to actually just be in the init?
-        assert(self.parsed_message_ptrs.items.len >= self.parsed_message_ptrs.items.len);
 
         const message_ptrs = self.memory_pool.createN(
             self.allocator,

@@ -64,6 +64,7 @@ pub const NodeConfig = struct {
         if (self.outbound_configs) |outbound_configs| {
             if (outbound_configs.len == 0) return "NodeConfig `outbound_configs` is non null but contains no entries";
             for (outbound_configs) |outbound_config| {
+                if (outbound_config.peer_type != .node) return "Node config `outbound_configs` contains a non .node peer_type";
                 switch (outbound_config.transport) {
                     .tcp => {},
                 }
@@ -702,13 +703,15 @@ pub const Node = struct {
                 defer listener.mutex.unlock();
 
                 while (listener.sockets.pop()) |socket| {
-                    try self.addInboundConnectionToNextWorker(socket);
+                    try self.addInboundConnectionToNextWorker(socket, .{
+                        .peer_type = listener.config.peer_type,
+                    });
                 }
             }
         }
     }
 
-    fn addInboundConnectionToNextWorker(self: *Self, socket: posix.socket_t) !void {
+    fn addInboundConnectionToNextWorker(self: *Self, socket: posix.socket_t, config: InboundConnectionConfig) !void {
         assert(self.workers.count() > 0);
         // we are just gonna try to close this socket if anything blows up
         errdefer posix.close(socket);
@@ -735,7 +738,7 @@ pub const Node = struct {
         if (worker_with_min_connections == null) unreachable;
         const worker = worker_with_min_connections.?;
 
-        try worker.addInboundConnection(socket);
+        try worker.addInboundConnection(socket, config);
     }
 
     fn addOutboundConnectionToNextWorker(self: *Self, config: OutboundConnectionConfig) !ConnectionHandle {

@@ -286,13 +286,22 @@ pub fn nodeListen() !void {
         .host = "0.0.0.0",
     };
     const allowed_inbound_connection_configs = [_]AllowedInboundConnectionConfig{allowed_inbound_connection_config};
-    const listener_config = ListenerConfig{
+    const client_listener_config = ListenerConfig{
         .host = "127.0.0.1",
         .port = 8000,
         .transport = .tcp,
         .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
+        .peer_type = .client,
     };
-    const listener_configs = [_]ListenerConfig{listener_config};
+    const node_listener_config = ListenerConfig{
+        .host = "127.0.0.1",
+        .port = 8001,
+        .transport = .tcp,
+        .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
+        .peer_type = .node,
+    };
+
+    const listener_configs = [_]ListenerConfig{ client_listener_config, node_listener_config };
     node_config.listener_configs = &listener_configs;
 
     var node = try Node.init(allocator, node_config);
@@ -316,17 +325,9 @@ pub fn nodePing() !void {
 
     const outbound_connection_config = OutboundConnectionConfig{
         .host = "127.0.0.1",
-        .port = 8000,
+        .port = 8001,
         .transport = .tcp,
-        .reconnect_config = .{
-            .enabled = true,
-            .max_attempts = 0,
-            .reconnection_strategy = .timed,
-        },
-        .keep_alive_config = .{
-            .enabled = true,
-            .interval_ms = 300,
-        },
+        .peer_type = .node,
     };
 
     var client = try Client.init(allocator, client_config);

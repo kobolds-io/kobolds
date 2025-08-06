@@ -19,6 +19,7 @@ const MemoryPool = @import("stdx").MemoryPool;
 const RingBuffer = @import("stdx").RingBuffer;
 
 const Message = @import("../protocol/message.zig").Message;
+const Accept = @import("../protocol/message.zig").Accept;
 const Connection = @import("../protocol/connection.zig").Connection;
 
 const Topic = @import("../pubsub/topic.zig").Topic;
@@ -261,12 +262,15 @@ pub const Client = struct {
             return error.InvalidConfig;
         }
 
+        // clients can only connect to nodes
+        assert(config.peer_type == .node);
+
         const conn = try self.addOutboundConnection(config);
         errdefer self.disconnect(conn);
 
         const deadline = std.time.nanoTimestamp() + timeout_ns;
         while (deadline > std.time.nanoTimestamp()) {
-            if (conn.state == .connected) return conn;
+            if (conn.state == .connected and conn.connection_id != 0) return conn;
 
             // FIX: this is some baaaaad code. There should instead be a signal or channel that this thread could
             // wait on instead. Since this call happens on a foreground thread, an unbuffered channel seems the most
@@ -313,7 +317,7 @@ pub const Client = struct {
 
             // check if this connection was closed for whatever reason
             if (conn.state == .closed) {
-                // try self.cleanupConnection(conn);
+                try self.cleanupConnection(conn);
                 continue;
             }
 
@@ -526,26 +530,24 @@ pub const Client = struct {
 
         assert(conn.connection_id == 0);
         // An error here would be a protocol error
-        assert(conn.remote_id != message.headers.origin_id);
+        assert(conn.peer_id != message.headers.origin_id);
         assert(conn.connection_id != message.headers.connection_id);
 
         conn.connection_id = message.headers.connection_id;
-        conn.remote_id = message.headers.origin_id;
+        conn.peer_id = message.headers.origin_id;
 
-        // enqueue a message to immediately convey the node id of this Node
         message.headers.origin_id = conn.origin_id;
         message.headers.connection_id = conn.connection_id;
 
         message.ref();
         try conn.outbox.enqueue(message);
 
-        assert(conn.connection_type == .outbound);
-
         conn.state = .connected;
-        log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
+        log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
             conn.origin_id,
             conn.connection_id,
-            conn.remote_id,
+            conn.peer_id,
+            conn.config.outbound.peer_type,
         });
     }
 
@@ -613,14 +615,18 @@ pub const Client = struct {
         log.debug("remove uninitialized connection called", .{});
 
         _ = self.uninitialized_connections.remove(tmp_id);
-        log.info("worker: {} removed uninitialized_connection {}", .{ self.id, conn.connection_id });
+        log.info("client: {} removed uninitialized_connection {}", .{ self.id, conn.connection_id });
 
         conn.deinit();
         self.allocator.destroy(conn);
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {
-        self.removeConnection(conn);
+        _ = self.connections.remove(conn.connection_id);
+
+        log.info("client: {} removed connection {}", .{ self.id, conn.connection_id });
+        conn.deinit();
+        self.allocator.destroy(conn);
     }
 
     fn closeAllConnections(self: *Self) bool {
@@ -687,7 +693,6 @@ pub const Client = struct {
         conn.* = try Connection.init(
             0,
             self.id,
-            .outbound,
             self.io,
             socket,
             self.allocator,
