@@ -5,6 +5,7 @@ comptime {
     // _ = @import("./data_structures/message_pool.zig");
     _ = @import("./hash.zig");
     _ = @import("./io/test.zig");
+    _ = @import("./node/authenticator.zig");
     _ = @import("./node/listener.zig");
     _ = @import("./node/node.zig");
     _ = @import("./node/worker.zig");
