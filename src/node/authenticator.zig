@@ -16,9 +16,9 @@ pub const Authenticator = union(AuthenticationStrategyType) {
     }
 
     pub fn deinit(self: *Self) void {
-        switch (self) {
-            inline else => |impl| return impl.deinit(),
-        }
+        return switch (self.*) {
+            .none => |*s| return s.deinit(),
+        };
     }
 };
 
@@ -34,6 +34,8 @@ const NoneAuthStrategy = struct {
     pub fn authenticate(_: *Self, _: Context) bool {
         return true;
     }
+
+    pub fn deinit(_: *Self) void {}
 };
 
 // pub fn AuthenticationStrategy(comptime T: type) type {
@@ -157,6 +159,7 @@ test "none strategy" {
     _ = allocator;
 
     var authenticator = Authenticator{ .none = .{} };
+    defer authenticator.deinit();
     const context = .{};
 
     try testing.expectEqual(true, authenticator.authenticate(&context));
