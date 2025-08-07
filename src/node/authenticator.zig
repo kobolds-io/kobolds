@@ -38,6 +38,15 @@ const NoneAuthStrategy = struct {
     pub fn deinit(_: *Self) void {}
 };
 
+test "init/deinit" {
+    const allocator = testing.allocator;
+    _ = allocator;
+
+    // This is just a bullshit test to ensure that we always are able to init/deinit the authenticator
+    var authenticator = Authenticator{ .none = .{} };
+    defer authenticator.deinit();
+}
+
 test "none strategy" {
     const allocator = testing.allocator;
     _ = allocator;
