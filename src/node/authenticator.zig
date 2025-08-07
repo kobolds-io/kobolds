@@ -48,17 +48,29 @@ const NoneAuthStrategy = struct {
 const TokenAuthStrategy = struct {
     const Self = @This();
 
+    pub const Config = struct {
+        tokens: []const []const u8,
+    };
+
     pub const Context = struct {
         token: []const u8,
     };
 
     allocator: std.mem.Allocator,
-    tokens: std.ArrayList([]const u8),
+    tokens: *std.ArrayList([]const u8),
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator, config: Config) !Self {
+        const tokens = try allocator.create(std.ArrayList([]const u8));
+        errdefer allocator.destroy(tokens);
+
+        tokens.* = try std.ArrayList([]const u8).initCapacity(allocator, config.tokens.len);
+        errdefer tokens.deinit();
+
+        try tokens.appendSlice(config.tokens);
+
         return Self{
             .allocator = allocator,
-            .tokens = std.ArrayList([]const u8).init(allocator),
+            .tokens = tokens,
         };
     }
 
@@ -72,6 +84,7 @@ const TokenAuthStrategy = struct {
 
     pub fn deinit(self: *Self) void {
         self.tokens.deinit();
+        self.allocator.destroy(self.tokens);
     }
 };
 
@@ -88,26 +101,28 @@ test "none strategy" {
     const allocator = testing.allocator;
     _ = allocator;
 
-    var authenticator = Authenticator{ .none = .{} };
+    const none_auth_strategy = NoneAuthStrategy{};
+    var authenticator = Authenticator{ .none = none_auth_strategy };
     defer authenticator.deinit();
-    var context = NoneAuthStrategy.Context{};
 
+    var context = NoneAuthStrategy.Context{};
     try testing.expectEqual(true, authenticator.authenticate(&context));
 }
 
 test "token strategy" {
     const allocator = testing.allocator;
 
-    var token_auth_strategy = TokenAuthStrategy.init(allocator);
-
     const expected_token_1 = "asdf";
     const expected_token_2 = "1234567890";
 
-    try token_auth_strategy.tokens.append(expected_token_1);
-    try token_auth_strategy.tokens.append(expected_token_2);
+    const config = TokenAuthStrategy.Config{
+        .tokens = &.{ expected_token_1, expected_token_2 },
+    };
+    const token_auth_strategy = try TokenAuthStrategy.init(allocator, config);
 
     var authenticator = Authenticator{ .token = token_auth_strategy };
     defer authenticator.deinit();
+
     var context_1 = TokenAuthStrategy.Context{
         .token = expected_token_1,
     };
