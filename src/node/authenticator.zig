@@ -4,8 +4,9 @@ const testing = std.testing;
 pub const AuthenticationStrategy = union(AuthenticationStrategyType) {
     const Self = @This();
 
-    none: *NoneAuthStrategy,
-    token: *TokenAuthStrategy,
+    none: NoneAuthStrategy,
+    token: TokenAuthStrategy,
+
     pub const Context = switch (*Self) {
         .none => NoneAuthStrategy.Context,
         .token => TokenAuthStrategy.Context,
@@ -13,11 +14,11 @@ pub const AuthenticationStrategy = union(AuthenticationStrategyType) {
 
     pub fn authenticate(self: *Self, context: *anyopaque) bool {
         return switch (self.*) {
-            .none => |strategy| {
+            .none => |*strategy| {
                 const c: *NoneAuthStrategy.Context = @ptrCast(@alignCast(context));
                 return strategy.authenticate(c.*);
             },
-            .token => |strategy| {
+            .token => |*strategy| {
                 const c: *TokenAuthStrategy.Context = @ptrCast(@alignCast(context));
                 return strategy.authenticate(c.*);
             },
@@ -26,8 +27,8 @@ pub const AuthenticationStrategy = union(AuthenticationStrategyType) {
 
     pub fn deinit(self: *Self) void {
         return switch (self.*) {
-            .none => |strategy| return strategy.deinit(),
-            .token => |strategy| return strategy.deinit(),
+            .none => |*strategy| return strategy.deinit(),
+            .token => |*strategy| return strategy.deinit(),
         };
     }
 };
@@ -98,13 +99,10 @@ const TokenAuthStrategy = struct {
 };
 
 test "init/deinit" {
-    const allocator = testing.allocator;
-    _ = allocator;
-
-    var none_auth_strategy = NoneAuthStrategy{};
+    const none_auth_strategy = NoneAuthStrategy{};
 
     // This is just a bullshit test to ensure that we always are able to init/deinit the authenticator
-    var authenticator = AuthenticationStrategy{ .none = &none_auth_strategy };
+    var authenticator = AuthenticationStrategy{ .none = none_auth_strategy };
     defer authenticator.deinit();
 }
 
@@ -112,8 +110,8 @@ test "none strategy" {
     const allocator = testing.allocator;
     _ = allocator;
 
-    var none_auth_strategy = NoneAuthStrategy{};
-    var authenticator = AuthenticationStrategy{ .none = &none_auth_strategy };
+    const none_auth_strategy = NoneAuthStrategy{};
+    var authenticator = AuthenticationStrategy{ .none = none_auth_strategy };
     defer authenticator.deinit();
 
     var context = NoneAuthStrategy.Context{};
@@ -129,9 +127,9 @@ test "token strategy" {
     const config = TokenAuthStrategy.Config{
         .tokens = &.{ allowed_token_1, allowed_token_2 },
     };
-    var token_auth_strategy = try TokenAuthStrategy.init(allocator, config);
+    const token_auth_strategy = try TokenAuthStrategy.init(allocator, config);
 
-    var authenticator = AuthenticationStrategy{ .token = &token_auth_strategy };
+    var authenticator = AuthenticationStrategy{ .token = token_auth_strategy };
     defer authenticator.deinit();
 
     var context_1 = TokenAuthStrategy.Context{
