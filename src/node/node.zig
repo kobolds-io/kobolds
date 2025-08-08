@@ -37,6 +37,9 @@ const Requestor = @import("../services/requestor.zig").Requestor;
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 const Envelope = @import("../data_structures/envelope.zig").Envelope;
 
+const Authenticator = @import("./authenticator.zig").Authenticator;
+const AuthenticatorConfig = @import("./authenticator.zig").AuthenticatorConfig;
+
 pub const NodeConfig = struct {
     const Self = @This();
 

@@ -98,6 +98,24 @@ const TokenAuthStrategy = struct {
     }
 };
 
+pub const AuthenticatorConfig = struct {
+    const Self = @This();
+    strategy_type: AuthenticationStrategyType,
+    none: ?NoneAuthStrategy = null,
+    token: ?TokenAuthStrategy = null,
+
+    pub fn validate(self: Self) ?[]const u8 {
+        switch (self.strategy_type) {
+            .none => {
+                if (self.none == .null) return "`AuthenticatorConfig` none must be configured";
+            },
+            .token => {
+                if (self.token == .null) return "`AuthenticatorConfig` token must be configured";
+            },
+        }
+    }
+};
+
 pub fn Authenticator(comptime T: AuthenticationStrategyType) type {
     return switch (T) {
         .none => struct {
