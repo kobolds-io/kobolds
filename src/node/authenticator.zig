@@ -98,24 +98,77 @@ const TokenAuthStrategy = struct {
     }
 };
 
-test "init/deinit" {
-    const none_auth_strategy = NoneAuthStrategy{};
+pub fn Authenticator(comptime T: AuthenticationStrategyType) type {
+    return switch (T) {
+        .none => struct {
+            const Self = @This();
 
-    // This is just a bullshit test to ensure that we always are able to init/deinit the authenticator
-    var authenticator = AuthenticationStrategy{ .none = none_auth_strategy };
+            pub const Context = NoneAuthStrategy.Context;
+            pub const Config = NoneAuthStrategy.Config;
+
+            pub fn init() Self {
+                return .{};
+            }
+
+            pub fn authenticate(_: *Self, _: Self.Context) bool {
+                return true;
+            }
+
+            pub fn deinit(_: *Self) void {}
+        },
+        .token => struct {
+            const Self = @This();
+
+            pub const Context = TokenAuthStrategy.Context;
+            pub const Config = TokenAuthStrategy.Config;
+
+            allocator: std.mem.Allocator,
+            strategy: *TokenAuthStrategy,
+
+            pub fn init(allocator: std.mem.Allocator, config: Config) !Self {
+                const strategy = try allocator.create(TokenAuthStrategy);
+                errdefer allocator.destroy(strategy);
+
+                strategy.* = try TokenAuthStrategy.init(allocator, config);
+                errdefer strategy.deinit();
+
+                return Self{
+                    .allocator = allocator,
+                    .strategy = strategy,
+                };
+            }
+
+            pub fn deinit(self: *Self) void {
+                self.strategy.deinit();
+                self.allocator.destroy(self.strategy);
+            }
+
+            pub fn authenticate(self: *Self, context: Context) bool {
+                for (self.strategy.tokens.items) |token| {
+                    if (std.mem.eql(u8, token, context.token)) return true;
+                }
+
+                return false;
+            }
+        },
+    };
+}
+
+test "init/deinit" {
+    const AuthenticatorType = Authenticator(.none);
+
+    var authenticator = AuthenticatorType.init();
     defer authenticator.deinit();
 }
 
 test "none strategy" {
-    const allocator = testing.allocator;
-    _ = allocator;
+    const AuthenticatorType = Authenticator(.none);
 
-    const none_auth_strategy = NoneAuthStrategy{};
-    var authenticator = AuthenticationStrategy{ .none = none_auth_strategy };
+    var authenticator = AuthenticatorType.init();
     defer authenticator.deinit();
 
-    var context = NoneAuthStrategy.Context{};
-    try testing.expectEqual(true, authenticator.authenticate(&context));
+    const context = AuthenticatorType.Context{};
+    try testing.expectEqual(true, authenticator.authenticate(context));
 }
 
 test "token strategy" {
@@ -124,29 +177,29 @@ test "token strategy" {
     const allowed_token_1 = "asdf";
     const allowed_token_2 = "1234567890";
 
-    const config = TokenAuthStrategy.Config{
+    const AuthenticatorType = Authenticator(.token);
+    const config = AuthenticatorType.Config{
         .tokens = &.{ allowed_token_1, allowed_token_2 },
     };
-    const token_auth_strategy = try TokenAuthStrategy.init(allocator, config);
 
-    var authenticator = AuthenticationStrategy{ .token = token_auth_strategy };
+    var authenticator = try AuthenticatorType.init(allocator, config);
     defer authenticator.deinit();
 
-    var context_1 = TokenAuthStrategy.Context{
+    const context_1 = AuthenticatorType.Context{
         .token = allowed_token_1,
     };
 
-    try testing.expectEqual(true, authenticator.authenticate(&context_1));
+    try testing.expectEqual(true, authenticator.authenticate(context_1));
 
-    var context_2 = TokenAuthStrategy.Context{
+    const context_2 = AuthenticatorType.Context{
         .token = allowed_token_2,
     };
 
-    try testing.expectEqual(true, authenticator.authenticate(&context_2));
+    try testing.expectEqual(true, authenticator.authenticate(context_2));
 
     const bad_token = "some completely random token!";
-    var context_3 = TokenAuthStrategy.Context{
+    const context_3 = AuthenticatorType.Context{
         .token = bad_token,
     };
-    try testing.expectEqual(false, authenticator.authenticate(&context_3));
+    try testing.expectEqual(false, authenticator.authenticate(context_3));
 }
