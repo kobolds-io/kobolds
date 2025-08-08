@@ -48,6 +48,7 @@ pub const NodeConfig = struct {
     memory_pool_capacity: usize = 100_000,
     listener_configs: ?[]const ListenerConfig = null,
     outbound_configs: ?[]const OutboundConnectionConfig = null,
+    authenticator_config: AuthenticatorConfig = .{},
 
     pub fn validate(self: Self) ?[]const u8 {
         const cpu_core_count = std.Thread.getCpuCount() catch @panic("could not get getCpuCount");
@@ -73,6 +74,8 @@ pub const NodeConfig = struct {
                 }
             }
         }
+
+        if (self.authenticator_config.validate()) |reason| return reason;
 
         return null;
     }
@@ -161,6 +164,9 @@ pub const Node = struct {
         listeners.* = std.AutoHashMap(usize, *Listener).init(allocator);
         errdefer listeners.deinit();
 
+        // const authenticator = try allocator.create(Authenticator(config.authenticator_config.strategy_type));
+        // errdefer allocator.destroy(authenticator);
+
         return Self{
             .allocator = allocator,
             .close_channel = close_channel,
@@ -179,6 +185,7 @@ pub const Node = struct {
             .topics = std.StringHashMap(*Topic).init(allocator),
             .services = std.StringHashMap(*Service).init(allocator),
             .workers = workers,
+            // .authenticator = authenticator,
         };
     }
 

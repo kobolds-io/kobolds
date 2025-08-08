@@ -100,19 +100,21 @@ const TokenAuthStrategy = struct {
 
 pub const AuthenticatorConfig = struct {
     const Self = @This();
-    strategy_type: AuthenticationStrategyType,
-    none: ?NoneAuthStrategy = null,
+    strategy_type: AuthenticationStrategyType = .none,
+    none: ?NoneAuthStrategy = .{},
     token: ?TokenAuthStrategy = null,
 
     pub fn validate(self: Self) ?[]const u8 {
         switch (self.strategy_type) {
             .none => {
-                if (self.none == .null) return "`AuthenticatorConfig` none must be configured";
+                if (self.none == null) return "`AuthenticatorConfig` none must be configured";
             },
             .token => {
-                if (self.token == .null) return "`AuthenticatorConfig` token must be configured";
+                if (self.token == null) return "`AuthenticatorConfig` token must be configured";
             },
         }
+
+        return null;
     }
 };
 
