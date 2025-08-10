@@ -20,6 +20,7 @@ pub const MessageType = enum(u8) {
     publish,
     subscribe,
     unsubscribe,
+    authenticate,
 };
 
 pub const ErrorCode = enum(u8) {
@@ -54,6 +55,14 @@ pub const Message = struct {
     pub fn new() Message {
         return Message{
             .headers = Headers{ .message_type = .undefined },
+            .body_buffer = undefined,
+            .ref_count = atomic.Value(u32).init(0),
+        };
+    }
+
+    pub fn new2(message_type: MessageType) Self {
+        return Self{
+            .headers = Headers{ .message_type = message_type },
             .body_buffer = undefined,
             .ref_count = atomic.Value(u32).init(0),
         };
@@ -229,6 +238,10 @@ pub const Message = struct {
                 var headers: *Unsubscribe = self.headers.into(.unsubscribe).?;
                 headers.transaction_id = v;
             },
+            .authenticate => {
+                var headers: *Authenticate = self.headers.into(.authenticate).?;
+                headers.transaction_id = v;
+            },
             else => unreachable,
         }
     }
@@ -265,6 +278,10 @@ pub const Message = struct {
             },
             .unsubscribe => {
                 const headers: *const Unsubscribe = self.headers.intoConst(.unsubscribe).?;
+                return headers.transaction_id;
+            },
+            .authenticate => {
+                const headers: *const Authenticate = self.headers.intoConst(.authenticate).?;
                 return headers.transaction_id;
             },
             else => unreachable,
@@ -478,6 +495,10 @@ pub const Message = struct {
                 const headers: *const Unsubscribe = self.headers.intoConst(.unsubscribe).?;
                 return headers.validate();
             },
+            .authenticate => {
+                const headers: *const Authenticate = self.headers.intoConst(.authenticate).?;
+                return headers.validate();
+            },
             else => "unsupported message type",
         };
     }
@@ -503,15 +524,16 @@ pub const Headers = extern struct {
 
     pub fn Type(comptime message_type: MessageType) type {
         return switch (message_type) {
-            .request => Request,
-            .reply => Reply,
-            .ping => Ping,
-            .pong => Pong,
             .accept => Accept,
             .advertise => Advertise,
-            .unadvertise => Unadvertise,
+            .authenticate => Authenticate,
+            .ping => Ping,
+            .pong => Pong,
             .publish => Publish,
+            .reply => Reply,
+            .request => Request,
             .subscribe => Subscribe,
+            .unadvertise => Unadvertise,
             .unsubscribe => Unsubscribe,
             .undefined => unreachable,
         };
@@ -571,6 +593,7 @@ pub const Headers = extern struct {
             8 => MessageType.publish,
             9 => MessageType.subscribe,
             10 => MessageType.unsubscribe,
+            11 => MessageType.authenticate,
             else => MessageType.undefined,
         };
         i += 1;
@@ -1052,6 +1075,46 @@ pub const Unsubscribe = extern struct {
 
         // ensure this topic_name is valid (no empty topic_names allowed)
         if (self.topic_name_length == 0) return "invalid topic_name_length";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
+        return null;
+    }
+};
+
+pub const Authenticate = extern struct {
+    comptime {
+        assert(@sizeOf(@This()) == @sizeOf(Headers));
+    }
+
+    origin_id: u128 = 0,
+    connection_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
+    body_length: u16 = 0,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .unsubscribe,
+    compression: Compression = .none,
+    compressed: bool = false,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
+
+    transaction_id: u128 = 0,
+
+    reserved: [48]u8 = [_]u8{0} ** 48,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .authenticate);
+
+        // common headers
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure this body_length is valid
+        if (self.body_length == 0) return "invalid body_length";
+
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
 
         // ensure reserved is empty
         for (self.reserved) |b| if (b != 0) return "invalid reserved";
