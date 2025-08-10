@@ -12,11 +12,11 @@ const NoneAuthStrategy = struct {
     pub const Context = struct {};
     pub const Config = struct {};
 
-    pub fn init(_: Config) Self {
+    pub fn init(_: std.mem.Allocator, _: Config) Self {
         return .{};
     }
 
-    pub fn authenticate(_: *Self, _: Self.Context) bool {
+    pub fn authenticate(_: *Self, _: *const Context) bool {
         return true;
     }
 
@@ -52,7 +52,7 @@ const TokenAuthStrategy = struct {
         };
     }
 
-    pub fn authenticate(self: *Self, context: Context) bool {
+    pub fn authenticate(self: *Self, context: *const Context) bool {
         for (self.tokens.items) |token| {
             if (std.mem.eql(u8, token, context.token)) return true;
         }
@@ -66,26 +66,74 @@ const TokenAuthStrategy = struct {
     }
 };
 
-pub fn Authenticator(comptime T: AuthenticationStrategyType) type {
-    return switch (T) {
-        .none => NoneAuthStrategy,
-        .token => TokenAuthStrategy,
+pub const AuthenticatorConfig = union(AuthenticationStrategyType) {
+    none: NoneAuthStrategy.Config,
+    token: TokenAuthStrategy.Config,
+};
+
+pub const Authenticator = struct {
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
+    strategy_type: AuthenticationStrategyType,
+    strategy: StrategyUnion,
+
+    const StrategyUnion = union(AuthenticationStrategyType) {
+        none: NoneAuthStrategy,
+        token: TokenAuthStrategy,
     };
-}
+
+    pub fn init(allocator: std.mem.Allocator, config: AuthenticatorConfig) !Self {
+        return switch (config) {
+            .none => .{
+                .allocator = allocator,
+                .strategy_type = .none,
+                .strategy = .{ .none = NoneAuthStrategy.init(allocator, config.none) },
+            },
+            .token => .{
+                .allocator = allocator,
+                .strategy_type = .token,
+                .strategy = .{ .token = try TokenAuthStrategy.init(allocator, config.token) },
+            },
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        switch (self.strategy) {
+            .none => |*s| s.deinit(),
+            .token => |*s| s.deinit(),
+        }
+    }
+
+    pub fn authenticate(self: *Self, context: *const anyopaque) bool {
+        return switch (self.strategy) {
+            .none => |*s| {
+                const ctx: *const NoneAuthStrategy.Context = @ptrCast(@alignCast(context));
+                return s.authenticate(ctx);
+            },
+            .token => |*s| {
+                const ctx: *const TokenAuthStrategy.Context = @ptrCast(@alignCast(context));
+                return s.authenticate(ctx);
+            },
+        };
+    }
+};
 
 test "init/deinit" {
-    const auth_strategy: AuthenticationStrategyType = .none;
-    var authenticator = Authenticator(auth_strategy).init(.{});
-    defer authenticator.deinit();
+    const allocator = testing.allocator;
+
+    var none_authenticator = try Authenticator.init(allocator, .{ .none = .{} });
+    defer none_authenticator.deinit();
 }
 
 test "none strategy" {
-    const AuthenticatorType = Authenticator(.none);
-    var authenticator = AuthenticatorType.init(.{});
-    defer authenticator.deinit();
+    const allocator = testing.allocator;
 
-    const context = AuthenticatorType.Context{};
-    try testing.expectEqual(true, authenticator.authenticate(context));
+    var none_authenticator = try Authenticator.init(allocator, .{ .none = .{} });
+    defer none_authenticator.deinit();
+
+    var context = NoneAuthStrategy.Context{};
+    try testing.expectEqual(true, none_authenticator.authenticate(&context));
 }
 
 test "token strategy" {
@@ -94,42 +142,19 @@ test "token strategy" {
     const allowed_token_1 = "asdf";
     const allowed_token_2 = "1234567890";
 
-    const AuthenticatorType = Authenticator(.token);
-    const config = AuthenticatorType.Config{
-        .tokens = &.{ allowed_token_1, allowed_token_2 },
+    const token_authenticator_config = TokenAuthStrategy.Config{
+        .tokens = &[_][]const u8{ allowed_token_1, allowed_token_2 },
     };
-
-    var authenticator = try AuthenticatorType.init(allocator, config);
+    var authenticator = try Authenticator.init(allocator, .{ .token = token_authenticator_config });
     defer authenticator.deinit();
 
-    const context_1 = AuthenticatorType.Context{
-        .token = allowed_token_1,
-    };
+    const context_1 = TokenAuthStrategy.Context{ .token = allowed_token_1 };
+    try testing.expectEqual(true, authenticator.authenticate(&context_1));
 
-    try testing.expectEqual(true, authenticator.authenticate(context_1));
-
-    const context_2 = AuthenticatorType.Context{
-        .token = allowed_token_2,
-    };
-
-    try testing.expectEqual(true, authenticator.authenticate(context_2));
+    const context_2 = TokenAuthStrategy.Context{ .token = allowed_token_2 };
+    try testing.expectEqual(true, authenticator.authenticate(&context_2));
 
     const bad_token = "some completely random token!";
-    const context_3 = AuthenticatorType.Context{
-        .token = bad_token,
-    };
-    try testing.expectEqual(false, authenticator.authenticate(context_3));
-}
-
-test "figuring out what strategy" {
-    const auth_strategy: AuthenticationStrategyType = .none;
-    var authenticator = Authenticator(auth_strategy).init(.{});
-    defer authenticator.deinit();
-
-    // ... some time later
-    switch (@TypeOf(authenticator)) {
-        NoneAuthStrategy => std.debug.print("none auth strategy!", .{}),
-        TokenAuthStrategy => std.debug.print("token auth strategy!", .{}),
-        else => std.debug.print("unknown auth strategy!", .{}),
-    }
+    const context_3 = TokenAuthStrategy.Context{ .token = bad_token };
+    try testing.expectEqual(false, authenticator.authenticate(&context_3));
 }
