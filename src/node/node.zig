@@ -48,7 +48,7 @@ pub const NodeConfig = struct {
     memory_pool_capacity: usize = 100_000,
     listener_configs: ?[]const ListenerConfig = null,
     outbound_configs: ?[]const OutboundConnectionConfig = null,
-    // authenticator_config: AuthenticatorConfig = .{},
+    authenticator_config: AuthenticatorConfig = .{ .none = .{} },
 
     pub fn validate(self: Self) ?[]const u8 {
         const cpu_core_count = std.Thread.getCpuCount() catch @panic("could not get getCpuCount");
@@ -107,7 +107,7 @@ pub const Node = struct {
     topics: std.StringHashMap(*Topic),
     services: std.StringHashMap(*Service),
     workers: *std.AutoHashMap(usize, *Worker),
-    // authenticator: *Authenticator,
+    authenticator: *Authenticator,
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
         if (config.validate()) |err_message| {
@@ -165,8 +165,11 @@ pub const Node = struct {
         listeners.* = std.AutoHashMap(usize, *Listener).init(allocator);
         errdefer listeners.deinit();
 
-        // const authenticator = try allocator.create(Authenticator(config.authenticator_config.strategy_type));
-        // errdefer allocator.destroy(authenticator);
+        const authenticator = try allocator.create(Authenticator);
+        errdefer allocator.destroy(authenticator);
+
+        authenticator.* = try Authenticator.init(allocator, config.authenticator_config);
+        errdefer authenticator.deinit();
 
         return Self{
             .allocator = allocator,
@@ -186,7 +189,7 @@ pub const Node = struct {
             .topics = std.StringHashMap(*Topic).init(allocator),
             .services = std.StringHashMap(*Service).init(allocator),
             .workers = workers,
-            // .authenticator = authenticator,
+            .authenticator = authenticator,
         };
     }
 
@@ -254,6 +257,7 @@ pub const Node = struct {
         self.services.deinit();
         self.inbox.deinit();
         self.connection_outboxes.deinit();
+        self.authenticator.deinit();
 
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.connections);
@@ -263,6 +267,7 @@ pub const Node = struct {
         self.allocator.destroy(self.listeners);
         self.allocator.destroy(self.memory_pool);
         self.allocator.destroy(self.workers);
+        self.allocator.destroy(self.authenticator);
     }
 
     pub fn start(self: *Self) !void {

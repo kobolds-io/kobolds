@@ -17,6 +17,7 @@ const ClientConfig = @import("../client/client.zig").ClientConfig;
 const Transaction = @import("../client/client.zig").Transaction;
 const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
+const AuthenticatorConfig = @import("../node/authenticator.zig").AuthenticatorConfig;
 const AllowedInboundConnectionConfig = @import("../node/listener.zig").AllowedInboundConnectionConfig;
 const Signal = @import("stdx").Signal;
 
@@ -303,6 +304,12 @@ pub fn nodeListen() !void {
 
     const listener_configs = [_]ListenerConfig{ client_listener_config, node_listener_config };
     node_config.listener_configs = &listener_configs;
+
+    node_config.authenticator_config = AuthenticatorConfig{
+        .token = .{
+            .tokens = &[_][]const u8{"asdf"},
+        },
+    };
 
     var node = try Node.init(allocator, node_config);
     defer node.deinit();
