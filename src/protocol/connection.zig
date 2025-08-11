@@ -11,6 +11,7 @@ const constants = @import("../constants.zig");
 const Message = @import("../protocol/message.zig").Message;
 const Parser = @import("../protocol/parser.zig").Parser;
 const Accept = @import("../protocol/message.zig").Accept;
+const ProtocolState = @import("../protocol/protocol_state.zig").ProtocolState;
 
 const IO = @import("../io.zig").IO;
 const ProtocolError = @import("../errors.zig").ProtocolError;
@@ -140,26 +141,27 @@ pub const Connection = struct {
     inbox: *RingBuffer(*Message),
     io: *IO,
     memory_pool: *MemoryPool(Message),
-    metrics: ConnectionMetrics,
     messages_recv: u128,
     messages_sent: u128,
+    metrics: ConnectionMetrics,
     origin_id: uuid.Uuid,
     outbox: *RingBuffer(*Message),
     parsed_message_ptrs: std.ArrayList(*Message),
     parsed_messages: std.ArrayList(Message),
     parser: Parser,
+    peer_id: uuid.Uuid,
+    protocol_state: ProtocolState,
     recv_buffer: []u8,
     recv_bytes: usize,
     recv_completion: *IO.Completion,
     recv_submitted: bool,
-    peer_id: uuid.Uuid,
     send_buffer_list: *std.ArrayList(u8),
     send_buffer_overflow: [constants.message_max_size]u8,
     send_buffer_overflow_count: usize,
     send_completion: *IO.Completion,
     send_submitted: bool,
     socket: posix.socket_t,
-    state: ConnectionState,
+    connection_state: ConnectionState,
     tmp_encoding_buffer: []u8,
 
     pub fn init(
@@ -213,38 +215,42 @@ pub const Connection = struct {
             .bytes_sent = 0,
             .close_completion = close_completion,
             .close_submitted = false,
+            .config = config,
             .connect_completion = connect_completion,
+            .connection_id = id,
             .connect_submitted = false,
             .inbox = inbox,
             .io = io,
             .memory_pool = memory_pool,
-            .metrics = ConnectionMetrics{},
             .messages_recv = 0,
             .messages_sent = 0,
-            .connection_id = id,
+            .metrics = ConnectionMetrics{},
             .origin_id = origin_id,
-            .peer_id = 0,
             .outbox = outbox,
-            .parsed_messages = try std.ArrayList(Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
             .parsed_message_ptrs = try std.ArrayList(*Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
+            .parsed_messages = try std.ArrayList(Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
             .parser = Parser.init(allocator),
+            .peer_id = 0,
+            .protocol_state = .inactive,
             .recv_buffer = recv_buffer,
             .recv_bytes = 0,
             .recv_completion = recv_completion,
             .recv_submitted = false,
+            .send_buffer_list = send_buffer_list,
             .send_buffer_overflow_count = 0,
             .send_buffer_overflow = undefined,
-            .tmp_encoding_buffer = tmp_encoding_buffer,
-            .send_buffer_list = send_buffer_list,
             .send_completion = send_completion,
             .send_submitted = false,
             .socket = socket,
-            .state = .closed,
-            .config = config,
+            .connection_state = .closed,
+            .tmp_encoding_buffer = tmp_encoding_buffer,
         };
     }
 
     pub fn deinit(self: *Connection) void {
+        self.connection_state = .closed;
+        self.protocol_state = .inactive;
+
         while (self.outbox.dequeue()) |message| {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
@@ -275,7 +281,7 @@ pub const Connection = struct {
     }
 
     pub fn tick(self: *Connection) !void {
-        switch (self.state) {
+        switch (self.connection_state) {
             .closing => {
                 // NOTE: uncommenting this line will lead the client to hang when closing connections because
                 // self.recv_submitted is never flipped to false
@@ -286,7 +292,7 @@ pub const Connection = struct {
                     log.info("connection closed {}", .{self.connection_id});
                 }
 
-                self.state = .closed;
+                self.connection_state = .closed;
                 posix.close(self.socket);
                 // break out of the tick
                 return;
@@ -427,7 +433,7 @@ pub const Connection = struct {
         for (self.parsed_messages.items) |message| {
             // assume that invalid messages are poison and close this connection
             if (message.validate()) |reason| {
-                self.state = .closing;
+                self.connection_state = .closing;
                 log.err("invalid message: {s}", .{reason});
                 return;
             }
@@ -484,7 +490,7 @@ pub const Connection = struct {
         // Connection closed by peer
         if (bytes == 0) {
             log.err("connection {} received no bytes, closing", .{self.connection_id});
-            self.state = .closing;
+            self.connection_state = .closing;
             return;
         }
 
@@ -505,7 +511,7 @@ pub const Connection = struct {
         _ = completion;
         result catch |err| {
             log.err("onConnect err closing conn {any}", .{err});
-            self.state = .closing;
+            self.connection_state = .closing;
         };
     }
 };

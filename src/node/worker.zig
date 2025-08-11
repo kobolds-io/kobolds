@@ -201,11 +201,11 @@ pub const Worker = struct {
         errdefer posix.close(socket);
 
         // initialize the connection
-        const connection = try self.allocator.create(Connection);
-        errdefer self.allocator.destroy(connection);
+        const conn = try self.allocator.create(Connection);
+        errdefer self.allocator.destroy(conn);
 
         const conn_id = uuid.v7.new();
-        connection.* = try Connection.init(
+        conn.* = try Connection.init(
             conn_id,
             self.node.id,
             self.io,
@@ -214,20 +214,20 @@ pub const Worker = struct {
             self.node.memory_pool,
             .{ .inbound = config },
         );
-        errdefer connection.deinit();
+        errdefer conn.deinit();
 
         // Since this is an inbound connection, we have already accepted the socket
-        connection.state = .connected;
+        conn.connection_state = .connected;
 
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
-        try self.connections.put(conn_id, connection);
+        try self.connections.put(conn_id, conn);
         errdefer _ = self.connections.remove(conn_id);
 
         const accept_message = self.node.memory_pool.create() catch |err| {
             log.err("unable to create an accept message for connection {any}", .{err});
-            connection.state = .closing;
+            conn.connection_state = .closing;
             return;
         };
         accept_message.* = Message.new2(.accept);
@@ -242,7 +242,7 @@ pub const Worker = struct {
 
         // TODO: challenge this connection w/ authentication
 
-        try connection.outbox.enqueue(accept_message);
+        try conn.outbox.enqueue(accept_message);
 
         log.info("worker: {} added connection {}", .{ self.id, conn_id });
     }
@@ -275,7 +275,7 @@ pub const Worker = struct {
         );
         errdefer conn.deinit();
 
-        conn.state = .connecting;
+        conn.connection_state = .connecting;
 
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
@@ -331,7 +331,7 @@ pub const Worker = struct {
             const conn = entry.value_ptr.*;
 
             // check if this connection was closed for whatever reason
-            if (conn.state == .closed) {
+            if (conn.connection_state == .closed) {
                 try self.cleanupUninitializedConnection(tmp_id, conn);
                 break;
             }
@@ -341,7 +341,7 @@ pub const Worker = struct {
                 break;
             };
 
-            if (conn.state == .connected and conn.connection_id != 0) {
+            if (conn.connection_state == .connected and conn.connection_id != 0) {
                 // the connection is now valid and ready for events
                 // move the connection to the regular connections map
                 try self.connections.put(conn.connection_id, conn);
@@ -363,12 +363,12 @@ pub const Worker = struct {
             const conn = entry.value_ptr.*;
 
             // check if this connection was closed for whatever reason
-            if (conn.state == .closed) {
+            if (conn.connection_state == .closed) {
                 try self.cleanupConnection(conn);
                 continue;
             }
 
-            log.debug("conn state {any}", .{conn.state});
+            log.debug("conn.connection_state {any}", .{conn.connection_state});
 
             // // FIX: skip this connection if rate limited
             // if (self.checkConnRateLimit(conn)) continue;
@@ -457,7 +457,7 @@ pub const Worker = struct {
                     .accept => self.handleAcceptMessage(conn, message) catch break,
                     else => {
                         log.err("unexpected message received from uninitialized connection", .{});
-                        conn.state = .closing;
+                        conn.connection_state = .closing;
                         break;
                     },
                 }
@@ -495,7 +495,7 @@ pub const Worker = struct {
         }
 
         // ensure that this connection is not fully connected
-        assert(conn.state != .connected);
+        assert(conn.connection_state != .connected);
 
         switch (conn.config) {
             .outbound => |config| {
@@ -514,7 +514,7 @@ pub const Worker = struct {
                 message.ref();
                 try conn.outbox.enqueue(message);
 
-                conn.state = .connected;
+                conn.connection_state = .connected;
                 log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
                     conn.origin_id,
                     conn.connection_id,
@@ -529,7 +529,7 @@ pub const Worker = struct {
                 // FIX: THIS only matters if the other is a node???
                 log.warn("received an accept message??? should i have?? from {}", .{message.headers.origin_id});
                 conn.peer_id = message.headers.origin_id;
-                conn.state = .connected;
+                conn.connection_state = .connected;
 
                 log.info("inbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
                     conn.origin_id,
@@ -622,13 +622,13 @@ pub const Worker = struct {
         var uninitialized_connections_iter = self.uninitialized_connections.valueIterator();
         while (uninitialized_connections_iter.next()) |entry| {
             var conn = entry.*;
-            switch (conn.state) {
+            switch (conn.connection_state) {
                 .closed => continue,
                 .closing => {
                     all_connections_closed = false;
                 },
                 else => {
-                    conn.state = .closing;
+                    conn.connection_state = .closing;
                     all_connections_closed = false;
                 },
             }
@@ -642,13 +642,13 @@ pub const Worker = struct {
         var connections_iter = self.connections.valueIterator();
         while (connections_iter.next()) |entry| {
             var conn = entry.*;
-            switch (conn.state) {
+            switch (conn.connection_state) {
                 .closed => continue,
                 .closing => {
                     all_connections_closed = false;
                 },
                 else => {
-                    conn.state = .closing;
+                    conn.connection_state = .closing;
                     all_connections_closed = false;
                 },
             }

@@ -140,7 +140,7 @@ pub const Client = struct {
         while (connections_iterator.next()) |entry| {
             const connection = entry.*;
 
-            assert(connection.state == .closed);
+            assert(connection.connection_state == .closed);
 
             connection.deinit();
             self.allocator.destroy(connection);
@@ -150,7 +150,7 @@ pub const Client = struct {
         while (uninitialized_connections_iterator.next()) |entry| {
             const connection = entry.*;
 
-            assert(connection.state == .closed);
+            assert(connection.connection_state == .closed);
 
             connection.deinit();
             self.allocator.destroy(connection);
@@ -270,7 +270,7 @@ pub const Client = struct {
 
         const deadline = std.time.nanoTimestamp() + timeout_ns;
         while (deadline > std.time.nanoTimestamp()) {
-            if (conn.state == .connected and conn.connection_id != 0) return conn;
+            if (conn.connection_state == .connected and conn.connection_id != 0) return conn;
 
             // FIX: this is some baaaaad code. There should instead be a signal or channel that this thread could
             // wait on instead. Since this call happens on a foreground thread, an unbuffered channel seems the most
@@ -285,7 +285,7 @@ pub const Client = struct {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
-        conn.state = .closing;
+        conn.connection_state = .closing;
     }
 
     pub fn awaitConnected(self: *Self, conn: *Connection, timeout_ns: i128) !void {
@@ -316,7 +316,7 @@ pub const Client = struct {
             const conn = entry.value_ptr.*;
 
             // check if this connection was closed for whatever reason
-            if (conn.state == .closed) {
+            if (conn.connection_state == .closed) {
                 try self.cleanupConnection(conn);
                 continue;
             }
@@ -338,7 +338,7 @@ pub const Client = struct {
             const conn = entry.value_ptr.*;
 
             // check if this connection was closed for whatever reason
-            if (conn.state == .closed) {
+            if (conn.connection_state == .closed) {
                 try self.cleanupUninitializedConnection(tmp_id, conn);
                 break;
             }
@@ -348,7 +348,7 @@ pub const Client = struct {
                 break;
             };
 
-            if (conn.state == .connected and conn.connection_id != 0) {
+            if (conn.connection_state == .connected and conn.connection_id != 0) {
                 // the connection is now valid and ready for events
                 // move the connection to the regular connections map
                 try self.connections.put(conn.connection_id, conn);
@@ -526,7 +526,7 @@ pub const Client = struct {
         }
 
         // ensure that this connection is not fully connected
-        assert(conn.state != .connected);
+        assert(conn.connection_state != .connected);
         assert(conn.connection_id == 0);
 
         // An error here would be a protocol error
@@ -536,7 +536,7 @@ pub const Client = struct {
         conn.connection_id = message.headers.connection_id;
         conn.peer_id = message.headers.origin_id;
 
-        conn.state = .connected;
+        conn.connection_state = .connected;
         log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
             conn.origin_id,
             conn.connection_id,
@@ -629,13 +629,13 @@ pub const Client = struct {
         var uninitialized_connections_iter = self.uninitialized_connections.valueIterator();
         while (uninitialized_connections_iter.next()) |entry| {
             var conn = entry.*;
-            switch (conn.state) {
+            switch (conn.connection_state) {
                 .closed => continue,
                 .closing => {
                     all_connections_closed = false;
                 },
                 else => {
-                    conn.state = .closing;
+                    conn.connection_state = .closing;
                     all_connections_closed = false;
                 },
             }
@@ -649,13 +649,13 @@ pub const Client = struct {
         var connections_iter = self.connections.valueIterator();
         while (connections_iter.next()) |entry| {
             var conn = entry.*;
-            switch (conn.state) {
+            switch (conn.connection_state) {
                 .closed => continue,
                 .closing => {
                     all_connections_closed = false;
                 },
                 else => {
-                    conn.state = .closing;
+                    conn.connection_state = .closing;
                     all_connections_closed = false;
                 },
             }
@@ -695,7 +695,7 @@ pub const Client = struct {
         );
         errdefer conn.deinit();
 
-        conn.state = .connecting;
+        conn.connection_state = .connecting;
 
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
@@ -719,7 +719,7 @@ pub const Client = struct {
     pub fn ping(self: *Self, conn: *Connection, signal: *Signal(*Message), options: PingOptions) !void {
         _ = options;
         // FIX: this will just crash and that is bad
-        assert(conn.state == .connected);
+        assert(conn.connection_state == .connected);
 
         const ping_message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(ping_message);
@@ -753,7 +753,7 @@ pub const Client = struct {
         options: PublishOptions,
     ) !void {
         _ = options;
-        assert(conn.state == .connected);
+        assert(conn.connection_state == .connected);
 
         const message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(message);
@@ -778,7 +778,7 @@ pub const Client = struct {
         callback: SubscriberCallback,
         options: SubscribeOptions,
     ) !void {
-        assert(conn.state == .connected);
+        assert(conn.connection_state == .connected);
 
         self.topics_mutex.lock();
         defer self.topics_mutex.unlock();
@@ -919,7 +919,7 @@ pub const Client = struct {
         callback: AdvertiserCallback,
         options: AdvertiseOptions,
     ) !void {
-        assert(conn.state == .connected);
+        assert(conn.connection_state == .connected);
 
         self.services_mutex.lock();
         defer self.services_mutex.unlock();
