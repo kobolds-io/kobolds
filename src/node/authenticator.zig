@@ -12,12 +12,24 @@ pub const NoneAuthStrategy = struct {
     pub const Context = struct {};
     pub const Config = struct {};
 
+    pub const Challenge = struct {
+        method: AuthenticationStrategyType.none,
+    };
+
+    pub const ChallengeContext = struct {};
+
     pub fn init(_: std.mem.Allocator, _: Config) Self {
         return .{};
     }
 
     pub fn authenticate(_: *Self, _: *const Context) bool {
         return true;
+    }
+
+    pub fn challenge(_: *Self, _: ChallengeContext) Challenge {
+        return Challenge{
+            .method = .none,
+        };
     }
 
     pub fn deinit(_: *Self) void {}
@@ -33,6 +45,12 @@ pub const TokenAuthStrategy = struct {
     pub const Context = struct {
         token: []const u8,
     };
+
+    pub const Challenge = struct {
+        method: AuthenticationStrategyType.token,
+    };
+
+    pub const ChallengeContext = struct {};
 
     allocator: std.mem.Allocator,
     tokens: *std.ArrayList([]const u8),
@@ -58,6 +76,12 @@ pub const TokenAuthStrategy = struct {
         }
 
         return false;
+    }
+
+    pub fn challenge(_: *Self, _: ChallengeContext) Challenge {
+        return Challenge{
+            .method = .token,
+        };
     }
 
     pub fn deinit(self: *Self) void {

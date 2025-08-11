@@ -527,20 +527,14 @@ pub const Client = struct {
 
         // ensure that this connection is not fully connected
         assert(conn.state != .connected);
-
         assert(conn.connection_id == 0);
+
         // An error here would be a protocol error
         assert(conn.peer_id != message.headers.origin_id);
         assert(conn.connection_id != message.headers.connection_id);
 
         conn.connection_id = message.headers.connection_id;
         conn.peer_id = message.headers.origin_id;
-
-        message.headers.origin_id = conn.origin_id;
-        message.headers.connection_id = conn.connection_id;
-
-        message.ref();
-        try conn.outbox.enqueue(message);
 
         conn.state = .connected;
         log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{

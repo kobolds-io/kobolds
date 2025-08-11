@@ -216,7 +216,8 @@ pub const Worker = struct {
         );
         errdefer connection.deinit();
 
-        connection.state = .connecting;
+        // Since this is an inbound connection, we have already accepted the socket
+        connection.state = .connected;
 
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
@@ -229,15 +230,17 @@ pub const Worker = struct {
             connection.state = .closing;
             return;
         };
-        accept_message.* = Message.new();
-        accept_message.headers.message_type = .accept;
+        accept_message.* = Message.new2(.accept);
         accept_message.ref();
+        errdefer accept_message.deref();
 
         var accept_headers: *Accept = accept_message.headers.into(.accept).?;
         accept_headers.connection_id = conn_id;
         accept_headers.origin_id = self.node.id;
 
         assert(accept_message.validate() == null);
+
+        // TODO: challenge this connection w/ authentication
 
         try connection.outbox.enqueue(accept_message);
 
@@ -365,6 +368,8 @@ pub const Worker = struct {
                 continue;
             }
 
+            log.debug("conn state {any}", .{conn.state});
+
             // // FIX: skip this connection if rate limited
             // if (self.checkConnRateLimit(conn)) continue;
 
@@ -418,7 +423,6 @@ pub const Worker = struct {
                     .accept => try self.handleAcceptMessage(conn, message),
                     .ping => try self.handlePingMessage(conn, message),
                     .pong => try self.handlePongMessage(conn, message),
-                    .credentials => try self.handleCredentialsMessage(conn, message),
                     else => {
                         // NOTE: This message type is meant to be handled by the node
                         self.inbox_mutex.lock();
@@ -522,6 +526,8 @@ pub const Worker = struct {
                 assert(conn.connection_id == message.headers.connection_id);
                 assert(conn.origin_id != message.headers.origin_id);
 
+                // FIX: THIS only matters if the other is a node???
+                log.warn("received an accept message??? should i have?? from {}", .{message.headers.origin_id});
                 conn.peer_id = message.headers.origin_id;
                 conn.state = .connected;
 
@@ -535,47 +541,47 @@ pub const Worker = struct {
         }
     }
 
-    // FIX: the `node` should be the one to validate this message. We need to ensure that this conn.connection_id
-    // matches the message.origin_id
+    // FIX: the `node` should be the one to validate this message.
+    //  We need to ensure that this conn.connection_id matches the message.origin_id
     fn handleCredentialsMessage(self: *Self, conn: *Connection, message: *Message) !void {
-        _ = self;
-        _ = conn;
-        _ = message;
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+        }
 
-        // defer {
-        //     message.deref();
-        //     if (message.refs() == 0) self.node.memory_pool.destroy(message);
-        // }
+        log.debug("received credentials from origin_id: {}, connection_id: {}", .{
+            message.headers.origin_id,
+            message.headers.connection_id,
+        });
 
-        // log.debug("received credentials from origin_id: {}, connection_id: {}", .{
-        //     message.headers.origin_id,
-        //     message.headers.connection_id,
-        // });
+        const reply = try self.node.memory_pool.create();
+        errdefer self.node.memory_pool.destroy(reply);
 
-        // const reply = try self.node.memory_pool.create();
-        // errdefer self.node.memory_pool.destroy(reply);
+        reply.* = Message.new2(.reply);
+        reply.setTransactionId(message.transactionId());
+        reply.setErrorCode(.ok);
+        reply.ref();
+        errdefer reply.deref();
 
-        // reply.* = Message.new2(.reply);
-        // reply.setTransactionId(message.transactionId());
-        // reply.setErrorCode(.ok);
-        // reply.ref();
-        // errdefer reply.deref();
+        if (conn.connection_id != message.headers.connection_id) {
+            log.err("unexpected connection_id on authentication", .{});
+            reply.setErrorCode(.err);
+        }
 
-        // // TODO: use the node authenticator to figure out how to
-        // const authenticator = self.node.authenticator;
+        const authenticator = self.node.authenticator;
 
-        // switch (authenticator.strategy_type) {
-        //     .none => {
-        //         const ctx: NoneAuthStrategy.Context = .{};
-        //         if (!authenticator.authenticate(&ctx)) reply.setErrorCode(.unauthorized);
-        //     },
-        //     .token => {
-        //         const ctx: TokenAuthStrategy.Context = .{ .token = message.body() };
-        //         if (!authenticator.authenticate(&ctx)) reply.setErrorCode(.unauthorized);
-        //     },
-        // }
+        switch (authenticator.strategy_type) {
+            .none => {
+                const ctx: NoneAuthStrategy.Context = .{};
+                if (!authenticator.authenticate(&ctx)) reply.setErrorCode(.unauthorized);
+            },
+            .token => {
+                const ctx: TokenAuthStrategy.Context = .{ .token = message.body() };
+                if (!authenticator.authenticate(&ctx)) reply.setErrorCode(.unauthorized);
+            },
+        }
 
-        // try conn.outbox.enqueue(reply);
+        try conn.outbox.enqueue(reply);
     }
 
     fn handlePingMessage(self: *Self, conn: *Connection, message: *Message) !void {

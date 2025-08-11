@@ -38,6 +38,8 @@ const ConnectionMessages = @import("../data_structures/connection_messages.zig")
 const Envelope = @import("../data_structures/envelope.zig").Envelope;
 
 const Authenticator = @import("./authenticator.zig").Authenticator;
+// const NoneAuthStrategy = @import("./authenticator.zig").NoneAuthStrategy;
+// const TokenAuthStrategy = @import("./authenticator.zig").TokenAuthStrategy;
 const AuthenticatorConfig = @import("./authenticator.zig").AuthenticatorConfig;
 
 pub const NodeConfig = struct {
@@ -425,6 +427,7 @@ pub const Node = struct {
                     .unadvertise => try self.handleUnadvertise(message),
                     .request => try self.handleRequest(message),
                     .reply => try self.handleReply(message),
+                    // .credentials => try self.handleCredentials(message),
                     else => |t| {
                         log.err("received unhandled message type {any}", .{t});
                         @panic("unhandled message!");
@@ -959,6 +962,44 @@ pub const Node = struct {
         message.ref();
         service.replies_queue.enqueue(message) catch message.deref();
     }
+
+    // fn handleCredentials(self: *Self, message: *Message) !void {
+    //     defer {
+    //         message.deref();
+    //         if (message.refs() == 0) self.node.memory_pool.destroy(message);
+    //     }
+
+    //     log.debug("received credentials from origin_id: {}, connection_id: {}", .{
+    //         message.headers.origin_id,
+    //         message.headers.connection_id,
+    //     });
+
+    //     const reply = try self.node.memory_pool.create();
+    //     errdefer self.node.memory_pool.destroy(reply);
+
+    //     reply.* = Message.new2(.reply);
+    //     reply.setTransactionId(message.transactionId());
+    //     reply.setErrorCode(.ok);
+    //     reply.ref();
+    //     errdefer reply.deref();
+
+    //     // TODO: use the node authenticator to figure out how to
+    //     const authenticator = self.node.authenticator;
+
+    //     switch (authenticator.strategy_type) {
+    //         .none => {
+    //             const ctx: NoneAuthStrategy.Context = .{};
+    //             if (!authenticator.authenticate(&ctx)) reply.setErrorCode(.unauthorized);
+    //         },
+    //         .token => {
+    //             const ctx: TokenAuthStrategy.Context = .{ .token = message.body() };
+    //             if (!authenticator.authenticate(&ctx)) reply.setErrorCode(.unauthorized);
+    //         },
+    //     }
+
+    //     const conn_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
+    //     try conn_outbox.enqueue(reply);
+    // }
 
     fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
         _ = options;

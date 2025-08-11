@@ -43,6 +43,11 @@ pub const ProtocolVersion = enum(u8) {
     v1,
 };
 
+pub const ChallengeMethod = enum(u8) {
+    none,
+    token,
+};
+
 pub const Message = struct {
     const Self = @This();
     headers: Headers,
@@ -1100,8 +1105,7 @@ pub const AuthenticationChallenge = extern struct {
     padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
     transaction_id: u128 = 0,
-    nonce: u128 = 0, // 16 byte number
-    method: u8 = 0,
+    method: ChallengeMethod = .none,
 
     reserved: [31]u8 = [_]u8{0} ** 31,
 
@@ -1125,6 +1129,17 @@ pub const AuthenticationChallenge = extern struct {
     }
 };
 
+/// The `body_buffer` of the `Credentials` message contains the contents of the challenge message and creds.
+/// example 1:
+///     message.headers.method = .none
+///     message.headers.encoding = .cbor
+///     ------- therefore
+///     body_buffer = "",
+/// example 2:
+///     message.headers.method = .token
+///     message.headers.encoding = .cbor
+///     ------- therefore
+///     body_buffer = token,
 pub const Credentials = extern struct {
     comptime {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
@@ -1142,10 +1157,9 @@ pub const Credentials = extern struct {
     padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
     transaction_id: u128 = 0,
-    method: u8 = 0, // none/token
-    encoding: u8 = 0, // none/cbor/json
+    method: ChallengeMethod = .none,
 
-    reserved: [46]u8 = [_]u8{0} ** 46,
+    reserved: [47]u8 = [_]u8{0} ** 47,
 
     pub fn validate(self: @This()) ?[]const u8 {
         assert(self.message_type == .credentials);
