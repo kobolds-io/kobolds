@@ -22,6 +22,9 @@ const InboundConnectionConfig = @import("../protocol/connection.zig").InboundCon
 const Message = @import("../protocol/message.zig").Message;
 const Accept = @import("../protocol/message.zig").Accept;
 
+const NoneAuthStrategy = @import("../node/authenticator.zig").NoneAuthStrategy;
+const TokenAuthStrategy = @import("../node/authenticator.zig").TokenAuthStrategy;
+
 const WorkerState = enum {
     running,
     closing,
@@ -415,6 +418,7 @@ pub const Worker = struct {
                     .accept => try self.handleAcceptMessage(conn, message),
                     .ping => try self.handlePingMessage(conn, message),
                     .pong => try self.handlePongMessage(conn, message),
+                    .credentials => try self.handleCredentialsMessage(conn, message),
                     else => {
                         // NOTE: This message type is meant to be handled by the node
                         self.inbox_mutex.lock();
@@ -529,6 +533,49 @@ pub const Worker = struct {
                 });
             },
         }
+    }
+
+    // FIX: the `node` should be the one to validate this message. We need to ensure that this conn.connection_id
+    // matches the message.origin_id
+    fn handleCredentialsMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        _ = self;
+        _ = conn;
+        _ = message;
+
+        // defer {
+        //     message.deref();
+        //     if (message.refs() == 0) self.node.memory_pool.destroy(message);
+        // }
+
+        // log.debug("received credentials from origin_id: {}, connection_id: {}", .{
+        //     message.headers.origin_id,
+        //     message.headers.connection_id,
+        // });
+
+        // const reply = try self.node.memory_pool.create();
+        // errdefer self.node.memory_pool.destroy(reply);
+
+        // reply.* = Message.new2(.reply);
+        // reply.setTransactionId(message.transactionId());
+        // reply.setErrorCode(.ok);
+        // reply.ref();
+        // errdefer reply.deref();
+
+        // // TODO: use the node authenticator to figure out how to
+        // const authenticator = self.node.authenticator;
+
+        // switch (authenticator.strategy_type) {
+        //     .none => {
+        //         const ctx: NoneAuthStrategy.Context = .{};
+        //         if (!authenticator.authenticate(&ctx)) reply.setErrorCode(.unauthorized);
+        //     },
+        //     .token => {
+        //         const ctx: TokenAuthStrategy.Context = .{ .token = message.body() };
+        //         if (!authenticator.authenticate(&ctx)) reply.setErrorCode(.unauthorized);
+        //     },
+        // }
+
+        // try conn.outbox.enqueue(reply);
     }
 
     fn handlePingMessage(self: *Self, conn: *Connection, message: *Message) !void {

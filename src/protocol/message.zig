@@ -20,7 +20,7 @@ pub const MessageType = enum(u8) {
     publish,
     subscribe,
     unsubscribe,
-    authenticate,
+    credentials,
 };
 
 pub const ErrorCode = enum(u8) {
@@ -238,8 +238,8 @@ pub const Message = struct {
                 var headers: *Unsubscribe = self.headers.into(.unsubscribe).?;
                 headers.transaction_id = v;
             },
-            .authenticate => {
-                var headers: *Authenticate = self.headers.into(.authenticate).?;
+            .credentials => {
+                var headers: *Credentials = self.headers.into(.credentials).?;
                 headers.transaction_id = v;
             },
             else => unreachable,
@@ -280,8 +280,8 @@ pub const Message = struct {
                 const headers: *const Unsubscribe = self.headers.intoConst(.unsubscribe).?;
                 return headers.transaction_id;
             },
-            .authenticate => {
-                const headers: *const Authenticate = self.headers.intoConst(.authenticate).?;
+            .credentials => {
+                const headers: *const Credentials = self.headers.intoConst(.credentials).?;
                 return headers.transaction_id;
             },
             else => unreachable,
@@ -495,8 +495,8 @@ pub const Message = struct {
                 const headers: *const Unsubscribe = self.headers.intoConst(.unsubscribe).?;
                 return headers.validate();
             },
-            .authenticate => {
-                const headers: *const Authenticate = self.headers.intoConst(.authenticate).?;
+            .credentials => {
+                const headers: *const Credentials = self.headers.intoConst(.credentials).?;
                 return headers.validate();
             },
             else => "unsupported message type",
@@ -526,7 +526,7 @@ pub const Headers = extern struct {
         return switch (message_type) {
             .accept => Accept,
             .advertise => Advertise,
-            .authenticate => Authenticate,
+            .credentials => Credentials,
             .ping => Ping,
             .pong => Pong,
             .publish => Publish,
@@ -593,7 +593,7 @@ pub const Headers = extern struct {
             8 => MessageType.publish,
             9 => MessageType.subscribe,
             10 => MessageType.unsubscribe,
-            11 => MessageType.authenticate,
+            11 => MessageType.credentials,
             else => MessageType.undefined,
         };
         i += 1;
@@ -1083,7 +1083,7 @@ pub const Unsubscribe = extern struct {
     }
 };
 
-pub const Authenticate = extern struct {
+pub const AuthenticationChallenge = extern struct {
     comptime {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
@@ -1100,11 +1100,55 @@ pub const Authenticate = extern struct {
     padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
 
     transaction_id: u128 = 0,
+    nonce: u128 = 0, // 16 byte number
+    method: u8 = 0,
 
-    reserved: [48]u8 = [_]u8{0} ** 48,
+    reserved: [31]u8 = [_]u8{0} ** 31,
 
     pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .authenticate);
+        assert(self.message_type == .credentials);
+
+        // common headers
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure this body_length is valid
+        if (self.body_length == 0) return "invalid body_length";
+
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
+        return null;
+    }
+};
+
+pub const Credentials = extern struct {
+    comptime {
+        assert(@sizeOf(@This()) == @sizeOf(Headers));
+    }
+
+    origin_id: u128 = 0,
+    connection_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
+    body_length: u16 = 0,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .credentials,
+    compression: Compression = .none,
+    compressed: bool = false,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
+
+    transaction_id: u128 = 0,
+    method: u8 = 0, // none/token
+    encoding: u8 = 0, // none/cbor/json
+
+    reserved: [46]u8 = [_]u8{0} ** 46,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .credentials);
 
         // common headers
         if (self.protocol_version == .unsupported) return "invalid protocol_version";

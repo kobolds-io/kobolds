@@ -6,7 +6,7 @@ const AuthenticationStrategyType = enum {
     token,
 };
 
-const NoneAuthStrategy = struct {
+pub const NoneAuthStrategy = struct {
     const Self = @This();
 
     pub const Context = struct {};
@@ -23,7 +23,7 @@ const NoneAuthStrategy = struct {
     pub fn deinit(_: *Self) void {}
 };
 
-const TokenAuthStrategy = struct {
+pub const TokenAuthStrategy = struct {
     const Self = @This();
 
     pub const Config = struct {

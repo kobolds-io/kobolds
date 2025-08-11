@@ -98,18 +98,19 @@ const ConnectionType = enum {
     outbound,
 };
 
+const ConnectionState = enum {
+    disconnected,
+    connecting,
+    connected,
+    closing,
+    closed,
+    err,
+};
+
 const ConnectionConfig = union(ConnectionType) {
     inbound: InboundConnectionConfig,
     outbound: OutboundConnectionConfig,
 };
-
-const ConnectionState = enum {
-    closing,
-    closed,
-    connected,
-    connecting,
-};
-
 const ConnectionMetrics = struct {
     bytes_recv_total: u128 = 0,
     bytes_send_total: u128 = 0,
