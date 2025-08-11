@@ -218,6 +218,10 @@ pub const Worker = struct {
 
         // Since this is an inbound connection, we have already accepted the socket
         conn.connection_state = .connected;
+        conn.protocol_state = .inactive;
+        errdefer conn.protocol_state = .terminating;
+
+        // Protocol State
 
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
@@ -243,6 +247,7 @@ pub const Worker = struct {
         // TODO: challenge this connection w/ authentication
 
         try conn.outbox.enqueue(accept_message);
+        conn.protocol_state = .accepting;
 
         log.info("worker: {} added connection {}", .{ self.id, conn_id });
     }

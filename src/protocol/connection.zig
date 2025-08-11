@@ -11,7 +11,6 @@ const constants = @import("../constants.zig");
 const Message = @import("../protocol/message.zig").Message;
 const Parser = @import("../protocol/parser.zig").Parser;
 const Accept = @import("../protocol/message.zig").Accept;
-const ProtocolState = @import("../protocol/protocol_state.zig").ProtocolState;
 
 const IO = @import("../io.zig").IO;
 const ProtocolError = @import("../errors.zig").ProtocolError;
@@ -106,6 +105,15 @@ const ConnectionState = enum {
     closing,
     closed,
     err,
+};
+
+const ProtocolState = enum {
+    inactive,
+    accepting,
+    authenticating,
+    ready,
+    terminating,
+    terminated,
 };
 
 const ConnectionConfig = union(ConnectionType) {

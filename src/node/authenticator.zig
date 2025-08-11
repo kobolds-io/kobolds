@@ -1,10 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
+const ChallengeMethod = @import("../protocol/message.zig").ChallengeMethod;
 
-const AuthenticationStrategyType = enum {
-    none,
-    token,
-};
+const AuthenticationStrategyType = ChallengeMethod;
 
 pub const NoneAuthStrategy = struct {
     const Self = @This();
@@ -13,7 +11,7 @@ pub const NoneAuthStrategy = struct {
     pub const Config = struct {};
 
     pub const Challenge = struct {
-        method: AuthenticationStrategyType.none,
+        challenge_method: AuthenticationStrategyType.none,
     };
 
     pub const ChallengeContext = struct {};
@@ -28,7 +26,7 @@ pub const NoneAuthStrategy = struct {
 
     pub fn challenge(_: *Self, _: ChallengeContext) Challenge {
         return Challenge{
-            .method = .none,
+            .challenge_method = .none,
         };
     }
 
@@ -47,7 +45,7 @@ pub const TokenAuthStrategy = struct {
     };
 
     pub const Challenge = struct {
-        method: AuthenticationStrategyType.token,
+        challenge_method: AuthenticationStrategyType.token,
     };
 
     pub const ChallengeContext = struct {};
@@ -80,7 +78,7 @@ pub const TokenAuthStrategy = struct {
 
     pub fn challenge(_: *Self, _: ChallengeContext) Challenge {
         return Challenge{
-            .method = .token,
+            .challenge_method = .token,
         };
     }
 
