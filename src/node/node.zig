@@ -38,8 +38,6 @@ const ConnectionMessages = @import("../data_structures/connection_messages.zig")
 const Envelope = @import("../data_structures/envelope.zig").Envelope;
 
 const Authenticator = @import("./authenticator.zig").Authenticator;
-// const NoneAuthStrategy = @import("./authenticator.zig").NoneAuthStrategy;
-// const TokenAuthStrategy = @import("./authenticator.zig").TokenAuthStrategy;
 const AuthenticatorConfig = @import("./authenticator.zig").AuthenticatorConfig;
 
 pub const NodeConfig = struct {
