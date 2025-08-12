@@ -1160,9 +1160,6 @@ pub const Challenge = extern struct {
         if (self.protocol_version == .unsupported) return "invalid protocol_version";
         for (self.padding) |b| if (b != 0) return "invalid padding";
 
-        // ensure this body_length is valid
-        if (self.body_length == 0) return "invalid body_length";
-
         // ensure this transaction is valid
         if (self.transaction_id == 0) return "invalid transaction_id";
 

@@ -139,6 +139,20 @@ pub const Authenticator = struct {
             },
         };
     }
+
+    pub fn getChallengeMethod(self: *Self) ChallengeMethod {
+        return switch (self.strategy) {
+            .none => return .none,
+            .token => return .token,
+        };
+    }
+
+    pub fn getChallengePayload(self: *Self) []const u8 {
+        return switch (self.strategy) {
+            .none => return "",
+            .token => return "",
+        };
+    }
 };
 
 test "init/deinit" {

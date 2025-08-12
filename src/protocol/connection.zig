@@ -513,13 +513,16 @@ pub const Connection = struct {
         self.send_submitted = false;
     }
 
-    pub fn onConnect(self: *Connection, completion: *IO.Completion, result: IO.ConnectError!void) void {
+    pub fn onConnect(self: *Connection, _: *IO.Completion, result: IO.ConnectError!void) void {
         self.connect_submitted = false;
 
-        _ = completion;
         result catch |err| {
             log.err("onConnect err closing conn {any}", .{err});
             self.connection_state = .closing;
+            return;
         };
+
+        self.connection_state = .connected;
+        // self.protocol_state = .accepting;
     }
 };

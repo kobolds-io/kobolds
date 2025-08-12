@@ -218,7 +218,6 @@ pub const Worker = struct {
 
         // Since this is an inbound connection, we have already accepted the socket
         conn.connection_state = .connected;
-        conn.protocol_state = .inactive;
         errdefer conn.protocol_state = .terminating;
 
         // Protocol State
@@ -229,11 +228,10 @@ pub const Worker = struct {
         try self.connections.put(conn_id, conn);
         errdefer _ = self.connections.remove(conn_id);
 
-        const accept_message = self.node.memory_pool.create() catch |err| {
-            log.err("unable to create an accept message for connection {any}", .{err});
-            conn.connection_state = .closing;
-            return;
-        };
+        conn.protocol_state = .accepting;
+        const accept_message = try self.node.memory_pool.create();
+        errdefer self.node.memory_pool.destroy(accept_message);
+
         accept_message.* = Message.new2(.accept);
         accept_message.ref();
         errdefer accept_message.deref();
@@ -244,10 +242,24 @@ pub const Worker = struct {
 
         assert(accept_message.validate() == null);
 
-        // TODO: challenge this connection w/ authentication
-
         try conn.outbox.enqueue(accept_message);
-        conn.protocol_state = .accepting;
+
+        conn.protocol_state = .authenticating;
+
+        const challenge_method = self.node.authenticator.getChallengeMethod();
+        const challenge_payload = self.node.authenticator.getChallengePayload();
+
+        const challenge_message = try self.node.memory_pool.create();
+        errdefer self.node.memory_pool.destroy(challenge_message);
+
+        challenge_message.* = Message.new2(.challenge);
+        challenge_message.setTransactionId(uuid.v7.new());
+        challenge_message.setChallengeMethod(challenge_method);
+        challenge_message.setBody(challenge_payload);
+        challenge_message.ref();
+        errdefer challenge_message.deref();
+
+        assert(challenge_message.validate() == null);
 
         log.info("worker: {} added connection {}", .{ self.id, conn_id });
     }
