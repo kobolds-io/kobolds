@@ -523,6 +523,5 @@ pub const Connection = struct {
         };
 
         self.connection_state = .connected;
-        // self.protocol_state = .accepting;
     }
 };

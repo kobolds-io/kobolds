@@ -245,7 +245,6 @@ pub const Worker = struct {
         try conn.outbox.enqueue(accept_message);
 
         conn.protocol_state = .authenticating;
-
         const challenge_method = self.node.authenticator.getChallengeMethod();
         const challenge_payload = self.node.authenticator.getChallengePayload();
 
@@ -260,6 +259,8 @@ pub const Worker = struct {
         errdefer challenge_message.deref();
 
         assert(challenge_message.validate() == null);
+
+        try conn.outbox.enqueue(challenge_message);
 
         log.info("worker: {} added connection {}", .{ self.id, conn_id });
     }
@@ -386,9 +387,6 @@ pub const Worker = struct {
             }
 
             log.debug("conn.connection_state {any}", .{conn.connection_state});
-
-            // // FIX: skip this connection if rate limited
-            // if (self.checkConnRateLimit(conn)) continue;
 
             conn.tick() catch |err| {
                 log.err("could not tick connection error: {any}", .{err});

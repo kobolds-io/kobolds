@@ -37,9 +37,18 @@ const SubscribeOptions = struct {};
 const RequestOptions = struct {};
 const AdvertiseOptions = struct {};
 
+const AuthenticationConfig = struct {
+    token: ?TokenAuthConfig = null,
+};
+
+const TokenAuthConfig = struct {
+    token: []const u8,
+};
+
 pub const ClientConfig = struct {
     max_connections: u16 = 100,
     memory_pool_capacity: usize = 1_000,
+    authentication_config: ?AuthenticationConfig = .{},
 };
 
 const ClientState = enum {
@@ -404,6 +413,7 @@ pub const Client = struct {
 
                 switch (message.headers.message_type) {
                     .accept => try self.handleAcceptMessage(conn, message),
+                    .challenge => try self.handleChallengeMessage(conn, message),
                     else => {
                         log.err("received unexpected message {any}", .{message.headers.message_type});
                         message.deref();
@@ -543,6 +553,8 @@ pub const Client = struct {
         conn.peer_id = message.headers.origin_id;
 
         conn.connection_state = .connected;
+        conn.protocol_state = .authenticating;
+
         log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
             conn.origin_id,
             conn.connection_id,
@@ -560,28 +572,14 @@ pub const Client = struct {
         // ensure that this connection is fully connected
         assert(conn.connection_state == .connected);
 
-        // ensure the client.connection is expecting this accept message
-        assert(conn.protocol_state == .accepting);
+        // ensure the client.connection is expecting this challenge message
+        assert(conn.protocol_state == .authenticating);
 
-        // assert(conn.connection_state != .connected);
-        // ensure that this connection_id is not set
-        assert(conn.connection_id == 0);
+        // TODO: send a credentials message to the node
 
-        // An error here would be a protocol error
-        assert(conn.peer_id != message.headers.origin_id);
-        assert(conn.connection_id != message.headers.connection_id);
-
-        conn.connection_id = message.headers.connection_id;
-        conn.peer_id = message.headers.origin_id;
-
-        conn.connection_state = .connected;
-        log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
-            conn.origin_id,
-            conn.connection_id,
-            conn.peer_id,
-            conn.config.outbound.peer_type,
-        });
+        log.debug("figure out how to have the client send the proper response", .{});
     }
+
     fn handlePongMessage(self: *Self, conn: *Connection, message: *Message) !void {
         _ = conn;
         defer {
