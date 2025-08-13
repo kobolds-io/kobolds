@@ -284,11 +284,26 @@ pub const Client = struct {
                 conn.connection_state,
                 conn.protocol_state,
             });
+
+            // FIX: fix this so that we gracefully exit the connect function when we have a bad error
+
+            // switch (conn.connection_state) {
+            //     .disconnected, .connecting => continue,
+            //     .err, .closed, .closing => return error.ConnectionFailed,
+            //     .connected => {},
+            // }
+
+            // switch (conn.protocol_state) {
+            //     .ready => return conn,
+            //     .terminating, .terminated => return error.ConnectionTerminated,
+            //     else => {},
+            // }
+
             if (conn.connection_state == .connected and conn.protocol_state == .ready) return conn;
 
-            // FIX: this is some baaaaad code. There should instead be a signal or channel that this thread could
-            // wait on instead. Since this call happens on a foreground thread, an unbuffered channel seems the most
-            // appropriate.
+            // // FIX: this is some baaaaad code. There should instead be a signal or channel that this thread could
+            // // wait on instead. Since this call happens on a foreground thread, an unbuffered channel seems the most
+            // // appropriate.
             std.time.sleep(constants.io_tick_ms * std.time.ns_per_ms);
         } else {
             return error.DeadlineExceeded;
@@ -350,6 +365,15 @@ pub const Client = struct {
         while (uninitialized_connections_iter.next()) |entry| {
             const tmp_id = entry.key_ptr.*;
             const conn = entry.value_ptr.*;
+
+            switch (conn.protocol_state) {
+                .terminating => {
+                    log.debug("need to clean up any thing related to this connection", .{});
+                    conn.protocol_state = .terminated;
+                    conn.connection_state = .closing;
+                },
+                else => {},
+            }
 
             // check if this connection was closed for whatever reason
             if (conn.connection_state == .closed) {
@@ -698,16 +722,17 @@ pub const Client = struct {
         _ = self.uninitialized_connections.remove(tmp_id);
         log.info("client: {} removed uninitialized_connection {}", .{ self.id, conn.connection_id });
 
-        conn.deinit();
-        self.allocator.destroy(conn);
+        // conn.deinit();
+        // self.allocator.destroy(conn);
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {
         _ = self.connections.remove(conn.connection_id);
 
         log.info("client: {} removed connection {}", .{ self.id, conn.connection_id });
-        conn.deinit();
-        self.allocator.destroy(conn);
+
+        // conn.deinit();
+        // self.allocator.destroy(conn);
     }
 
     fn closeAllConnections(self: *Self) bool {

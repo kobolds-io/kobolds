@@ -37,7 +37,7 @@ var client_config = ClientConfig{
     .max_connections = 100,
     .authentication_config = .{
         .token_config = .{
-            .token = "asdf",
+            .token = "asd",
         },
     },
 };
