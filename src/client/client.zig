@@ -20,6 +20,7 @@ const RingBuffer = @import("stdx").RingBuffer;
 
 const Message = @import("../protocol/message.zig").Message;
 const Accept = @import("../protocol/message.zig").Accept;
+const AuthChallenge = @import("../protocol/message.zig").AuthChallenge;
 const Connection = @import("../protocol/connection.zig").Connection;
 
 const Topic = @import("../pubsub/topic.zig").Topic;
@@ -38,7 +39,7 @@ const RequestOptions = struct {};
 const AdvertiseOptions = struct {};
 
 const AuthenticationConfig = struct {
-    token: ?TokenAuthConfig = null,
+    token_config: ?TokenAuthConfig = null,
 };
 
 const TokenAuthConfig = struct {
@@ -279,7 +280,11 @@ pub const Client = struct {
 
         const deadline = std.time.nanoTimestamp() + timeout_ns;
         while (deadline > std.time.nanoTimestamp()) {
-            if (conn.connection_state == .connected and conn.connection_id != 0) return conn;
+            log.debug("conn.connection_state {any}, conn.protocol_state {any}", .{
+                conn.connection_state,
+                conn.protocol_state,
+            });
+            if (conn.connection_state == .connected and conn.protocol_state == .ready) return conn;
 
             // FIX: this is some baaaaad code. There should instead be a signal or channel that this thread could
             // wait on instead. Since this call happens on a foreground thread, an unbuffered channel seems the most
@@ -357,7 +362,7 @@ pub const Client = struct {
                 break;
             };
 
-            if (conn.connection_state == .connected and conn.connection_id != 0) {
+            if (conn.connection_state == .connected and conn.protocol_state == .ready) {
                 // the connection is now valid and ready for events
                 // move the connection to the regular connections map
                 try self.connections.put(conn.connection_id, conn);
@@ -413,7 +418,8 @@ pub const Client = struct {
 
                 switch (message.headers.message_type) {
                     .accept => try self.handleAcceptMessage(conn, message),
-                    .challenge => try self.handleChallengeMessage(conn, message),
+                    .auth_challenge => try self.handleAuthChallengeMessage(conn, message),
+                    .auth_result => try self.handleAuthResultMessage(conn, message),
                     else => {
                         log.err("received unexpected message {any}", .{message.headers.message_type});
                         message.deref();
@@ -563,7 +569,7 @@ pub const Client = struct {
         });
     }
 
-    fn handleChallengeMessage(self: *Self, conn: *Connection, message: *Message) !void {
+    fn handleAuthChallengeMessage(self: *Self, conn: *Connection, message: *Message) !void {
         defer {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
@@ -575,9 +581,57 @@ pub const Client = struct {
         // ensure the client.connection is expecting this challenge message
         assert(conn.protocol_state == .authenticating);
 
-        // TODO: send a credentials message to the node
+        const auth_challenge_message: *const AuthChallenge = message.headers.intoConst(.auth_challenge).?;
 
-        log.debug("figure out how to have the client send the proper response", .{});
+        const auth_response_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(auth_response_message);
+
+        auth_response_message.* = Message.new2(.auth_response);
+        auth_response_message.setTransactionId(message.transactionId());
+        auth_response_message.setChallengeMethod(auth_challenge_message.challenge_method);
+        auth_response_message.ref();
+        errdefer auth_response_message.deref();
+
+        switch (auth_challenge_message.challenge_method) {
+            .none => auth_response_message.setBody(""),
+            .token => {
+                if (self.config.authentication_config) |auth_config| {
+                    if (auth_config.token_config) |token_config| {
+                        auth_response_message.setBody(token_config.token);
+                    }
+                }
+            },
+        }
+
+        assert(auth_response_message.validate() == null);
+
+        try conn.outbox.enqueue(auth_response_message);
+
+        log.debug("sending auth_response", .{});
+    }
+
+    // FIX: this doesn't actually fulfill a transaction or enforce that THIS connection is the one authenticating
+    //   There should be a mechanism where we lookup and clear a transaction
+    pub fn handleAuthResultMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        log.info("here", .{});
+
+        assert(conn.connection_state == .connected);
+        assert(conn.protocol_state == .authenticating);
+
+        if (message.errorCode() != .ok) {
+            log.err("connection did not successfully authenticate. {any}", .{message.errorCode()});
+            conn.protocol_state = .terminating;
+            return;
+        }
+
+        log.info("connection successfully authenticated", .{});
+
+        conn.protocol_state = .ready;
     }
 
     fn handlePongMessage(self: *Self, conn: *Connection, message: *Message) !void {

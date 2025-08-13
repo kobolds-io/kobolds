@@ -248,19 +248,19 @@ pub const Worker = struct {
         const challenge_method = self.node.authenticator.getChallengeMethod();
         const challenge_payload = self.node.authenticator.getChallengePayload();
 
-        const challenge_message = try self.node.memory_pool.create();
-        errdefer self.node.memory_pool.destroy(challenge_message);
+        const auth_challenge_message = try self.node.memory_pool.create();
+        errdefer self.node.memory_pool.destroy(auth_challenge_message);
 
-        challenge_message.* = Message.new2(.challenge);
-        challenge_message.setTransactionId(uuid.v7.new());
-        challenge_message.setChallengeMethod(challenge_method);
-        challenge_message.setBody(challenge_payload);
-        challenge_message.ref();
-        errdefer challenge_message.deref();
+        auth_challenge_message.* = Message.new2(.auth_challenge);
+        auth_challenge_message.setTransactionId(uuid.v7.new());
+        auth_challenge_message.setChallengeMethod(challenge_method);
+        auth_challenge_message.setBody(challenge_payload);
+        auth_challenge_message.ref();
+        errdefer auth_challenge_message.deref();
 
-        assert(challenge_message.validate() == null);
+        assert(auth_challenge_message.validate() == null);
 
-        try conn.outbox.enqueue(challenge_message);
+        try conn.outbox.enqueue(auth_challenge_message);
 
         log.info("worker: {} added connection {}", .{ self.id, conn_id });
     }
@@ -386,8 +386,6 @@ pub const Worker = struct {
                 continue;
             }
 
-            log.debug("conn.connection_state {any}", .{conn.connection_state});
-
             conn.tick() catch |err| {
                 log.err("could not tick connection error: {any}", .{err});
                 continue;
@@ -438,6 +436,7 @@ pub const Worker = struct {
                     .accept => try self.handleAcceptMessage(conn, message),
                     .ping => try self.handlePingMessage(conn, message),
                     .pong => try self.handlePongMessage(conn, message),
+                    .auth_response => try self.handleAuthResponseMessage(conn, message),
                     else => {
                         // NOTE: This message type is meant to be handled by the node
                         self.inbox_mutex.lock();
@@ -558,29 +557,29 @@ pub const Worker = struct {
 
     // FIX: the `node` should be the one to validate this message.
     //  We need to ensure that this conn.connection_id matches the message.origin_id
-    fn handleCredentialsMessage(self: *Self, conn: *Connection, message: *Message) !void {
+    fn handleAuthResponseMessage(self: *Self, conn: *Connection, message: *Message) !void {
         defer {
             message.deref();
             if (message.refs() == 0) self.node.memory_pool.destroy(message);
         }
 
-        log.debug("received credentials from origin_id: {}, connection_id: {}", .{
+        log.debug("received auth_response from origin_id: {}, connection_id: {}", .{
             message.headers.origin_id,
             message.headers.connection_id,
         });
 
-        const reply = try self.node.memory_pool.create();
-        errdefer self.node.memory_pool.destroy(reply);
+        const auth_result = try self.node.memory_pool.create();
+        errdefer self.node.memory_pool.destroy(auth_result);
 
-        reply.* = Message.new2(.reply);
-        reply.setTransactionId(message.transactionId());
-        reply.setErrorCode(.ok);
-        reply.ref();
-        errdefer reply.deref();
+        auth_result.* = Message.new2(.auth_result);
+        auth_result.setTransactionId(message.transactionId());
+        auth_result.setErrorCode(.ok);
+        auth_result.ref();
+        errdefer auth_result.deref();
 
         if (conn.connection_id != message.headers.connection_id) {
             log.err("unexpected connection_id on authentication", .{});
-            reply.setErrorCode(.err);
+            auth_result.setErrorCode(.err);
         }
 
         const authenticator = self.node.authenticator;
@@ -588,15 +587,18 @@ pub const Worker = struct {
         switch (authenticator.strategy_type) {
             .none => {
                 const ctx: NoneAuthStrategy.Context = .{};
-                if (!authenticator.authenticate(&ctx)) reply.setErrorCode(.unauthorized);
+                if (!authenticator.authenticate(&ctx)) auth_result.setErrorCode(.unauthorized);
             },
             .token => {
                 const ctx: TokenAuthStrategy.Context = .{ .token = message.body() };
-                if (!authenticator.authenticate(&ctx)) reply.setErrorCode(.unauthorized);
+                if (!authenticator.authenticate(&ctx)) auth_result.setErrorCode(.unauthorized);
             },
         }
 
-        try conn.outbox.enqueue(reply);
+        if (auth_result.errorCode() != .ok) conn.protocol_state = .terminating;
+
+        try conn.outbox.enqueue(auth_result);
+        log.info("sending auth_result", .{});
     }
 
     fn handlePingMessage(self: *Self, conn: *Connection, message: *Message) !void {

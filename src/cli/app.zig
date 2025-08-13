@@ -337,6 +337,10 @@ pub fn nodePing() !void {
         .peer_type = .node,
     };
 
+    client_config.authentication_config = .{
+        .token_config = .{ .token = "asdf" },
+    };
+
     var client = try Client.init(allocator, client_config);
     defer client.deinit();
 

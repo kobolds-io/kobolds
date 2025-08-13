@@ -20,8 +20,9 @@ pub const MessageType = enum(u8) {
     publish,
     subscribe,
     unsubscribe,
-    credentials,
-    challenge,
+    auth_response,
+    auth_challenge,
+    auth_result,
 };
 
 pub const ErrorCode = enum(u8) {
@@ -244,12 +245,16 @@ pub const Message = struct {
                 var headers: *Unsubscribe = self.headers.into(.unsubscribe).?;
                 headers.transaction_id = v;
             },
-            .credentials => {
-                var headers: *Credentials = self.headers.into(.credentials).?;
+            .auth_challenge => {
+                var headers: *AuthChallenge = self.headers.into(.auth_challenge).?;
                 headers.transaction_id = v;
             },
-            .challenge => {
-                var headers: *Challenge = self.headers.into(.challenge).?;
+            .auth_response => {
+                var headers: *AuthResponse = self.headers.into(.auth_response).?;
+                headers.transaction_id = v;
+            },
+            .auth_result => {
+                var headers: *AuthResult = self.headers.into(.auth_result).?;
                 headers.transaction_id = v;
             },
             else => unreachable,
@@ -290,12 +295,16 @@ pub const Message = struct {
                 const headers: *const Unsubscribe = self.headers.intoConst(.unsubscribe).?;
                 return headers.transaction_id;
             },
-            .credentials => {
-                const headers: *const Credentials = self.headers.intoConst(.credentials).?;
+            .auth_response => {
+                const headers: *const AuthResponse = self.headers.intoConst(.auth_response).?;
                 return headers.transaction_id;
             },
-            .challenge => {
-                const headers: *const Challenge = self.headers.intoConst(.challenge).?;
+            .auth_challenge => {
+                const headers: *const AuthChallenge = self.headers.intoConst(.auth_challenge).?;
+                return headers.transaction_id;
+            },
+            .auth_result => {
+                const headers: *const AuthResult = self.headers.intoConst(.auth_result).?;
                 return headers.transaction_id;
             },
             else => unreachable,
@@ -313,6 +322,10 @@ pub const Message = struct {
                 var headers: *Pong = self.headers.into(.pong).?;
                 headers.error_code = v;
             },
+            .auth_result => {
+                var headers: *AuthResult = self.headers.into(.auth_result).?;
+                headers.error_code = v;
+            },
             else => unreachable,
         }
     }
@@ -327,6 +340,10 @@ pub const Message = struct {
                 const headers: *const Pong = self.headers.intoConst(.pong).?;
                 return headers.error_code;
             },
+            .auth_result => {
+                const headers: *const AuthResult = self.headers.intoConst(.auth_result).?;
+                return headers.error_code;
+            },
             else => unreachable,
         }
     }
@@ -334,12 +351,12 @@ pub const Message = struct {
     pub fn setChallengeMethod(self: *Self, v: ChallengeMethod) void {
         // This is an absolutely tedious way of handling setting fields.
         switch (self.headers.message_type) {
-            .challenge => {
-                var headers: *Challenge = self.headers.into(.challenge).?;
+            .auth_challenge => {
+                var headers: *AuthChallenge = self.headers.into(.auth_challenge).?;
                 headers.challenge_method = v;
             },
-            .credentials => {
-                var headers: *Credentials = self.headers.into(.credentials).?;
+            .auth_response => {
+                var headers: *AuthResponse = self.headers.into(.auth_response).?;
                 headers.challenge_method = v;
             },
             else => unreachable,
@@ -348,12 +365,12 @@ pub const Message = struct {
 
     pub fn challengeMethod(self: *Self) ErrorCode {
         switch (self.headers.message_type) {
-            .challenge => {
-                const headers: *const Challenge = self.headers.into(.challenge).?;
+            .auth_challenge => {
+                const headers: *const AuthChallenge = self.headers.into(.auth_challenge).?;
                 return headers.challenge_method;
             },
-            .credentials => {
-                const headers: *const Credentials = self.headers.into(.credentials).?;
+            .auth_response => {
+                const headers: *const AuthResponse = self.headers.into(.auth_response).?;
                 return headers.challenge_method;
             },
             else => unreachable,
@@ -538,12 +555,16 @@ pub const Message = struct {
                 const headers: *const Unsubscribe = self.headers.intoConst(.unsubscribe).?;
                 return headers.validate();
             },
-            .credentials => {
-                const headers: *const Credentials = self.headers.intoConst(.credentials).?;
+            .auth_response => {
+                const headers: *const AuthResponse = self.headers.intoConst(.auth_response).?;
                 return headers.validate();
             },
-            .challenge => {
-                const headers: *const Challenge = self.headers.intoConst(.challenge).?;
+            .auth_challenge => {
+                const headers: *const AuthChallenge = self.headers.intoConst(.auth_challenge).?;
+                return headers.validate();
+            },
+            .auth_result => {
+                const headers: *const AuthResult = self.headers.intoConst(.auth_result).?;
                 return headers.validate();
             },
             else => "unsupported message type",
@@ -573,8 +594,9 @@ pub const Headers = extern struct {
         return switch (message_type) {
             .accept => Accept,
             .advertise => Advertise,
-            .credentials => Credentials,
-            .challenge => Challenge,
+            .auth_response => AuthResponse,
+            .auth_challenge => AuthChallenge,
+            .auth_result => AuthResult,
             .ping => Ping,
             .pong => Pong,
             .publish => Publish,
@@ -641,8 +663,9 @@ pub const Headers = extern struct {
             8 => MessageType.publish,
             9 => MessageType.subscribe,
             10 => MessageType.unsubscribe,
-            11 => MessageType.credentials,
-            12 => MessageType.challenge,
+            11 => MessageType.auth_response,
+            12 => MessageType.auth_challenge,
+            13 => MessageType.auth_result,
             else => MessageType.undefined,
         };
         i += 1;
@@ -1132,7 +1155,7 @@ pub const Unsubscribe = extern struct {
     }
 };
 
-pub const Challenge = extern struct {
+pub const AuthChallenge = extern struct {
     comptime {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
@@ -1143,7 +1166,7 @@ pub const Challenge = extern struct {
     body_checksum: u64 = 0,
     body_length: u16 = 0,
     protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .challenge,
+    message_type: MessageType = .auth_challenge,
     compression: Compression = .none,
     compressed: bool = false,
     padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
@@ -1154,7 +1177,7 @@ pub const Challenge = extern struct {
     reserved: [47]u8 = [_]u8{0} ** 47,
 
     pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .challenge);
+        assert(self.message_type == .auth_challenge);
 
         // common headers
         if (self.protocol_version == .unsupported) return "invalid protocol_version";
@@ -1170,7 +1193,7 @@ pub const Challenge = extern struct {
     }
 };
 
-/// The `body_buffer` of the `Credentials` message contains the contents of the challenge message and creds.
+/// The `body_buffer` of the `AuthResponse` message contains the auth_response for the challenge.
 /// example 1:
 ///     message.headers.method = .none
 ///     message.headers.encoding = .cbor
@@ -1181,7 +1204,7 @@ pub const Challenge = extern struct {
 ///     message.headers.encoding = .cbor
 ///     ------- therefore
 ///     body_buffer = token,
-pub const Credentials = extern struct {
+pub const AuthResponse = extern struct {
     comptime {
         assert(@sizeOf(@This()) == @sizeOf(Headers));
     }
@@ -1192,7 +1215,7 @@ pub const Credentials = extern struct {
     body_checksum: u64 = 0,
     body_length: u16 = 0,
     protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .credentials,
+    message_type: MessageType = .auth_response,
     compression: Compression = .none,
     compressed: bool = false,
     padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
@@ -1203,14 +1226,49 @@ pub const Credentials = extern struct {
     reserved: [47]u8 = [_]u8{0} ** 47,
 
     pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .credentials);
+        assert(self.message_type == .auth_response);
 
         // common headers
         if (self.protocol_version == .unsupported) return "invalid protocol_version";
         for (self.padding) |b| if (b != 0) return "invalid padding";
 
-        // ensure this body_length is valid
-        if (self.body_length == 0) return "invalid body_length";
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
+        return null;
+    }
+};
+
+pub const AuthResult = extern struct {
+    comptime {
+        assert(@sizeOf(@This()) == @sizeOf(Headers));
+    }
+
+    origin_id: u128 = 0,
+    connection_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
+    body_length: u16 = 0,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .auth_result,
+    compression: Compression = .none,
+    compressed: bool = false,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
+
+    transaction_id: u128 = 0,
+    error_code: ErrorCode = .ok,
+
+    reserved: [47]u8 = [_]u8{0} ** 47,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .auth_result);
+
+        // common headers
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
 
         // ensure this transaction is valid
         if (self.transaction_id == 0) return "invalid transaction_id";
