@@ -38,11 +38,11 @@ const SubscribeOptions = struct {};
 const RequestOptions = struct {};
 const AdvertiseOptions = struct {};
 
-const AuthenticationConfig = struct {
+pub const AuthenticationConfig = struct {
     token_config: ?TokenAuthConfig = null,
 };
 
-const TokenAuthConfig = struct {
+pub const TokenAuthConfig = struct {
     token: []const u8,
 };
 
@@ -617,8 +617,6 @@ pub const Client = struct {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }
-
-        log.info("here", .{});
 
         assert(conn.connection_state == .connected);
         assert(conn.protocol_state == .authenticating);

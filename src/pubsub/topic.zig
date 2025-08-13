@@ -94,18 +94,6 @@ pub const Topic = struct {
         self.allocator.free(self.tmp_copy_buffer);
     }
 
-    // FIX: remove this function
-    pub fn enqueue(self: *Self, message: *Message) !void {
-        self.queue.enqueue(message) catch |err| {
-            // log.err("topic unable to enqueue message: {s}, err: {any}", .{ self.topic_name, err });
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
-            return err;
-        };
-
-        message.ref();
-    }
-
     pub fn tick(self: *Self) !void {
         // There are no messages needing to be distributed to subscribers
         if (self.queue.count == 0) return;

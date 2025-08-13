@@ -210,7 +210,7 @@ pub const Listener = struct {
             posix.close(socket);
         };
 
-        // the config is zero'd and allowed inbound connections from any address
+        // if the config is zero'd and allowed inbound connections from any address
         const unspecified_address = net.Address.parseIp("0.0.0.0", 0) catch unreachable;
 
         if (self.config.allowed_inbound_connection_configs) |allowed_inbound_connection_configs| {
@@ -220,7 +220,7 @@ pub const Listener = struct {
                     allowed_inbound_connection_config.host,
                     allowed_inbound_connection_config.port,
                 ) catch |err| {
-                    log.err("could not part allowed_inbound_connection address {any}", .{err});
+                    log.err("could not parse allowed_inbound_connection address {any}", .{err});
                     continue;
                 };
 

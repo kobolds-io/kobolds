@@ -220,8 +220,6 @@ pub const Worker = struct {
         conn.connection_state = .connected;
         errdefer conn.protocol_state = .terminating;
 
-        // Protocol State
-
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 

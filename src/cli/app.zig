@@ -12,21 +12,34 @@ const IO = @import("../io.zig").IO;
 
 const Node = @import("../node/node.zig").Node;
 const NodeConfig = @import("../node/node.zig").NodeConfig;
+
 const Client = @import("../client/client.zig").Client;
+const AuthenticationConfig = @import("../client/client.zig").AuthenticationConfig;
 const ClientConfig = @import("../client/client.zig").ClientConfig;
-const Transaction = @import("../client/client.zig").Transaction;
-const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
+
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
-const AuthenticatorConfig = @import("../node/authenticator.zig").AuthenticatorConfig;
+const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 const AllowedInboundConnectionConfig = @import("../node/listener.zig").AllowedInboundConnectionConfig;
+
+const AuthenticatorConfig = @import("../node/authenticator.zig").AuthenticatorConfig;
 const Signal = @import("stdx").Signal;
 
 var node_config = NodeConfig{
     .max_connections = 5,
+    .authenticator_config = .{
+        .token = .{
+            .tokens = &[_][]const u8{"asdf"},
+        },
+    },
 };
 
 var client_config = ClientConfig{
     .max_connections = 100,
+    .authentication_config = .{
+        .token_config = .{
+            .token = "asdf",
+        },
+    },
 };
 
 const RequestConfig = struct {
@@ -305,12 +318,6 @@ pub fn nodeListen() !void {
     const listener_configs = [_]ListenerConfig{ client_listener_config, node_listener_config };
     node_config.listener_configs = &listener_configs;
 
-    node_config.authenticator_config = AuthenticatorConfig{
-        .token = .{
-            .tokens = &[_][]const u8{"asdf"},
-        },
-    };
-
     var node = try Node.init(allocator, node_config);
     defer node.deinit();
 
@@ -335,10 +342,6 @@ pub fn nodePing() !void {
         .port = 8001,
         .transport = .tcp,
         .peer_type = .node,
-    };
-
-    client_config.authentication_config = .{
-        .token_config = .{ .token = "asdf" },
     };
 
     var client = try Client.init(allocator, client_config);
@@ -477,7 +480,7 @@ pub fn nodePublish() !void {
     var connections = std.ArrayList(*Connection).init(allocator);
     defer connections.deinit();
 
-    const CONNECTION_COUNT = 1;
+    const CONNECTION_COUNT = 3;
 
     for (0..CONNECTION_COUNT) |_| {
         const conn = try client.connect(outbound_connection_config, 10_000 * std.time.ns_per_ms);
@@ -492,8 +495,8 @@ pub fn nodePublish() !void {
     }
 
     const topic_name = "/test";
-    const body = "";
-    // const body = "a" ** constants.message_max_body_size;
+    // const body = "";
+    const body = "a" ** constants.message_max_body_size;
 
     registerSigintHandler();
 
@@ -505,7 +508,7 @@ pub fn nodePublish() !void {
                 continue;
             };
         }
-        std.time.sleep(100 * std.time.ns_per_us);
+        std.time.sleep(1 * std.time.ns_per_ms);
     }
 }
 
