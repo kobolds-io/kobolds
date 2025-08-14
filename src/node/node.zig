@@ -94,7 +94,6 @@ pub const Node = struct {
     close_channel: *UnbufferedChannel(bool),
     config: NodeConfig,
     connection_outboxes: std.AutoHashMap(u128, *RingBuffer(Envelope)),
-    connections: *std.AutoHashMap(u128, *Connection),
     done_channel: *UnbufferedChannel(bool),
     id: uuid.Uuid,
     inbox: *RingBuffer(*Message),
@@ -141,12 +140,6 @@ pub const Node = struct {
         workers.* = std.AutoHashMap(usize, *Worker).init(allocator);
         errdefer workers.deinit();
 
-        const connections = try allocator.create(std.AutoHashMap(u128, *Connection));
-        errdefer allocator.destroy(connections);
-
-        connections.* = std.AutoHashMap(u128, *Connection).init(allocator);
-        errdefer connections.deinit();
-
         const memory_pool = try allocator.create(MemoryPool(Message));
         errdefer allocator.destroy(memory_pool);
 
@@ -176,7 +169,6 @@ pub const Node = struct {
             .close_channel = close_channel,
             .config = config,
             .connection_outboxes = std.AutoHashMap(u128, *RingBuffer(Envelope)).init(allocator),
-            .connections = connections,
             .done_channel = done_channel,
             .id = uuid.v7.new(),
             .inbox = inbox,
@@ -199,14 +191,6 @@ pub const Node = struct {
             const listener = entry.*;
             listener.deinit();
             self.allocator.destroy(listener);
-        }
-
-        var connections_iter = self.connections.valueIterator();
-        while (connections_iter.next()) |entry| {
-            const connection = entry.*;
-
-            connection.deinit();
-            self.allocator.destroy(connection);
         }
 
         var workers_iterator = self.workers.valueIterator();
@@ -252,7 +236,6 @@ pub const Node = struct {
         self.workers.deinit();
         self.memory_pool.deinit();
         self.io.deinit();
-        self.connections.deinit();
         self.topics.deinit();
         self.services.deinit();
         self.inbox.deinit();
@@ -260,7 +243,6 @@ pub const Node = struct {
         self.authenticator.deinit();
 
         self.allocator.destroy(self.close_channel);
-        self.allocator.destroy(self.connections);
         self.allocator.destroy(self.done_channel);
         self.allocator.destroy(self.inbox);
         self.allocator.destroy(self.io);
@@ -703,7 +685,7 @@ pub const Node = struct {
             for (outbound_configs) |outbound_config| {
                 switch (outbound_config.transport) {
                     .tcp => {
-                        _ = try self.addOutboundConnectionToNextWorker(outbound_config);
+                        try self.addOutboundConnectionToNextWorker(outbound_config);
                     },
                 }
             }
@@ -758,7 +740,7 @@ pub const Node = struct {
         try worker.addInboundConnection(socket, config);
     }
 
-    fn addOutboundConnectionToNextWorker(self: *Self, config: OutboundConnectionConfig) !ConnectionHandle {
+    fn addOutboundConnectionToNextWorker(self: *Self, config: OutboundConnectionConfig) !void {
         var worker_iter = self.workers.valueIterator();
         var worker_with_min_connections: ?*Worker = null;
         var min_connections: u32 = 0;
@@ -780,14 +762,7 @@ pub const Node = struct {
         if (worker_with_min_connections == null) unreachable;
         const worker = worker_with_min_connections.?;
 
-        const connection = try worker.addOutboundConnection(config);
-
-        const ch = ConnectionHandle{
-            .connection = connection,
-            .worker = worker,
-        };
-
-        return ch;
+        try worker.addOutboundConnection(config);
     }
 
     fn handlePublish(self: *Self, message: *Message) !void {
