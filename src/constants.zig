@@ -17,10 +17,12 @@ pub const message_min_size = @sizeOf(Headers);
 pub const parser_max_buffer_size = (1024 * 256) * 2; // TODO: this number needs to be adjusted
 
 /// The number of bytes used as the recv buffer in each connection
-pub const connection_recv_buffer_size = (1024 * 256) - message_max_size;
+// pub const connection_recv_buffer_size = (1024 * 256);
+pub const connection_recv_buffer_size = (1024 * 64);
 
 /// The number of bytes used as the send buffer in each connection
-pub const connection_send_buffer_size = (1024 * 256) - message_max_size;
+// pub const connection_send_buffer_size = (1024 * 256);
+pub const connection_send_buffer_size = (1024 * 64);
 
 /// The number of milliseconds the IO instance will wait until it flushes
 /// submissions and completions.
