@@ -300,6 +300,7 @@ pub fn nodeListen() !void {
         .host = "0.0.0.0",
     };
     const allowed_inbound_connection_configs = [_]AllowedInboundConnectionConfig{allowed_inbound_connection_config};
+
     const client_listener_config = ListenerConfig{
         .host = "127.0.0.1",
         .port = 8000,
@@ -307,6 +308,7 @@ pub fn nodeListen() !void {
         .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
         .peer_type = .client,
     };
+
     const node_listener_config = ListenerConfig{
         .host = "127.0.0.1",
         .port = 8001,
