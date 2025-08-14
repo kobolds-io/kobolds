@@ -37,7 +37,7 @@ var client_config = ClientConfig{
     .max_connections = 100,
     .authentication_config = .{
         .token_config = .{
-            .token = "asd",
+            .token = "asdf",
         },
     },
 };
@@ -350,16 +350,21 @@ pub fn nodePing() !void {
     try client.start();
     defer client.close();
 
+    var timer = try std.time.Timer.start();
+
+    const total_start = timer.read();
+    const connect_start = timer.read();
+
     const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
     defer client.disconnect(conn);
+
+    const connect_end = timer.read();
 
     var signals = std.ArrayList(*Signal(*Message)).init(allocator);
     defer signals.deinit();
 
     const ITERATIONS: usize = 1;
 
-    var timer = try std.time.Timer.start();
-    const total_start = timer.read();
     for (0..ITERATIONS) |_| {
         const signal = try allocator.create(Signal(*Message));
         errdefer allocator.destroy(signal);
@@ -373,44 +378,42 @@ pub fn nodePing() !void {
         }
     }
 
+    const send_start = timer.read();
     var i: usize = 0;
     while (i < ITERATIONS) {
-        const send_start = timer.read();
         const signal = signals.items[i];
         client.ping(conn, signal, .{}) catch {
             std.time.sleep(1 * std.time.ns_per_ms);
             continue;
         };
-        const send_end = timer.read();
-
-        const send_time = (send_end - send_start) / std.time.ns_per_ms;
-        if (send_time > 1) {
-            log.err("send took > 1ms: {}ms", .{send_time});
-        }
 
         i += 1;
     }
+    const send_end = timer.read();
 
+    const receive_start = timer.read();
     for (signals.items) |signal| {
-        const receive_start = timer.read();
         const rep = try signal.tryReceive(5_000 * std.time.ns_per_ms);
-        const receive_end = timer.read();
 
         const error_code = rep.errorCode();
         if (error_code != .ok) return error.BadRequest;
 
         rep.deref();
         if (rep.refs() == 0) client.memory_pool.destroy(rep);
-
-        const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
-        if (receive_time > 1) {
-            log.err("receive took > 1ms: {}ms", .{receive_time});
-        }
     }
+    const receive_end = timer.read();
 
     const total_end = timer.read();
     const total_time = (total_end - total_start) / std.time.ns_per_ms;
-    log.err("total time took: {}ms", .{total_time});
+    const connect_time = (connect_end - connect_start) / std.time.ns_per_ms;
+    const send_time = (send_end - send_start) / std.time.ns_per_ms;
+    const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
+    log.err("total time took: {}ms, connect_time: {}ms, send_time: {}ms, receive_time: {}ms", .{
+        total_time,
+        connect_time,
+        send_time,
+        receive_time,
+    });
 }
 
 pub fn nodeConnect() !void {
