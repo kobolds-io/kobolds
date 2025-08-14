@@ -14,7 +14,8 @@ pub const message_min_size = @sizeOf(Headers);
 
 /// The size of the parser's working buffer to be used for decoding messsages
 /// over multiple parse calls.
-pub const parser_max_buffer_size = (1024 * 256) * 2; // TODO: this number needs to be adjusted
+// pub const parser_max_buffer_size = (1024 * 256) * 2; // TODO: this number needs to be adjusted
+pub const parser_max_buffer_size = (1024 * 64) * 2; // TODO: this number needs to be adjusted
 
 /// The number of bytes used as the recv buffer in each connection
 // pub const connection_recv_buffer_size = (1024 * 256);
