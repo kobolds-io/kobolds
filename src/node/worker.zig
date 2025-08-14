@@ -265,7 +265,7 @@ pub const Worker = struct {
 
     // TODO: the config should be passed to the connection so it can be tracked
     //     the connection needs to be able to reconnect if the config says it should
-    pub fn addOutboundConnection(self: *Self, config: OutboundConnectionConfig) !*Connection {
+    pub fn addOutboundConnection(self: *Self, config: OutboundConnectionConfig) !void {
         // create the socket
         const address = try std.net.Address.parseIp4(config.host, config.port);
         const socket_type: u32 = posix.SOCK.STREAM;
@@ -292,6 +292,7 @@ pub const Worker = struct {
         errdefer conn.deinit();
 
         conn.connection_state = .connecting;
+        conn.protocol_state = .accepting;
 
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
@@ -308,8 +309,6 @@ pub const Worker = struct {
             address,
         );
         conn.connect_submitted = true;
-
-        return conn;
     }
 
     fn removeConnection(self: *Self, conn: *Connection) void {
