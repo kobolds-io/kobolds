@@ -37,6 +37,7 @@ pub const OutboundConnectionConfig = struct {
     reconnect_config: ?ReconnectionConfig = null,
     /// If `null`, no keep alive messages will be performed.
     keep_alive_config: ?KeepAliveConfig = null,
+    authentication_config: ?AuthenticationConfig = .{ .none_config = NoneAuthConfig{} },
 
     pub fn validate(self: OutboundConnectionConfig) ?[]const u8 {
         if (self.host.len == 0) return "OutboundConnectionConfig `host` invalid length must be > 0";
@@ -52,6 +53,17 @@ pub const OutboundConnectionConfig = struct {
         return null;
     }
 };
+
+pub const AuthenticationConfig = struct {
+    token_config: ?TokenAuthConfig = null,
+    none_config: ?NoneAuthConfig = null,
+};
+
+pub const TokenAuthConfig = struct {
+    token: []const u8,
+};
+
+pub const NoneAuthConfig = struct {};
 
 pub const KeepAliveConfig = struct {
     enabled: bool = true,

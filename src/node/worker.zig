@@ -510,7 +510,16 @@ pub const Worker = struct {
 
         switch (conn.config) {
             .outbound => |config| {
+                // ensure that this connection is fully connected
+                assert(conn.connection_state == .connected);
+
+                // ensure the client.connection is expecting this accept message
+                assert(conn.protocol_state == .accepting);
+
+                // assert(conn.connection_state != .connected);
+                // ensure that this connection_id is not set
                 assert(conn.connection_id == 0);
+
                 // An error here would be a protocol error
                 assert(conn.peer_id != message.headers.origin_id);
                 assert(conn.connection_id != message.headers.connection_id);
@@ -518,14 +527,9 @@ pub const Worker = struct {
                 conn.connection_id = message.headers.connection_id;
                 conn.peer_id = message.headers.origin_id;
 
-                message.headers.origin_id = conn.origin_id;
-                message.headers.connection_id = conn.connection_id;
-
-                // enqueue a message to immediately convey the node id of this Node
-                message.ref();
-                try conn.outbox.enqueue(message);
-
                 conn.connection_state = .connected;
+                conn.protocol_state = .authenticating;
+
                 log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
                     conn.origin_id,
                     conn.connection_id,

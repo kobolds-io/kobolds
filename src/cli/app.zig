@@ -80,8 +80,8 @@ pub fn run() !void {
         .target = cli.CommandTarget{ .action = cli.CommandAction{ .exec = version } },
     };
 
-    const node_listen_command = cli.Command{
-        .name = "listen",
+    const node_listen_0_command = cli.Command{
+        .name = "listen0",
         .description = cli.Description{
             .one_line = "listen for incomming connections",
             .detailed = "start a node and listen for incomming connections",
@@ -105,7 +105,35 @@ pub fn run() !void {
             },
         },
 
-        .target = .{ .action = .{ .exec = nodeListen } },
+        .target = .{ .action = .{ .exec = nodeListen0 } },
+    };
+
+    const node_listen_1_command = cli.Command{
+        .name = "listen1",
+        .description = cli.Description{
+            .one_line = "listen for incomming connections",
+            .detailed = "start a node and listen for incomming connections",
+        },
+
+        .options = &.{
+            // .{
+            //     .long_name = "host",
+            //     .help = "host to listen on",
+            //     .value_ref = app_runner.mkRef(&node_config.host),
+            // },
+            // .{
+            //     .long_name = "port",
+            //     .help = "port to bind to",
+            //     .value_ref = app_runner.mkRef(&node_config.port),
+            // },
+            .{
+                .long_name = "worker-threads",
+                .help = "worker threads to be spawned",
+                .value_ref = app_runner.mkRef(&node_config.worker_threads),
+            },
+        },
+
+        .target = .{ .action = .{ .exec = nodeListen1 } },
     };
 
     const node_connect_command = cli.Command{
@@ -257,7 +285,8 @@ pub fn run() !void {
         .description = cli.Description{ .one_line = "commands to control nodes" },
         .target = .{
             .subcommands = &.{
-                node_listen_command,
+                node_listen_0_command,
+                node_listen_1_command,
                 node_connect_command,
                 node_ping_command,
                 node_request_command,
@@ -289,16 +318,14 @@ pub fn run() !void {
     return app_runner.run(&app);
 }
 
-pub fn nodeListen() !void {
+pub fn nodeListen0() !void {
     // creating a client to communicate with the node
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
     // This is just a test used to whitelist a certain inbound connection origins
-    const allowed_inbound_connection_config = AllowedInboundConnectionConfig{
-        .host = "0.0.0.0",
-    };
+    const allowed_inbound_connection_config = AllowedInboundConnectionConfig{ .host = "0.0.0.0" };
     const allowed_inbound_connection_configs = [_]AllowedInboundConnectionConfig{allowed_inbound_connection_config};
 
     const client_listener_config = ListenerConfig{
@@ -312,6 +339,63 @@ pub fn nodeListen() !void {
     const node_listener_config = ListenerConfig{
         .host = "127.0.0.1",
         .port = 8001,
+        .transport = .tcp,
+        .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
+        .peer_type = .node,
+    };
+
+    const listener_configs = [_]ListenerConfig{ client_listener_config, node_listener_config };
+    node_config.listener_configs = &listener_configs;
+
+    const outbound_node_connection_config = OutboundConnectionConfig{
+        .host = "127.0.0.1",
+        .port = 8006,
+        .transport = .tcp,
+        .peer_type = .node,
+        .reconnect_config = .{
+            .enabled = true,
+            .max_attempts = 0,
+            .reconnection_strategy = .timed,
+        },
+    };
+
+    const outbound_connection_configs = [_]OutboundConnectionConfig{outbound_node_connection_config};
+    node_config.outbound_configs = &outbound_connection_configs;
+
+    var node = try Node.init(allocator, node_config);
+    defer node.deinit();
+
+    try node.start();
+    defer node.close();
+
+    registerSigintHandler();
+
+    while (!sigint_received) {
+        std.time.sleep(1 * std.time.ns_per_ms);
+    }
+}
+
+pub fn nodeListen1() !void {
+    // creating a client to communicate with the node
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+
+    // This is just a test used to whitelist a certain inbound connection origins
+    const allowed_inbound_connection_config = AllowedInboundConnectionConfig{ .host = "0.0.0.0" };
+    const allowed_inbound_connection_configs = [_]AllowedInboundConnectionConfig{allowed_inbound_connection_config};
+
+    const client_listener_config = ListenerConfig{
+        .host = "127.0.0.1",
+        .port = 8005,
+        .transport = .tcp,
+        .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
+        .peer_type = .client,
+    };
+
+    const node_listener_config = ListenerConfig{
+        .host = "127.0.0.1",
+        .port = 8006,
         .transport = .tcp,
         .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
         .peer_type = .node,
