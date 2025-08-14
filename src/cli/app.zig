@@ -27,9 +27,10 @@ const Signal = @import("stdx").Signal;
 var node_config = NodeConfig{
     .max_connections = 5,
     .authenticator_config = .{
-        .token = .{
-            .tokens = &[_][]const u8{"asdf"},
-        },
+        .none = .{},
+        // .token = .{
+        //     .tokens = &[_][]const u8{"asdf"},
+        // },
     },
 };
 

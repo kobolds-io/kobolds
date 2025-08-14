@@ -21,6 +21,7 @@ const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundC
 const InboundConnectionConfig = @import("../protocol/connection.zig").InboundConnectionConfig;
 const Message = @import("../protocol/message.zig").Message;
 const Accept = @import("../protocol/message.zig").Accept;
+const AuthChallenge = @import("../protocol/message.zig").AuthChallenge;
 
 const NoneAuthStrategy = @import("../node/authenticator.zig").NoneAuthStrategy;
 const TokenAuthStrategy = @import("../node/authenticator.zig").TokenAuthStrategy;
@@ -192,7 +193,7 @@ pub const Worker = struct {
         try self.tickConnections();
         try self.tickUninitializedConnections();
         try self.processInboundConnectionMessages();
-        // try self.processUninitializedConnectionMessages();
+        try self.processUninitializedConnectionMessages();
         try self.processOutboundConnectionMessages();
     }
 
@@ -260,7 +261,7 @@ pub const Worker = struct {
 
         try conn.outbox.enqueue(auth_challenge_message);
 
-        log.info("worker: {} added connection {}", .{ self.id, conn_id });
+        log.info("worker: {} added inbound connection {}", .{ self.id, conn_id });
     }
 
     // TODO: the config should be passed to the connection so it can be tracked
@@ -309,6 +310,8 @@ pub const Worker = struct {
             address,
         );
         conn.connect_submitted = true;
+
+        log.info("worker: {} added outbound connection", .{self.id});
     }
 
     fn removeConnection(self: *Self, conn: *Connection) void {
@@ -345,6 +348,15 @@ pub const Worker = struct {
             const tmp_id = entry.key_ptr.*;
             const conn = entry.value_ptr.*;
 
+            switch (conn.protocol_state) {
+                .terminating => {
+                    log.debug("need to clean up any thing related to this connection", .{});
+                    conn.protocol_state = .terminated;
+                    conn.connection_state = .closing;
+                },
+                else => {},
+            }
+
             // check if this connection was closed for whatever reason
             if (conn.connection_state == .closed) {
                 try self.cleanupUninitializedConnection(tmp_id, conn);
@@ -356,15 +368,34 @@ pub const Worker = struct {
                 break;
             };
 
-            if (conn.connection_state == .connected and conn.connection_id != 0) {
+            if (conn.connection_state == .connected and conn.protocol_state == .ready) {
                 // the connection is now valid and ready for events
                 // move the connection to the regular connections map
                 try self.connections.put(conn.connection_id, conn);
-                errdefer _ = self.connections.remove(conn.connection_id);
-
                 // remove the connection from the uninitialized_connections map
                 assert(self.uninitialized_connections.remove(tmp_id));
             }
+
+            // // check if this connection was closed for whatever reason
+            // if (conn.connection_state == .closed) {
+            //     try self.cleanupUninitializedConnection(tmp_id, conn);
+            //     break;
+            // }
+
+            // conn.tick() catch |err| {
+            //     log.err("could not tick uninitialized_connection error: {any}", .{err});
+            //     break;
+            // };
+
+            // if (conn.connection_state == .connected and conn.connection_id != 0) {
+            //     // the connection is now valid and ready for events
+            //     // move the connection to the regular connections map
+            //     try self.connections.put(conn.connection_id, conn);
+            //     errdefer _ = self.connections.remove(conn.connection_id);
+
+            //     // remove the connection from the uninitialized_connections map
+            //     assert(self.uninitialized_connections.remove(tmp_id));
+            // }
         }
     }
 
@@ -430,7 +461,7 @@ pub const Worker = struct {
                 assert(message.refs() == 1);
 
                 switch (message.headers.message_type) {
-                    .accept => try self.handleAcceptMessage(conn, message),
+                    // .accept => try self.handleAcceptMessage(conn, message),
                     .ping => try self.handlePingMessage(conn, message),
                     .pong => try self.handlePongMessage(conn, message),
                     .auth_response => try self.handleAuthResponseMessage(conn, message),
@@ -460,12 +491,15 @@ pub const Worker = struct {
 
             if (conn.inbox.count == 0) continue;
             while (conn.inbox.dequeue()) |message| {
+
                 // if this message has more than a single ref, something has not been initialized
                 // or deinitialized correctly.
                 assert(message.refs() == 1);
 
                 switch (message.headers.message_type) {
-                    .accept => self.handleAcceptMessage(conn, message) catch break,
+                    .accept => try self.handleAcceptMessage(conn, message),
+                    .auth_challenge => try self.handleAuthChallengeMessage(conn, message),
+                    .auth_result => try self.handleAuthResultMessage(conn, message),
                     else => {
                         log.err("unexpected message received from uninitialized connection", .{});
                         conn.connection_state = .closing;
@@ -496,63 +530,6 @@ pub const Worker = struct {
                 message.deref();
                 if (message.refs() == 0) self.node.memory_pool.destroy(message);
             }
-        }
-    }
-
-    fn handleAcceptMessage(self: *Self, conn: *Connection, message: *Message) !void {
-        defer {
-            message.deref();
-            if (message.refs() == 0) self.node.memory_pool.destroy(message);
-        }
-
-        // ensure that this connection is not fully connected
-        assert(conn.connection_state != .connected);
-
-        switch (conn.config) {
-            .outbound => |config| {
-                // ensure that this connection is fully connected
-                assert(conn.connection_state == .connected);
-
-                // ensure the client.connection is expecting this accept message
-                assert(conn.protocol_state == .accepting);
-
-                // assert(conn.connection_state != .connected);
-                // ensure that this connection_id is not set
-                assert(conn.connection_id == 0);
-
-                // An error here would be a protocol error
-                assert(conn.peer_id != message.headers.origin_id);
-                assert(conn.connection_id != message.headers.connection_id);
-
-                conn.connection_id = message.headers.connection_id;
-                conn.peer_id = message.headers.origin_id;
-
-                conn.connection_state = .connected;
-                conn.protocol_state = .authenticating;
-
-                log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
-                    conn.origin_id,
-                    conn.connection_id,
-                    conn.peer_id,
-                    config.peer_type,
-                });
-            },
-            .inbound => |config| {
-                assert(conn.connection_id == message.headers.connection_id);
-                assert(conn.origin_id != message.headers.origin_id);
-
-                // FIX: THIS only matters if the other is a node???
-                log.warn("received an accept message??? should i have?? from {}", .{message.headers.origin_id});
-                conn.peer_id = message.headers.origin_id;
-                conn.connection_state = .connected;
-
-                log.info("inbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
-                    conn.origin_id,
-                    conn.connection_id,
-                    conn.peer_id,
-                    config.peer_type,
-                });
-            },
         }
     }
 
@@ -632,6 +609,108 @@ pub const Worker = struct {
             message.headers.origin_id,
             message.headers.connection_id,
         });
+    }
+
+    fn handleAcceptMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+        }
+
+        // ensure that this connection is fully connected
+        assert(conn.connection_state == .connected);
+        // ensure the client.connection is expecting this accept message
+        assert(conn.protocol_state == .accepting);
+
+        log.info("accept message received!", .{});
+        switch (conn.config) {
+            .outbound => {
+                assert(conn.connection_id == 0);
+                assert(conn.peer_id != message.headers.origin_id);
+                assert(conn.connection_id != message.headers.connection_id);
+
+                conn.connection_id = message.headers.connection_id;
+                conn.peer_id = message.headers.origin_id;
+
+                conn.connection_state = .connected;
+                conn.protocol_state = .authenticating;
+
+                log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
+                    conn.origin_id,
+                    conn.connection_id,
+                    conn.peer_id,
+                    conn.config.outbound.peer_type,
+                });
+            },
+            .inbound => unreachable,
+        }
+    }
+
+    fn handleAuthChallengeMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+        }
+
+        // ensure that this connection is fully connected
+        assert(conn.connection_state == .connected);
+        // ensure the client.connection is expecting this challenge message
+        assert(conn.protocol_state == .authenticating);
+
+        const auth_challenge_message: *const AuthChallenge = message.headers.intoConst(.auth_challenge).?;
+
+        const auth_response_message = try self.node.memory_pool.create();
+        errdefer self.node.memory_pool.destroy(auth_response_message);
+
+        auth_response_message.* = Message.new2(.auth_response);
+        auth_response_message.setTransactionId(message.transactionId());
+        auth_response_message.setChallengeMethod(auth_challenge_message.challenge_method);
+        auth_response_message.ref();
+        errdefer auth_response_message.deref();
+
+        switch (auth_challenge_message.challenge_method) {
+            .none => auth_response_message.setBody(""),
+            .token => {
+                switch (conn.config) {
+                    .outbound => |c| {
+                        if (c.authentication_config) |auth_config| {
+                            if (auth_config.token_config) |token_config| {
+                                auth_response_message.setBody(token_config.token);
+                            }
+                        }
+                    },
+                    .inbound => unreachable,
+                }
+            },
+        }
+
+        assert(auth_response_message.validate() == null);
+
+        try conn.outbox.enqueue(auth_response_message);
+
+        log.debug("sending auth_response", .{});
+    }
+
+    // FIX: this doesn't actually fulfill a transaction or enforce that THIS connection is the one authenticating
+    //   There should be a mechanism where we lookup and clear a transaction
+    pub fn handleAuthResultMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+        }
+
+        assert(conn.connection_state == .connected);
+        assert(conn.protocol_state == .authenticating);
+
+        if (message.errorCode() != .ok) {
+            log.err("connection did not successfully authenticate. {any}", .{message.errorCode()});
+            conn.protocol_state = .terminating;
+            return;
+        }
+
+        log.info("connection successfully authenticated", .{});
+
+        conn.protocol_state = .ready;
     }
 
     fn closeAllConnections(self: *Self) bool {
