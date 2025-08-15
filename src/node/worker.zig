@@ -11,6 +11,7 @@ const utils = @import("../utils.zig");
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const BufferedChannel = @import("stdx").BufferedChannel;
 const RingBuffer = @import("stdx").RingBuffer;
+const MemoryPool = @import("stdx").MemoryPool;
 const Envelope = @import("../data_structures/envelope.zig").Envelope;
 
 const IO = @import("../io.zig").IO;
@@ -47,6 +48,7 @@ pub const Worker = struct {
     inbox: *RingBuffer(*Message),
     io: *IO,
     node: *Node,
+    memory_pool: *MemoryPool(Message),
     outbox_mutex: std.Thread.Mutex,
     outbox: *RingBuffer(Envelope),
     state: WorkerState,
@@ -90,6 +92,7 @@ pub const Worker = struct {
             .id = id,
             .io = io,
             .node = node,
+            .memory_pool = node.memory_pool,
             .state = .closed,
             .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .inbox = inbox,
@@ -120,13 +123,13 @@ pub const Worker = struct {
 
         while (self.inbox.dequeue()) |message| {
             message.deref();
-            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+            if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
         while (self.outbox.dequeue()) |envelope| {
             const message = envelope.message;
             message.deref();
-            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+            if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
         self.inbox.deinit();
@@ -212,7 +215,7 @@ pub const Worker = struct {
             self.io,
             socket,
             self.allocator,
-            self.node.memory_pool,
+            self.memory_pool,
             .{ .inbound = config },
         );
         errdefer conn.deinit();
@@ -228,8 +231,8 @@ pub const Worker = struct {
         errdefer _ = self.connections.remove(conn_id);
 
         conn.protocol_state = .accepting;
-        const accept_message = try self.node.memory_pool.create();
-        errdefer self.node.memory_pool.destroy(accept_message);
+        const accept_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(accept_message);
 
         accept_message.* = Message.new2(.accept);
         accept_message.ref();
@@ -247,8 +250,8 @@ pub const Worker = struct {
         const challenge_method = self.node.authenticator.getChallengeMethod();
         const challenge_payload = self.node.authenticator.getChallengePayload();
 
-        const auth_challenge_message = try self.node.memory_pool.create();
-        errdefer self.node.memory_pool.destroy(auth_challenge_message);
+        const auth_challenge_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(auth_challenge_message);
 
         auth_challenge_message.* = Message.new2(.auth_challenge);
         auth_challenge_message.setTransactionId(uuid.v7.new());
@@ -287,7 +290,7 @@ pub const Worker = struct {
             self.io,
             socket,
             self.allocator,
-            self.node.memory_pool,
+            self.memory_pool,
             .{ .outbound = config },
         );
         errdefer conn.deinit();
@@ -528,7 +531,7 @@ pub const Worker = struct {
             } else {
                 // The connection has disappeared since and this should be destroyed
                 message.deref();
-                if (message.refs() == 0) self.node.memory_pool.destroy(message);
+                if (message.refs() == 0) self.memory_pool.destroy(message);
             }
         }
     }
@@ -538,7 +541,7 @@ pub const Worker = struct {
     fn handleAuthResponseMessage(self: *Self, conn: *Connection, message: *Message) !void {
         defer {
             message.deref();
-            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+            if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
         log.debug("received auth_response from origin_id: {}, connection_id: {}", .{
@@ -546,8 +549,8 @@ pub const Worker = struct {
             message.headers.connection_id,
         });
 
-        const auth_result = try self.node.memory_pool.create();
-        errdefer self.node.memory_pool.destroy(auth_result);
+        const auth_result = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(auth_result);
 
         auth_result.* = Message.new2(.auth_result);
         auth_result.setTransactionId(message.transactionId());
@@ -602,7 +605,7 @@ pub const Worker = struct {
     fn handlePongMessage(self: *Self, _: *Connection, message: *Message) !void {
         defer {
             message.deref();
-            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+            if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
         log.debug("received pong from origin_id: {}, connection_id: {}", .{
@@ -614,7 +617,7 @@ pub const Worker = struct {
     fn handleAcceptMessage(self: *Self, conn: *Connection, message: *Message) !void {
         defer {
             message.deref();
-            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+            if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
         // ensure that this connection is fully connected
@@ -649,7 +652,7 @@ pub const Worker = struct {
     fn handleAuthChallengeMessage(self: *Self, conn: *Connection, message: *Message) !void {
         defer {
             message.deref();
-            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+            if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
         // ensure that this connection is fully connected
@@ -659,8 +662,8 @@ pub const Worker = struct {
 
         const auth_challenge_message: *const AuthChallenge = message.headers.intoConst(.auth_challenge).?;
 
-        const auth_response_message = try self.node.memory_pool.create();
-        errdefer self.node.memory_pool.destroy(auth_response_message);
+        const auth_response_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(auth_response_message);
 
         auth_response_message.* = Message.new2(.auth_response);
         auth_response_message.setTransactionId(message.transactionId());
@@ -696,7 +699,7 @@ pub const Worker = struct {
     pub fn handleAuthResultMessage(self: *Self, conn: *Connection, message: *Message) !void {
         defer {
             message.deref();
-            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+            if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
         assert(conn.connection_state == .connected);
