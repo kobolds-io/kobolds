@@ -24,8 +24,9 @@ const Message = @import("../protocol/message.zig").Message;
 const Accept = @import("../protocol/message.zig").Accept;
 const AuthChallenge = @import("../protocol/message.zig").AuthChallenge;
 
-const NoneAuthStrategy = @import("../node/authenticator.zig").NoneAuthStrategy;
-const TokenAuthStrategy = @import("../node/authenticator.zig").TokenAuthStrategy;
+const Authenticator = @import("./authenticator.zig").Authenticator;
+const NoneAuthStrategy = @import("./authenticator.zig").NoneAuthStrategy;
+const TokenAuthStrategy = @import("./authenticator.zig").TokenAuthStrategy;
 
 const WorkerState = enum {
     running,
@@ -37,6 +38,7 @@ pub const Worker = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
+    authenticator: *Authenticator,
     close_channel: *UnbufferedChannel(bool),
     connections_mutex: std.Thread.Mutex,
     connections: std.AutoHashMap(uuid.Uuid, *Connection),
@@ -47,8 +49,9 @@ pub const Worker = struct {
     inbox_mutex: std.Thread.Mutex,
     inbox: *RingBuffer(*Message),
     io: *IO,
-    node: *Node,
     memory_pool: *MemoryPool(Message),
+    node_id: u128,
+    node: *Node,
     outbox_mutex: std.Thread.Mutex,
     outbox: *RingBuffer(Envelope),
     state: WorkerState,
@@ -85,22 +88,24 @@ pub const Worker = struct {
 
         return Self{
             .allocator = allocator,
+            .authenticator = node.authenticator,
             .close_channel = close_channel,
             .connections_mutex = std.Thread.Mutex{},
             .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
+            .dead_connections_mutex = std.Thread.Mutex{},
+            .dead_connections = std.ArrayList(u128).init(allocator),
             .done_channel = done_channel,
             .id = id,
-            .io = io,
-            .node = node,
-            .memory_pool = node.memory_pool,
-            .state = .closed,
-            .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .inbox = inbox,
             .inbox_mutex = std.Thread.Mutex{},
-            .outbox = outbox,
+            .io = io,
+            .memory_pool = node.memory_pool,
+            .node_id = node.id,
+            .node = node,
             .outbox_mutex = std.Thread.Mutex{},
-            .dead_connections = std.ArrayList(u128).init(allocator),
-            .dead_connections_mutex = std.Thread.Mutex{},
+            .outbox = outbox,
+            .state = .closed,
+            .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
         };
     }
 
@@ -211,7 +216,7 @@ pub const Worker = struct {
         const conn_id = uuid.v7.new();
         conn.* = try Connection.init(
             conn_id,
-            self.node.id,
+            self.node_id,
             self.io,
             socket,
             self.allocator,
@@ -240,15 +245,15 @@ pub const Worker = struct {
 
         var accept_headers: *Accept = accept_message.headers.into(.accept).?;
         accept_headers.connection_id = conn_id;
-        accept_headers.origin_id = self.node.id;
+        accept_headers.origin_id = self.node_id;
 
         assert(accept_message.validate() == null);
 
         try conn.outbox.enqueue(accept_message);
 
         conn.protocol_state = .authenticating;
-        const challenge_method = self.node.authenticator.getChallengeMethod();
-        const challenge_payload = self.node.authenticator.getChallengePayload();
+        const challenge_method = self.authenticator.getChallengeMethod();
+        const challenge_payload = self.authenticator.getChallengePayload();
 
         const auth_challenge_message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(auth_challenge_message);
@@ -286,7 +291,7 @@ pub const Worker = struct {
         const tmp_conn_id = uuid.v7.new();
         conn.* = try Connection.init(
             0,
-            self.node.id,
+            self.node_id,
             self.io,
             socket,
             self.allocator,
@@ -563,7 +568,7 @@ pub const Worker = struct {
             auth_result.setErrorCode(.err);
         }
 
-        const authenticator = self.node.authenticator;
+        const authenticator = self.authenticator;
 
         switch (authenticator.strategy_type) {
             .none => {
@@ -589,7 +594,7 @@ pub const Worker = struct {
         });
         // Since this is a `ping` we don't need to do any extra work to figure out how to respond
         message.headers.message_type = .pong;
-        message.headers.origin_id = self.node.id;
+        message.headers.origin_id = self.node_id;
         message.headers.connection_id = conn.connection_id;
         message.setTransactionId(message.transactionId());
         message.setErrorCode(.ok);
