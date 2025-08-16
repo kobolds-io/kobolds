@@ -478,8 +478,6 @@ pub const Worker = struct {
                 assert(message.refs() == 1);
 
                 switch (message.headers.message_type) {
-                    // .accept => try self.handleAcceptMessage(conn, message),
-                    .ping => try self.handlePingMessage(conn, message),
                     .pong => try self.handlePongMessage(conn, message),
                     .auth_response => try self.handleAuthResponseMessage(conn, message),
                     else => {
@@ -594,26 +592,6 @@ pub const Worker = struct {
 
         try conn.outbox.enqueue(auth_result);
         log.info("sending auth_result", .{});
-    }
-
-    fn handlePingMessage(self: *Self, conn: *Connection, message: *Message) !void {
-        log.debug("received ping from origin_id: {}, connection_id: {}", .{
-            message.headers.origin_id,
-            message.headers.connection_id,
-        });
-        // Since this is a `ping` we don't need to do any extra work to figure out how to respond
-        message.headers.message_type = .pong;
-        message.headers.origin_id = self.node_id;
-        message.headers.connection_id = conn.connection_id;
-        message.setTransactionId(message.transactionId());
-        message.setErrorCode(.ok);
-
-        assert(message.refs() == 1);
-
-        if (conn.outbox.enqueue(message)) |_| {} else |err| {
-            log.err("Failed to enqueue message to outbox: {}", .{err});
-            message.deref(); // Undo reference if enqueue fails
-        }
     }
 
     fn handlePongMessage(self: *Self, _: *Connection, message: *Message) !void {

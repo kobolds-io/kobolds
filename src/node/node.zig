@@ -407,6 +407,7 @@ pub const Node = struct {
                     .unadvertise => try self.handleUnadvertise(message),
                     .request => try self.handleRequest(message),
                     .reply => try self.handleReply(message),
+                    .ping => try self.handlePing(message),
                     // .credentials => try self.handleCredentials(message),
                     else => |t| {
                         log.err("received unhandled message type {any}", .{t});
@@ -934,6 +935,36 @@ pub const Node = struct {
 
         message.ref();
         service.replies_queue.enqueue(message) catch message.deref();
+    }
+
+    fn handlePing(self: *Self, message: *Message) !void {
+        assert(message.refs() == 1);
+
+        log.debug("received ping from origin_id: {}, connection_id: {}", .{
+            message.headers.origin_id,
+            message.headers.connection_id,
+        });
+        // Since this is a `ping` we don't need to do any extra work to figure out how to respond
+        message.headers.message_type = .pong;
+        message.headers.origin_id = self.id;
+        message.setTransactionId(message.transactionId());
+        message.setErrorCode(.ok);
+
+        const conn_outbox = self.findOrCreateConnectionOutbox(message.headers.connection_id) catch |err| {
+            log.err("Failed to findOrCreateConnectionOutbox: {}", .{err});
+            return;
+        };
+
+        message.ref();
+        const envelope = Envelope{
+            .connection_id = message.headers.connection_id,
+            .message = message,
+        };
+
+        if (conn_outbox.enqueue(envelope)) |_| {} else |err| {
+            log.err("Failed to enqueue message to conn_outbox: {}", .{err});
+            message.deref();
+        }
     }
 
     // fn handleCredentials(self: *Self, message: *Message) !void {
