@@ -367,6 +367,15 @@ pub const Worker = struct {
 
             // check if this connection was closed for whatever reason
             if (conn.connection_state == .closed) {
+                // if this is an outbound connection???
+                switch (conn.config) {
+                    .outbound => |c| {
+                        if (c.reconnect_config) |reconnect_config| {
+                            log.info("reconnect_config {any}", .{reconnect_config});
+                        }
+                    },
+                    else => {},
+                }
                 try self.cleanupUninitializedConnection(tmp_id, conn);
                 break;
             }
