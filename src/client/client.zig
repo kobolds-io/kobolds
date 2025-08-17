@@ -106,14 +106,16 @@ pub const Client = struct {
         const memory_pool = try allocator.create(MemoryPool(Message));
         errdefer allocator.destroy(memory_pool);
 
-        memory_pool.* = try MemoryPool(Message).init(allocator, 100_000);
+        memory_pool.* = try MemoryPool(Message).init(allocator, 10_000);
         errdefer memory_pool.deinit();
 
         const inbox = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(inbox);
 
-        inbox.* = try RingBuffer(*Message).init(allocator, 10_000);
+        inbox.* = try RingBuffer(*Message).init(allocator, 5_000);
         errdefer inbox.deinit();
+
+        // TODO: we should add an outbox to act as the global outbound communicator
 
         return Self{
             .id = uuid.v7.new(),
