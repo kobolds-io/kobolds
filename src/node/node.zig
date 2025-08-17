@@ -340,6 +340,17 @@ pub const Node = struct {
     }
 
     fn tick(self: *Self) !void {
+        self.handlePrintingIntervalMetrics();
+
+        try self.pruneDeadConnections();
+        try self.maybeAddInboundConnections();
+        try self.gatherMessages();
+        try self.processMessages();
+        try self.aggregateMessages();
+        try self.distributeMessages();
+    }
+
+    fn handlePrintingIntervalMetrics(self: *Self) void {
         const now_ms = std.time.milliTimestamp();
         const difference = now_ms - self.metrics.last_printed_at_ms;
         if (difference >= 1_000) {
@@ -361,13 +372,6 @@ pub const Node = struct {
                 self.memory_pool.available(),
             });
         }
-
-        try self.pruneDeadConnections();
-        try self.maybeAddInboundConnections();
-        try self.gatherMessages();
-        try self.processMessages();
-        try self.aggregateMessages();
-        try self.distributeMessages();
     }
 
     fn gatherMessages(self: *Self) !void {
@@ -979,44 +983,6 @@ pub const Node = struct {
         });
     }
 
-    // fn handleCredentials(self: *Self, message: *Message) !void {
-    //     defer {
-    //         message.deref();
-    //         if (message.refs() == 0) self.node.memory_pool.destroy(message);
-    //     }
-
-    //     log.debug("received credentials from origin_id: {}, connection_id: {}", .{
-    //         message.headers.origin_id,
-    //         message.headers.connection_id,
-    //     });
-
-    //     const reply = try self.node.memory_pool.create();
-    //     errdefer self.node.memory_pool.destroy(reply);
-
-    //     reply.* = Message.new2(.reply);
-    //     reply.setTransactionId(message.transactionId());
-    //     reply.setErrorCode(.ok);
-    //     reply.ref();
-    //     errdefer reply.deref();
-
-    //     // TODO: use the node authenticator to figure out how to
-    //     const authenticator = self.node.authenticator;
-
-    //     switch (authenticator.strategy_type) {
-    //         .none => {
-    //             const ctx: NoneAuthStrategy.Context = .{};
-    //             if (!authenticator.authenticate(&ctx)) reply.setErrorCode(.unauthorized);
-    //         },
-    //         .token => {
-    //             const ctx: TokenAuthStrategy.Context = .{ .token = message.body() };
-    //             if (!authenticator.authenticate(&ctx)) reply.setErrorCode(.unauthorized);
-    //         },
-    //     }
-
-    //     const conn_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
-    //     try conn_outbox.enqueue(reply);
-    // }
-
     fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
         _ = options;
 
@@ -1049,18 +1015,6 @@ pub const Node = struct {
             try self.services.put(topic_name, service);
             return service;
         }
-    }
-};
-
-pub const ConnectionHandle = struct {
-    const Self = @This();
-
-    connection: *Connection,
-    worker: *Worker,
-
-    pub fn enqueueMessage(self: Self, message: *Message) !void {
-        _ = self;
-        _ = message;
     }
 };
 
