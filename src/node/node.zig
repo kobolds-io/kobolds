@@ -294,8 +294,8 @@ pub const Node = struct {
                 .running => {
                     self.tick() catch unreachable;
 
-                    self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch unreachable;
-                    // self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
+                    // self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch unreachable;
+                    self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
                 },
                 .closing => {
                     log.info("node {}: closed", .{self.id});
