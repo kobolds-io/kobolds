@@ -38,12 +38,12 @@ pub const io_uring_entries: u16 = 256;
 /// Optionally verify if operations based on this boolean.
 pub const verify: bool = true;
 
-pub const connection_outbox_capacity: usize = 5_000;
-pub const connection_inbox_capacity: usize = 5_000;
+pub const connection_outbox_capacity: usize = 1_000;
+pub const connection_inbox_capacity: usize = 1_000;
 
-pub const topic_max_queue_capacity: usize = 10_000;
-pub const publisher_max_queue_capacity: usize = 5_000;
-pub const subscriber_max_queue_capacity: usize = 5_000;
+pub const topic_max_queue_capacity: usize = 5_000;
+pub const publisher_max_queue_capacity: usize = 1_000;
+pub const subscriber_max_queue_capacity: usize = 1_000;
 
 pub const service_max_requests_queue_capacity: usize = 1_000;
 pub const service_max_replies_queue_capacity: usize = 1_000;
