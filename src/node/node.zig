@@ -408,7 +408,7 @@ pub const Node = struct {
                     .request => try self.handleRequest(message),
                     .reply => try self.handleReply(message),
                     .ping => try self.handlePing(message),
-                    // .credentials => try self.handleCredentials(message),
+                    .pong => try self.handlePong(message),
                     else => |t| {
                         log.err("received unhandled message type {any}", .{t});
                         @panic("unhandled message!");
@@ -965,6 +965,18 @@ pub const Node = struct {
             log.err("Failed to enqueue message to conn_outbox: {}", .{err});
             message.deref();
         }
+    }
+
+    fn handlePong(self: *Self, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        log.debug("received pong from origin_id: {}, connection_id: {}", .{
+            message.headers.origin_id,
+            message.headers.connection_id,
+        });
     }
 
     // fn handleCredentials(self: *Self, message: *Message) !void {

@@ -478,7 +478,6 @@ pub const Worker = struct {
                 assert(message.refs() == 1);
 
                 switch (message.headers.message_type) {
-                    .pong => try self.handlePongMessage(conn, message),
                     .auth_response => try self.handleAuthResponseMessage(conn, message),
                     else => {
                         // NOTE: This message type is meant to be handled by the node
@@ -592,18 +591,6 @@ pub const Worker = struct {
 
         try conn.outbox.enqueue(auth_result);
         log.info("sending auth_result", .{});
-    }
-
-    fn handlePongMessage(self: *Self, _: *Connection, message: *Message) !void {
-        defer {
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
-        }
-
-        log.debug("received pong from origin_id: {}, connection_id: {}", .{
-            message.headers.origin_id,
-            message.headers.connection_id,
-        });
     }
 
     fn handleAcceptMessage(self: *Self, conn: *Connection, message: *Message) !void {
