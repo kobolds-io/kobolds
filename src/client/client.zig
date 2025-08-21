@@ -48,7 +48,7 @@ pub const TokenAuthConfig = struct {
 
 pub const ClientConfig = struct {
     max_connections: u16 = 100,
-    memory_pool_capacity: usize = 1_000,
+    memory_pool_capacity: usize = 10_000,
     authentication_config: ?AuthenticationConfig = .{},
 };
 
@@ -236,8 +236,8 @@ pub const Client = struct {
                 .running => {
                     self.tick() catch unreachable;
 
-                    // self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch |err| {
-                    self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch |err| {
+                    self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch |err| {
+                        // self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch |err| {
                         log.err("client failed to run io {any}", .{err});
                     };
                 },
@@ -306,7 +306,8 @@ pub const Client = struct {
             // // FIX: this is some baaaaad code. There should instead be a signal or channel that this thread could
             // // wait on instead. Since this call happens on a foreground thread, an unbuffered channel seems the most
             // // appropriate.
-            std.time.sleep(constants.io_tick_ms * std.time.ns_per_ms);
+            std.time.sleep(constants.io_tick_us * std.time.ns_per_us);
+            // std.time.sleep(constants.io_tick_ms * std.time.ns_per_ms);
         } else {
             return error.DeadlineExceeded;
         }
