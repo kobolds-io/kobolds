@@ -28,7 +28,7 @@
 
     // Tracks the earliest Zig version that the package considers to be a
     // supported use case.
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.15.1",
 
     // This field is optional.
     // Each dependency must either provide a `url` and `hash`, or a `path`.
@@ -37,20 +37,20 @@
     // internet connectivity.
     .dependencies = .{
         .uuid = .{
-            .url = "https://github.com/r4gus/uuid-zig/archive/refs/tags/0.3.0.tar.gz",
-            .hash = "12207f6a93a8f73155d1af391980124feb6bab344931e11f62e42e6ac825c8d59ff1",
+            .url = "https://github.com/r4gus/uuid-zig/archive/refs/tags/0.4.0.tar.gz",
+            .hash = "uuid-0.4.0-oOieIR2AAAChAUVBY4ABjYI1XN0EbVALmiN0JIlggC3i",
         },
         .stdx = .{
-            .url = "https://github.com/kobolds-io/stdx/archive/refs/tags/v0.0.9.tar.gz",
-            .hash = "stdx-0.0.9-nyLNAV1MAgCUAxqeJyRLPv_cQGl29GKiLMy6_8VisCuN",
+            .url = "https://github.com/kobolds-io/stdx/archive/refs/tags/v0.0.10.tar.gz",
+            .hash = "stdx-0.0.10-nyLNAVxQAgB_2pCWEY5s_bo8sgwSYCrwzXrvaTKBKC2m",
         },
         .zbench = .{
-            .url = "https://github.com/hendriknielaender/zBench/archive/v0.10.0.tar.gz",
-            .hash = "1220cee254c73272258d81cf679bffb0d4ecc3be6f0263b5a724fe969a9566802020",
+            .url = "https://github.com/hendriknielaender/zBench/archive/v0.11.1.tar.gz",
+            .hash = "zbench-0.11.1-YTdc7zgmAQDtDcHPFwsLeawui27WjMLWmUwrfz7pIlB2",
         },
         .@"zig-cli" = .{
-            .url = "git+https://github.com/sam701/zig-cli#7dcc9fa4dbfe77673c97a0be6b814f208373f54c",
-            .hash = "cli-0.9.0-2eKe_8D2AACsJeXkYpgqPjp7vhpWpGP5d5rdQ4Y1WBnP",
+            .url = "git+https://github.com/sam701/zig-cli#bdaab80c0f24624cb4e8b80bb7b34957263f67b8",
+            .hash = "cli-0.9.0-2eKe_zUBAQAuGjFuolxsm2SkNyuMVqk4SaYrwzis5jTp",
         },
     },
 

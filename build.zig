@@ -30,9 +30,11 @@ pub fn build(b: *std.Build) void {
 fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const kobolds_exe = b.addExecutable(.{
         .name = "kobolds",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
         .version = version,
     });
 
@@ -71,9 +73,11 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
 
 fn setupTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const kobolds_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/test.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     const uuid_dep = b.dependency("uuid", .{
@@ -99,9 +103,11 @@ fn setupTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bui
 
 fn setupCICDTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const kobolds_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/test.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
         .test_runner = .{ .path = b.path("src/cicd_test_runner.zig"), .mode = .simple },
     });
 
@@ -129,9 +135,11 @@ fn setupCICDTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
 fn setupBenchmarks(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const bench_lib = b.addTest(.{
         .name = "bench",
-        .root_source_file = b.path("./src/bench.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("./src/bench.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     const zbench_dep = b.dependency("zbench", .{
