@@ -36,10 +36,6 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
-        .uuid = .{
-            .url = "https://github.com/r4gus/uuid-zig/archive/refs/tags/0.4.0.tar.gz",
-            .hash = "uuid-0.4.0-oOieIR2AAAChAUVBY4ABjYI1XN0EbVALmiN0JIlggC3i",
-        },
         .stdx = .{
             .url = "https://github.com/kobolds-io/stdx/archive/refs/tags/v0.0.10.tar.gz",
             .hash = "stdx-0.0.10-nyLNAVxQAgB_2pCWEY5s_bo8sgwSYCrwzXrvaTKBKC2m",
@@ -48,9 +44,13 @@
             .url = "https://github.com/hendriknielaender/zBench/archive/v0.11.1.tar.gz",
             .hash = "zbench-0.11.1-YTdc7zgmAQDtDcHPFwsLeawui27WjMLWmUwrfz7pIlB2",
         },
+        .uuid = .{
+            .url = "git+https://github.com/r4gus/uuid-zig#93f35b4abbef52db7b48fd20084e73d3c6e20ee0",
+            .hash = "uuid-0.4.0-oOieIR2AAAChAUVBY4ABjYI1XN0EbVALmiN0JIlggC3i",
+        },
         .@"zig-cli" = .{
-            .url = "git+https://github.com/sam701/zig-cli#bdaab80c0f24624cb4e8b80bb7b34957263f67b8",
-            .hash = "cli-0.9.0-2eKe_zUBAQAuGjFuolxsm2SkNyuMVqk4SaYrwzis5jTp",
+            .url = "https://github.com/bahodge/zig-cli/archive/refs/heads/chore/upgrade-to-zig-0.15.1.tar.gz",
+            .hash = "cli-0.9.0-2eKe_-ECAQBVbXleIkYSdVXSDxeMRjqCDvRDWYBm9duJ",
         },
     },
 
