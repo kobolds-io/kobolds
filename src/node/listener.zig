@@ -152,7 +152,7 @@ pub const Listener = struct {
         while (true) {
             const close_channel_received = self.close_channel.tryReceive(0) catch false;
             if (close_channel_received) {
-                log.info("listener {} closing", .{self.id});
+                log.info("listener {d} closing", .{self.id});
                 self.state = .closing;
             }
 
@@ -175,7 +175,7 @@ pub const Listener = struct {
                     // reset the array list
                     self.sockets.items.len = 0;
 
-                    log.info("listener {}: closed", .{self.id});
+                    log.info("listener {d}: closed", .{self.id});
                     self.state = .closed;
                     self.done_channel.send(true);
                     return;
@@ -232,7 +232,7 @@ pub const Listener = struct {
                     if (inbound_address_port > allowed_inbound_connection_config.port_max) continue;
                     if (allowed_inbound_connection_config.port != 0 and inbound_address_port != allowed_inbound_connection_config.port) continue;
 
-                    log.info("inbound connection from {any} is allowed by unspecified_address {}", .{
+                    log.info("inbound connection from {any} is allowed by unspecified_address {f}", .{
                         inbound_address,
                         unspecified_address,
                     });

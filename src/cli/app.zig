@@ -495,7 +495,7 @@ pub fn nodePing() !void {
     const connect_time = (connect_end - connect_start) / std.time.ns_per_ms;
     const send_time = (send_end - send_start) / std.time.ns_per_ms;
     const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
-    log.err("total time took: {}ms, connect_time: {}ms, send_time: {}ms, receive_time: {}ms", .{
+    log.err("total time took: {d}ms, connect_time: {d}ms, send_time: {d}ms, receive_time: {d}ms", .{
         total_time,
         connect_time,
         send_time,
@@ -642,7 +642,7 @@ pub fn nodeSubscribe() !void {
             subscriber_bytes_count += message.size();
             if (subscriber_msg_count % 100 == 0) {
                 log.info(
-                    "received message topic: {s}, messages_count: {}, bytes_count: {}",
+                    "received message topic: {s}, messages_count: {d}, bytes_count: {d}",
                     .{
                         message.topicName(),
                         subscriber_msg_count,
@@ -744,7 +744,7 @@ pub fn nodeRequest() !void {
 
         const send_time = (send_end - send_start) / std.time.ns_per_ms;
         if (send_time > 1) {
-            log.err("send took > 1ms: {}ms", .{send_time});
+            log.err("send took > 1ms: {d}ms", .{send_time});
         }
 
         i += 1;
@@ -763,13 +763,13 @@ pub fn nodeRequest() !void {
 
         const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
         if (receive_time > 1) {
-            log.err("receive took > 1ms: {}ms", .{receive_time});
+            log.err("receive took > 1ms: {d}ms", .{receive_time});
         }
     }
 
     const total_end = timer.read();
     const total_time = (total_end - total_start) / std.time.ns_per_ms;
-    log.err("total time took: {}ms", .{total_time});
+    log.err("total time took: {d}ms", .{total_time});
 }
 
 var advertiser_msg_count: u64 = 0;
@@ -811,7 +811,7 @@ pub fn nodeAdvertise() !void {
             advertiser_bytes_count += req.size();
             if (advertiser_msg_count % 100 == 0) {
                 log.info(
-                    "received message service: {s}, messages_count: {}, bytes_count: {}",
+                    "received message service: {s}, messages_count: {f}, bytes_count: {f}",
                     .{
                         req.topicName(),
                         advertiser_msg_count,

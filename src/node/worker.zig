@@ -155,12 +155,12 @@ pub const Worker = struct {
         // Notify the calling thread that the run loop is ready
         ready_channel.send(true);
         self.state = .running;
-        log.info("worker {}: running", .{self.id});
+        log.info("worker {d}: running", .{self.id});
         while (true) {
             // check if the close channel has received a close command
             const close_channel_received = self.close_channel.tryReceive(0) catch false;
             if (close_channel_received) {
-                log.info("worker {} closing", .{self.id});
+                log.info("worker {d} closing", .{self.id});
                 self.state = .closing;
             }
 
@@ -171,7 +171,7 @@ pub const Worker = struct {
                     // self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
                 },
                 .closing => {
-                    log.info("worker {}: closed", .{self.id});
+                    log.info("worker {d}: closed", .{self.id});
                     self.state = .closed;
                     self.done_channel.send(true);
                     return;
@@ -269,7 +269,7 @@ pub const Worker = struct {
 
         try conn.outbox.enqueue(auth_challenge_message);
 
-        log.info("worker: {} added inbound connection {}", .{ self.id, conn_id });
+        log.info("worker: {d} added inbound connection {d}", .{ self.id, conn_id });
     }
 
     // TODO: the config should be passed to the connection so it can be tracked
@@ -319,20 +319,20 @@ pub const Worker = struct {
         );
         conn.connect_submitted = true;
 
-        log.info("worker: {} added outbound connection", .{self.id});
+        log.info("worker: {d} added outbound connection", .{self.id});
     }
 
     fn removeConnection(self: *Self, conn: *Connection) void {
         _ = self.connections.remove(conn.connection_id);
 
-        log.info("worker: {} removed connection {}", .{ self.id, conn.connection_id });
+        log.info("worker: {d} removed connection {}", .{ self.id, conn.connection_id });
         conn.deinit();
         self.allocator.destroy(conn);
     }
 
     fn cleanupUninitializedConnection(self: *Self, tmp_id: uuid.Uuid, conn: *Connection) !void {
         _ = self.uninitialized_connections.remove(tmp_id);
-        log.info("worker: {} removed uninitialized_connection {}", .{ self.id, conn.connection_id });
+        log.info("worker: {d} removed uninitialized_connection {}", .{ self.id, conn.connection_id });
 
         conn.deinit();
         self.allocator.destroy(conn);
@@ -555,7 +555,7 @@ pub const Worker = struct {
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
-        log.debug("received auth_response from origin_id: {}, connection_id: {}", .{
+        log.debug("received auth_response from origin_id: {d}, connection_id: {d}", .{
             message.headers.origin_id,
             message.headers.connection_id,
         });
@@ -617,7 +617,7 @@ pub const Worker = struct {
                 conn.connection_state = .connected;
                 conn.protocol_state = .authenticating;
 
-                log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
+                log.info("outbound_connection - origin_id: {d}, connection_id: {d}, remote_id: {d}, peer_type: {any}", .{
                     conn.origin_id,
                     conn.connection_id,
                     conn.peer_id,
