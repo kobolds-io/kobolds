@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
 
     setupCICDTests(b, target, optimize);
 
-    // setupBenchmarks(b, target, optimize);
+    setupBenchmarks(b, target, optimize);
 }
 
 fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {

@@ -7,6 +7,7 @@ const Parser = @import("../protocol/parser.zig").Parser;
 const Message = @import("../protocol/message.zig").Message;
 
 const constants = @import("../constants.zig");
+const benchmark_constants = @import("./constants.zig");
 
 const ParserParseBenchmark = struct {
     messages: *std.array_list.Managed(Message),
@@ -35,7 +36,9 @@ fn afterEach() void {
 var parser_messages: std.array_list.Managed(Message) = undefined;
 
 test "Parser benchmarks" {
-    var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = std.math.maxInt(u16) });
+    var bench = zbench.Benchmark.init(std.testing.allocator, .{
+        .iterations = benchmark_constants.benchmark_max_iterations,
+    });
     defer bench.deinit();
 
     var parser_messages_gpa = std.heap.GeneralPurposeAllocator(.{}).init;
@@ -160,10 +163,12 @@ test "Parser benchmarks" {
         },
     );
 
-    const stderr = std.io.getStdErr().writer();
-    try stderr.writeAll("\n");
-    try stderr.writeAll("|-------------------|\n");
-    try stderr.writeAll("| Parser Benchmarks |\n");
-    try stderr.writeAll("|-------------------|\n");
-    try bench.run(stderr);
+    var stderr = std.fs.File.stderr().writerStreaming(&.{});
+    const writer = &stderr.interface;
+
+    try writer.writeAll("\n");
+    try writer.writeAll("|-------------------|\n");
+    try writer.writeAll("| Parser Benchmarks |\n");
+    try writer.writeAll("|-------------------|\n");
+    try bench.run(writer);
 }
