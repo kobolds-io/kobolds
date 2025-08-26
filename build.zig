@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
 
     setupTests(b, target, optimize);
 
-    // setupCICDTests(b, target, optimize);
+    setupCICDTests(b, target, optimize);
 
     // setupBenchmarks(b, target, optimize);
 }

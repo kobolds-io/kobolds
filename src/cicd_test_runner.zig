@@ -99,16 +99,20 @@ pub fn main() !void {
 }
 
 const Printer = struct {
-    out: std.fs.File.Writer,
+    file: std.fs.File,
 
     fn init() Printer {
+        const stderr = std.fs.File.stderr();
         return .{
-            .out = std.io.getStdErr().writer(),
+            .file = stderr,
         };
     }
 
     fn fmt(self: Printer, comptime format: []const u8, args: anytype) void {
-        std.fmt.format(self.out, format, args) catch unreachable;
+        var f = self.file.writerStreaming(&.{});
+        const writer: *std.Io.Writer = &f.interface;
+
+        writer.print(format, args) catch unreachable;
     }
 
     fn status(self: Printer, s: Status, comptime format: []const u8, args: anytype) void {
@@ -118,9 +122,12 @@ const Printer = struct {
             .skip => "\x1b[33m",
             else => "",
         };
-        const out = self.out;
-        out.writeAll(color) catch @panic("writeAll failed?!");
-        std.fmt.format(out, format, args) catch @panic("std.fmt.format failed?!");
+
+        var f = self.file.writerStreaming(&.{});
+        const writer: *std.Io.Writer = &f.interface;
+
+        writer.writeAll(color) catch @panic("writeAll failed?!");
+        writer.print(format, args) catch @panic("writer print failed?");
         self.fmt("\x1b[0m", .{});
     }
 };
