@@ -51,7 +51,7 @@ pub fn generateKey(topic_name: []const u8, id: u128) u128 {
     const fba_allocator = fba.allocator();
 
     // a failure here would be unrecoverable
-    var bytes_list = std.ArrayList(u8).initCapacity(fba_allocator, buf.len) catch unreachable;
+    var bytes_list = std.array_list.Managed(u8).initCapacity(fba_allocator, buf.len) catch unreachable;
 
     bytes_list.appendSliceAssumeCapacity(topic_name);
     bytes_list.appendSliceAssumeCapacity(&u128ToBytes(id));
@@ -69,7 +69,7 @@ pub fn generateUniqueId(salt: u128) u64 {
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     const fba_allocator = fba.allocator();
 
-    var list = std.ArrayList(u8).initCapacity(
+    var list = std.array_list.Managed(u8).initCapacity(
         fba_allocator,
         @sizeOf(i128) + @sizeOf(u128),
     ) catch unreachable;

@@ -11,11 +11,11 @@ const Headers = @import("../protocol/message.zig").Headers;
 pub const Parser = struct {
     const Self = @This();
 
-    buffer: std.ArrayList(u8),
+    buffer: std.array_list.Managed(u8),
 
     pub fn init(allocator: std.mem.Allocator) Parser {
         return Parser{
-            .buffer = std.ArrayList(u8).initCapacity(allocator, constants.parser_max_buffer_size) catch unreachable,
+            .buffer = std.array_list.Managed(u8).initCapacity(allocator, constants.parser_max_buffer_size) catch unreachable,
         };
     }
 
@@ -24,7 +24,7 @@ pub const Parser = struct {
     }
 
     /// parse n messages from a data set. return the number of bytes successfully parsed from the data
-    pub fn parse(self: *Self, messages: *std.ArrayList(Message), data: []const u8) !void {
+    pub fn parse(self: *Self, messages: *std.array_list.Managed(Message), data: []const u8) !void {
         if (self.buffer.items.len + data.len > constants.parser_max_buffer_size) {
             return error.BufferOverflow;
         }

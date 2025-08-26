@@ -51,13 +51,13 @@ pub const TokenAuthStrategy = struct {
     pub const ChallengeContext = struct {};
 
     allocator: std.mem.Allocator,
-    tokens: *std.ArrayList([]const u8),
+    tokens: *std.array_list.Managed([]const u8),
 
     pub fn init(allocator: std.mem.Allocator, config: Config) !Self {
-        const tokens = try allocator.create(std.ArrayList([]const u8));
+        const tokens = try allocator.create(std.array_list.Managed([]const u8));
         errdefer allocator.destroy(tokens);
 
-        tokens.* = try std.ArrayList([]const u8).initCapacity(allocator, config.tokens.len);
+        tokens.* = try std.array_list.Managed([]const u8).initCapacity(allocator, config.tokens.len);
         errdefer tokens.deinit();
 
         try tokens.appendSlice(config.tokens);

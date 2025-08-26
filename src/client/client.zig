@@ -306,8 +306,8 @@ pub const Client = struct {
             // // FIX: this is some baaaaad code. There should instead be a signal or channel that this thread could
             // // wait on instead. Since this call happens on a foreground thread, an unbuffered channel seems the most
             // // appropriate.
-            std.time.sleep(constants.io_tick_us * std.time.ns_per_us);
-            // std.time.sleep(constants.io_tick_ms * std.time.ns_per_ms);
+            std.Thread.sleep(constants.io_tick_us * std.time.ns_per_us);
+            // std.Thread.sleep(constants.io_tick_ms * std.time.ns_per_ms);
         } else {
             return error.DeadlineExceeded;
         }

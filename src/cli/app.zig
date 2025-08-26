@@ -372,7 +372,7 @@ pub fn nodeListen0() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 
@@ -414,7 +414,7 @@ pub fn nodeListen1() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 
@@ -447,7 +447,7 @@ pub fn nodePing() !void {
 
     const connect_end = timer.read();
 
-    var signals = std.ArrayList(*Signal(*Message)).init(allocator);
+    var signals = std.array_list.Managed(*Signal(*Message)).init(allocator);
     defer signals.deinit();
 
     const ITERATIONS: usize = 1;
@@ -470,7 +470,7 @@ pub fn nodePing() !void {
     while (i < ITERATIONS) {
         const signal = signals.items[i];
         client.ping(conn, signal, .{}) catch {
-            std.time.sleep(1 * std.time.ns_per_ms);
+            std.Thread.sleep(1 * std.time.ns_per_ms);
             continue;
         };
 
@@ -535,7 +535,7 @@ pub fn nodeConnect() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
     log.warn("sigint received", .{});
 }
@@ -567,7 +567,7 @@ pub fn nodePublish() !void {
     try client.start();
     defer client.close();
 
-    var connections = std.ArrayList(*Connection).init(allocator);
+    var connections = std.array_list.Managed(*Connection).init(allocator);
     defer connections.deinit();
 
     const CONNECTION_COUNT = 20;
@@ -594,11 +594,11 @@ pub fn nodePublish() !void {
         for (connections.items) |conn| {
             client.publish(conn, topic_name, body, .{}) catch |err| {
                 log.err("error {any}", .{err});
-                std.time.sleep(10 * std.time.ns_per_ms);
+                std.Thread.sleep(10 * std.time.ns_per_ms);
                 continue;
             };
         }
-        // std.time.sleep(1 * std.time.ns_per_ms);
+        // std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 
@@ -673,7 +673,7 @@ pub fn nodeSubscribe() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 
@@ -707,7 +707,7 @@ pub fn nodeRequest() !void {
     const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
     defer client.disconnect(conn);
 
-    var signals = std.ArrayList(*Signal(*Message)).init(allocator);
+    var signals = std.array_list.Managed(*Signal(*Message)).init(allocator);
     defer signals.deinit();
 
     const ITERATIONS: usize = 1;
@@ -737,7 +737,7 @@ pub fn nodeRequest() !void {
         const signal = signals.items[i];
 
         client.request(conn, signal, topic_name, body, .{}) catch {
-            std.time.sleep(1 * std.time.ns_per_ms);
+            std.Thread.sleep(1 * std.time.ns_per_ms);
             continue;
         };
         const send_end = timer.read();
@@ -845,7 +845,7 @@ pub fn nodeAdvertise() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 

@@ -14,8 +14,6 @@ pub fn DoublyLinkedListType(
 ) type {
     assert(@typeInfo(Node) == .@"struct");
     assert(field_back_enum != field_next_enum);
-    assert(std.meta.FieldType(Node, field_back_enum) == ?*Node);
-    assert(std.meta.FieldType(Node, field_next_enum) == ?*Node);
 
     const field_back = @tagName(field_back_enum);
     const field_next = @tagName(field_next_enum);

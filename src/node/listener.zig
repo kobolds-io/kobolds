@@ -53,7 +53,7 @@ pub const Listener = struct {
     config: ListenerConfig,
     io: *IO,
     mutex: std.Thread.Mutex,
-    sockets: std.ArrayList(posix.socket_t),
+    sockets: std.array_list.Managed(posix.socket_t),
     state: State,
     close_channel: *UnbufferedChannel(bool),
     done_channel: *UnbufferedChannel(bool),
@@ -91,7 +91,7 @@ pub const Listener = struct {
             .config = config,
             .io = io,
             .mutex = std.Thread.Mutex{},
-            .sockets = std.ArrayList(posix.socket_t).init(allocator),
+            .sockets = std.array_list.Managed(posix.socket_t).init(allocator),
             .state = .closed,
             .close_channel = close_channel,
             .done_channel = done_channel,
@@ -300,7 +300,7 @@ test "listener behavior" {
     const stream = try net.tcpConnectToHost(allocator, config.host, config.port);
     defer stream.close();
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     try testing.expectEqual(1, listener.sockets.items.len);
 

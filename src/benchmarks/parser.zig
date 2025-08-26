@@ -9,11 +9,11 @@ const Message = @import("../protocol/message.zig").Message;
 const constants = @import("../constants.zig");
 
 const ParserParseBenchmark = struct {
-    messages: *std.ArrayList(Message),
+    messages: *std.array_list.Managed(Message),
     parser: *Parser,
     bytes: []const u8,
 
-    fn new(messages: *std.ArrayList(Message), parser: *Parser, bytes: []const u8) ParserParseBenchmark {
+    fn new(messages: *std.array_list.Managed(Message), parser: *Parser, bytes: []const u8) ParserParseBenchmark {
         return .{
             .messages = messages,
             .parser = parser,
@@ -32,7 +32,7 @@ fn afterEach() void {
     parser_messages.items.len = 0;
 }
 
-var parser_messages: std.ArrayList(Message) = undefined;
+var parser_messages: std.array_list.Managed(Message) = undefined;
 
 test "Parser benchmarks" {
     var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = std.math.maxInt(u16) });
@@ -42,7 +42,7 @@ test "Parser benchmarks" {
     defer _ = parser_messages_gpa.deinit();
     const parser_messages_allocator = parser_messages_gpa.allocator();
 
-    parser_messages = std.ArrayList(Message).initCapacity(parser_messages_allocator, std.math.maxInt(u16)) catch unreachable;
+    parser_messages = std.array_list.Managed(Message).initCapacity(parser_messages_allocator, std.math.maxInt(u16)) catch unreachable;
     defer parser_messages.deinit();
 
     var parser_gpa = std.heap.GeneralPurposeAllocator(.{}).init;

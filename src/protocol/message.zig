@@ -402,7 +402,7 @@ pub const Message = struct {
                 var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
                 const writer_allocator = writer_fba.allocator();
 
-                var writer_list = std.ArrayList(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
+                var writer_list = std.array_list.Managed(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
                 defer writer_list.deinit();
                 const writer = writer_list.writer();
 
@@ -438,7 +438,7 @@ pub const Message = struct {
                 var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
                 const writer_allocator = writer_fba.allocator();
 
-                var writer_list = std.ArrayList(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
+                var writer_list = std.array_list.Managed(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
                 defer writer_list.deinit();
                 const writer = writer_list.writer();
 
@@ -718,7 +718,7 @@ pub const Headers = extern struct {
         var fba = std.heap.FixedBufferAllocator.init(buf);
         const fba_allocator = fba.allocator();
 
-        var list = std.ArrayList(u8).initCapacity(fba_allocator, @sizeOf(Headers)) catch unreachable;
+        var list = std.array_list.Managed(u8).initCapacity(fba_allocator, @sizeOf(Headers)) catch unreachable;
 
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(headers_checksum));
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(body_checksum));
