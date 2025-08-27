@@ -1,7 +1,7 @@
 const std = @import("std");
 const posix = std.posix;
 const assert = std.debug.assert;
-const cli = @import("zig-cli");
+const cli = @import("cli");
 const log = std.log.scoped(.CLI);
 
 const constants = @import("../constants.zig");
@@ -811,7 +811,7 @@ pub fn nodeAdvertise() !void {
             advertiser_bytes_count += req.size();
             if (advertiser_msg_count % 100 == 0) {
                 log.info(
-                    "received message service: {s}, messages_count: {f}, bytes_count: {f}",
+                    "received message service: {s}, messages_count: {d}, bytes_count: {d}",
                     .{
                         req.topicName(),
                         advertiser_msg_count,
@@ -860,12 +860,12 @@ var sigint_received: bool = false;
 /// Intercepts the SIGINT signal and allows for actions after the signal is triggered
 fn registerSigintHandler() void {
     const onSigint = struct {
-        fn onSigint(_: i32) callconv(.C) void {
+        fn onSigint(_: i32) callconv(.c) void {
             sigint_received = true;
         }
     }.onSigint;
 
-    const mask: [32]u32 = [_]u32{0} ** 32;
+    const mask: [1]c_ulong = [_]c_ulong{0};
     var sa = posix.Sigaction{
         .mask = mask,
         .flags = 0,

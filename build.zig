@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
 
     // This is shamelessly taken from the `zbench` library's `build.zig` file.
     // see [here](https://github.com/hendriknielaender/zBench/blob/b69a438f5a1a96d4dd0ea69e1dbcb73a209f76cd/build.zig)
-    // setupExecutable(b, target, optimize);
+    setupExecutable(b, target, optimize);
 
     setupTests(b, target, optimize);
 
@@ -45,11 +45,11 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     const stdx_mod = stdx_dep.module("stdx");
 
-    const zig_cli_dep = b.dependency("zig-cli", .{
+    const cli_dep = b.dependency("cli", .{
         .target = target,
         .optimize = optimize,
     });
-    const zig_cli_mod = zig_cli_dep.module("zig-cli");
+    const cli_mod = cli_dep.module("cli");
 
     const uuid_dep = b.dependency("uuid", .{
         .target = target,
@@ -57,7 +57,7 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     const uuid_mod = uuid_dep.module("uuid");
 
-    kobolds_exe.root_module.addImport("zig-cli", zig_cli_mod);
+    kobolds_exe.root_module.addImport("cli", cli_mod);
     kobolds_exe.root_module.addImport("uuid", uuid_mod);
     kobolds_exe.root_module.addImport("stdx", stdx_mod);
 

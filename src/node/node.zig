@@ -351,28 +351,27 @@ pub const Node = struct {
     }
 
     fn handlePrintingIntervalMetrics(self: *Self) void {
-        _ = self;
-        // const now_ms = std.time.milliTimestamp();
-        // const difference = now_ms - self.metrics.last_printed_at_ms;
-        // if (difference >= 1_000) {
-        //     self.metrics.last_printed_at_ms = std.time.milliTimestamp();
+        const now_ms = std.time.milliTimestamp();
+        const difference = now_ms - self.metrics.last_printed_at_ms;
+        if (difference >= 1_000) {
+            self.metrics.last_printed_at_ms = std.time.milliTimestamp();
 
-        //     const messages_processed = self.metrics.messages_processed.load(.seq_cst);
-        //     const messages_processed_delta = messages_processed - self.metrics.last_messages_processed_printed;
-        //     self.metrics.last_messages_processed_printed = messages_processed;
+            const messages_processed = self.metrics.messages_processed.load(.seq_cst);
+            const messages_processed_delta = messages_processed - self.metrics.last_messages_processed_printed;
+            self.metrics.last_messages_processed_printed = messages_processed;
 
-        //     const bytes_processed = self.metrics.bytes_processed;
-        //     const bytes_processed_delta = bytes_processed - self.metrics.last_bytes_processed_printed;
-        //     self.metrics.last_bytes_processed_printed = bytes_processed;
+            const bytes_processed = self.metrics.bytes_processed;
+            const bytes_processed_delta = bytes_processed - self.metrics.last_bytes_processed_printed;
+            self.metrics.last_bytes_processed_printed = bytes_processed;
 
-        //     log.info("messages_processed: {d}, bytes_processed: {d}, messages_delta: {d}, bytes_delta: {d}, memory_pool: {d}", .{
-        //         messages_processed,
-        //         bytes_processed,
-        //         messages_processed_delta,
-        //         bytes_processed_delta,
-        //         self.memory_pool.available(),
-        //     });
-        // }
+            log.info("messages_processed: {d}, bytes_processed: {d}, messages_delta: {d}, bytes_delta: {d}, memory_pool: {d}", .{
+                messages_processed,
+                bytes_processed,
+                messages_processed_delta,
+                bytes_processed_delta,
+                self.memory_pool.available(),
+            });
+        }
     }
 
     fn gatherMessages(self: *Self) !void {
