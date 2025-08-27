@@ -17,7 +17,8 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    // This is shamelessly taken from the `zbench` library's `build.zig` file. see [here](https://github.com/hendriknielaender/zBench/blob/b69a438f5a1a96d4dd0ea69e1dbcb73a209f76cd/build.zig)
+    // This is shamelessly taken from the `zbench` library's `build.zig` file.
+    // see [here](https://github.com/hendriknielaender/zBench/blob/b69a438f5a1a96d4dd0ea69e1dbcb73a209f76cd/build.zig)
     setupExecutable(b, target, optimize);
 
     setupTests(b, target, optimize);
@@ -30,9 +31,11 @@ pub fn build(b: *std.Build) void {
 fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const kobolds_exe = b.addExecutable(.{
         .name = "kobolds",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
         .version = version,
     });
 
@@ -42,11 +45,11 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     const stdx_mod = stdx_dep.module("stdx");
 
-    const zig_cli_dep = b.dependency("zig-cli", .{
+    const cli_dep = b.dependency("cli", .{
         .target = target,
         .optimize = optimize,
     });
-    const zig_cli_mod = zig_cli_dep.module("zig-cli");
+    const cli_mod = cli_dep.module("cli");
 
     const uuid_dep = b.dependency("uuid", .{
         .target = target,
@@ -54,7 +57,7 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     const uuid_mod = uuid_dep.module("uuid");
 
-    kobolds_exe.root_module.addImport("zig-cli", zig_cli_mod);
+    kobolds_exe.root_module.addImport("cli", cli_mod);
     kobolds_exe.root_module.addImport("uuid", uuid_mod);
     kobolds_exe.root_module.addImport("stdx", stdx_mod);
 
@@ -71,9 +74,11 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
 
 fn setupTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const kobolds_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/test.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     const uuid_dep = b.dependency("uuid", .{
@@ -99,9 +104,11 @@ fn setupTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bui
 
 fn setupCICDTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const kobolds_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/test.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
         .test_runner = .{ .path = b.path("src/cicd_test_runner.zig"), .mode = .simple },
     });
 
@@ -129,9 +136,11 @@ fn setupCICDTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
 fn setupBenchmarks(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const bench_lib = b.addTest(.{
         .name = "bench",
-        .root_source_file = b.path("./src/bench.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("./src/bench.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     const zbench_dep = b.dependency("zbench", .{

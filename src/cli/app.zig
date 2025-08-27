@@ -1,7 +1,7 @@
 const std = @import("std");
 const posix = std.posix;
 const assert = std.debug.assert;
-const cli = @import("zig-cli");
+const cli = @import("cli");
 const log = std.log.scoped(.CLI);
 
 const constants = @import("../constants.zig");
@@ -372,7 +372,7 @@ pub fn nodeListen0() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 
@@ -414,7 +414,7 @@ pub fn nodeListen1() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 
@@ -447,7 +447,7 @@ pub fn nodePing() !void {
 
     const connect_end = timer.read();
 
-    var signals = std.ArrayList(*Signal(*Message)).init(allocator);
+    var signals = std.array_list.Managed(*Signal(*Message)).init(allocator);
     defer signals.deinit();
 
     const ITERATIONS: usize = 1;
@@ -470,7 +470,7 @@ pub fn nodePing() !void {
     while (i < ITERATIONS) {
         const signal = signals.items[i];
         client.ping(conn, signal, .{}) catch {
-            std.time.sleep(1 * std.time.ns_per_ms);
+            std.Thread.sleep(1 * std.time.ns_per_ms);
             continue;
         };
 
@@ -495,7 +495,7 @@ pub fn nodePing() !void {
     const connect_time = (connect_end - connect_start) / std.time.ns_per_ms;
     const send_time = (send_end - send_start) / std.time.ns_per_ms;
     const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
-    log.err("total time took: {}ms, connect_time: {}ms, send_time: {}ms, receive_time: {}ms", .{
+    log.err("total time took: {d}ms, connect_time: {d}ms, send_time: {d}ms, receive_time: {d}ms", .{
         total_time,
         connect_time,
         send_time,
@@ -535,7 +535,7 @@ pub fn nodeConnect() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
     log.warn("sigint received", .{});
 }
@@ -567,7 +567,7 @@ pub fn nodePublish() !void {
     try client.start();
     defer client.close();
 
-    var connections = std.ArrayList(*Connection).init(allocator);
+    var connections = std.array_list.Managed(*Connection).init(allocator);
     defer connections.deinit();
 
     const CONNECTION_COUNT = 20;
@@ -594,11 +594,11 @@ pub fn nodePublish() !void {
         for (connections.items) |conn| {
             client.publish(conn, topic_name, body, .{}) catch |err| {
                 log.err("error {any}", .{err});
-                std.time.sleep(10 * std.time.ns_per_ms);
+                std.Thread.sleep(10 * std.time.ns_per_ms);
                 continue;
             };
         }
-        // std.time.sleep(1 * std.time.ns_per_ms);
+        // std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 
@@ -642,7 +642,7 @@ pub fn nodeSubscribe() !void {
             subscriber_bytes_count += message.size();
             if (subscriber_msg_count % 100 == 0) {
                 log.info(
-                    "received message topic: {s}, messages_count: {}, bytes_count: {}",
+                    "received message topic: {s}, messages_count: {d}, bytes_count: {d}",
                     .{
                         message.topicName(),
                         subscriber_msg_count,
@@ -673,7 +673,7 @@ pub fn nodeSubscribe() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 
@@ -707,7 +707,7 @@ pub fn nodeRequest() !void {
     const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
     defer client.disconnect(conn);
 
-    var signals = std.ArrayList(*Signal(*Message)).init(allocator);
+    var signals = std.array_list.Managed(*Signal(*Message)).init(allocator);
     defer signals.deinit();
 
     const ITERATIONS: usize = 1;
@@ -737,14 +737,14 @@ pub fn nodeRequest() !void {
         const signal = signals.items[i];
 
         client.request(conn, signal, topic_name, body, .{}) catch {
-            std.time.sleep(1 * std.time.ns_per_ms);
+            std.Thread.sleep(1 * std.time.ns_per_ms);
             continue;
         };
         const send_end = timer.read();
 
         const send_time = (send_end - send_start) / std.time.ns_per_ms;
         if (send_time > 1) {
-            log.err("send took > 1ms: {}ms", .{send_time});
+            log.err("send took > 1ms: {d}ms", .{send_time});
         }
 
         i += 1;
@@ -763,13 +763,13 @@ pub fn nodeRequest() !void {
 
         const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
         if (receive_time > 1) {
-            log.err("receive took > 1ms: {}ms", .{receive_time});
+            log.err("receive took > 1ms: {d}ms", .{receive_time});
         }
     }
 
     const total_end = timer.read();
     const total_time = (total_end - total_start) / std.time.ns_per_ms;
-    log.err("total time took: {}ms", .{total_time});
+    log.err("total time took: {d}ms", .{total_time});
 }
 
 var advertiser_msg_count: u64 = 0;
@@ -811,7 +811,7 @@ pub fn nodeAdvertise() !void {
             advertiser_bytes_count += req.size();
             if (advertiser_msg_count % 100 == 0) {
                 log.info(
-                    "received message service: {s}, messages_count: {}, bytes_count: {}",
+                    "received message service: {s}, messages_count: {d}, bytes_count: {d}",
                     .{
                         req.topicName(),
                         advertiser_msg_count,
@@ -845,7 +845,7 @@ pub fn nodeAdvertise() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 
@@ -860,12 +860,12 @@ var sigint_received: bool = false;
 /// Intercepts the SIGINT signal and allows for actions after the signal is triggered
 fn registerSigintHandler() void {
     const onSigint = struct {
-        fn onSigint(_: i32) callconv(.C) void {
+        fn onSigint(_: i32) callconv(.c) void {
             sigint_received = true;
         }
     }.onSigint;
 
-    const mask: [32]u32 = [_]u32{0} ** 32;
+    const mask: [1]c_ulong = [_]c_ulong{0};
     var sa = posix.Sigaction{
         .mask = mask,
         .flags = 0,

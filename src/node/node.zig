@@ -281,12 +281,12 @@ pub const Node = struct {
     pub fn run(self: *Node, ready_channel: *UnbufferedChannel(bool)) void {
         self.state = .running;
         ready_channel.send(true);
-        log.info("node {} running", .{self.id});
+        log.info("node {d} running", .{self.id});
         while (true) {
             // check if the close channel has received a close command
             const close_channel_received = self.close_channel.tryReceive(0) catch false;
             if (close_channel_received) {
-                log.info("node {} closing", .{self.id});
+                log.info("node {d} closing", .{self.id});
                 self.state = .closing;
             }
 
@@ -298,7 +298,7 @@ pub const Node = struct {
                     // self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
                 },
                 .closing => {
-                    log.info("node {}: closed", .{self.id});
+                    log.info("node {d}: closed", .{self.id});
                     self.state = .closed;
                     self.done_channel.send(true);
                     return;
@@ -364,7 +364,7 @@ pub const Node = struct {
             const bytes_processed_delta = bytes_processed - self.metrics.last_bytes_processed_printed;
             self.metrics.last_bytes_processed_printed = bytes_processed;
 
-            log.info("messages_processed: {}, bytes_processed: {}, messages_delta: {}, bytes_delta: {}, memory_pool: {}", .{
+            log.info("messages_processed: {d}, bytes_processed: {d}, messages_delta: {d}, bytes_delta: {d}, memory_pool: {d}", .{
                 messages_processed,
                 bytes_processed,
                 messages_processed_delta,
@@ -586,7 +586,7 @@ pub const Node = struct {
                     self.allocator.destroy(outbox);
                 }
 
-                log.info("node: {} removed connection {}", .{ self.id, conn_id });
+                log.info("node: {d} removed connection {d}", .{ self.id, conn_id });
             }
 
             // remove all the dead connections from the list
@@ -944,7 +944,7 @@ pub const Node = struct {
     fn handlePing(self: *Self, message: *Message) !void {
         assert(message.refs() == 1);
 
-        log.debug("received ping from origin_id: {}, connection_id: {}", .{
+        log.debug("received ping from origin_id: {d}, connection_id: {d}", .{
             message.headers.origin_id,
             message.headers.connection_id,
         });
@@ -955,7 +955,7 @@ pub const Node = struct {
         message.setErrorCode(.ok);
 
         const conn_outbox = self.findOrCreateConnectionOutbox(message.headers.connection_id) catch |err| {
-            log.err("Failed to findOrCreateConnectionOutbox: {}", .{err});
+            log.err("Failed to findOrCreateConnectionOutbox: {any}", .{err});
             return;
         };
 
@@ -966,7 +966,7 @@ pub const Node = struct {
         };
 
         if (conn_outbox.enqueue(envelope)) |_| {} else |err| {
-            log.err("Failed to enqueue message to conn_outbox: {}", .{err});
+            log.err("Failed to enqueue message to conn_outbox: {any}", .{err});
             message.deref();
         }
     }
@@ -977,7 +977,7 @@ pub const Node = struct {
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
-        log.debug("received pong from origin_id: {}, connection_id: {}", .{
+        log.debug("received pong from origin_id: {d}, connection_id: {d}", .{
             message.headers.origin_id,
             message.headers.connection_id,
         });

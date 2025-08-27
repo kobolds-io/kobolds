@@ -818,7 +818,7 @@ test "cancel_all" {
             }
 
             const sleep_ms = 50;
-            std.time.sleep(sleep_ms * std.time.ns_per_ms);
+            std.Thread.sleep(sleep_ms * std.time.ns_per_ms);
 
             for (read_buffers, read_buffer_checksums) |buffer, buffer_checksum| {
                 try testing.expectEqual(checksum(buffer), buffer_checksum);

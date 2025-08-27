@@ -386,6 +386,8 @@ pub const IO = struct {
         assert(completion.operation == .cancel);
         assert(completion.operation.cancel.target == self.cancel_status.queued.target);
 
+        const target = self.cancel_status.queued.target;
+
         self.cancel_status = status: {
             result catch |err| switch (err) {
                 error.NotRunning => break :status .next,
@@ -393,7 +395,7 @@ pub const IO = struct {
                 error.Unexpected => unreachable,
             };
             // Wait for the target operation to complete or abort.
-            break :status .{ .wait = .{ .target = self.cancel_status.queued.target } };
+            break :status .{ .wait = .{ .target = target } };
         };
     }
 

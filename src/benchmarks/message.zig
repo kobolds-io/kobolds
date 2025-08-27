@@ -6,6 +6,7 @@ const testing = std.testing;
 const Message = @import("../protocol/message.zig").Message;
 
 const constants = @import("../constants.zig");
+const benchmark_constants = @import("./constants.zig");
 
 pub fn BenchmarkMessageEncode(_: std.mem.Allocator) void {
     var backing_buf: [constants.message_max_size]u8 = undefined;
@@ -48,18 +49,22 @@ pub fn BenchmarkMessageDecompressGzip(_: std.mem.Allocator) void {
 
 test "Message benchmarks" {
     // var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = 1 });
-    var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = std.math.maxInt(u16) });
+    var bench = zbench.Benchmark.init(std.testing.allocator, .{
+        .iterations = benchmark_constants.benchmark_max_iterations,
+    });
     defer bench.deinit();
 
-    // try bench.add("encode", BenchmarkMessageEncode, .{});
+    try bench.add("encode", BenchmarkMessageEncode, .{});
     try bench.add("decode", BenchmarkMessageDecode, .{});
     // try bench.add("compress gzip", BenchmarkMessageCompressGzip, .{});
     // try bench.add("decompress gzip", BenchmarkMessageDecompressGzip, .{});
 
-    const stderr = std.io.getStdErr().writer();
-    try stderr.writeAll("\n");
-    try stderr.writeAll("|--------------------|\n");
-    try stderr.writeAll("| Message Benchmarks |\n");
-    try stderr.writeAll("|--------------------|\n");
-    try bench.run(stderr);
+    var stderr = std.fs.File.stderr().writerStreaming(&.{});
+    const writer = &stderr.interface;
+
+    try writer.writeAll("\n");
+    try writer.writeAll("|--------------------|\n");
+    try writer.writeAll("| Message Benchmarks |\n");
+    try writer.writeAll("|--------------------|\n");
+    try bench.run(writer);
 }

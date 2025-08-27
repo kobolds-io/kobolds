@@ -17,7 +17,7 @@ pub const MessagePool = struct {
     assigned_map: std.AutoHashMap(*Message, bool),
     capacity: usize,
     free_list: RingBuffer(*Message),
-    messages: std.ArrayList(Message),
+    messages: std.array_list.Managed(Message),
     mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
@@ -26,7 +26,7 @@ pub const MessagePool = struct {
         var free_queue = try RingBuffer(*Message).init(allocator, capacity);
         errdefer free_queue.deinit();
 
-        var messages = try std.ArrayList(Message).initCapacity(allocator, capacity);
+        var messages = try std.array_list.Managed(Message).initCapacity(allocator, capacity);
         errdefer messages.deinit();
 
         // fill the messages list with unintialized messages
@@ -96,7 +96,7 @@ pub const MessagePool = struct {
     pub fn unsafeCreateN(self: *MessagePool, allocator: std.mem.Allocator, n: usize) ![]*Message {
         if (self.available() < n) return error.OutOfMemory;
 
-        var list = try std.ArrayList(*Message).initCapacity(allocator, n);
+        var list = try std.array_list.Managed(*Message).initCapacity(allocator, n);
         errdefer list.deinit();
 
         for (0..n) |_| {

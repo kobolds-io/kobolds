@@ -166,8 +166,8 @@ pub const Connection = struct {
     metrics: ConnectionMetrics,
     origin_id: uuid.Uuid,
     outbox: *RingBuffer(*Message),
-    parsed_message_ptrs: std.ArrayList(*Message),
-    parsed_messages: std.ArrayList(Message),
+    parsed_message_ptrs: std.array_list.Managed(*Message),
+    parsed_messages: std.array_list.Managed(Message),
     parser: Parser,
     peer_id: uuid.Uuid,
     protocol_state: ProtocolState,
@@ -175,7 +175,7 @@ pub const Connection = struct {
     recv_bytes: usize,
     recv_completion: *IO.Completion,
     recv_submitted: bool,
-    send_buffer_list: *std.ArrayList(u8),
+    send_buffer_list: *std.array_list.Managed(u8),
     send_buffer_overflow: [constants.message_max_size]u8,
     send_buffer_overflow_count: usize,
     send_completion: *IO.Completion,
@@ -211,10 +211,10 @@ pub const Connection = struct {
         const tmp_encoding_buffer = try allocator.alloc(u8, constants.message_max_size);
         errdefer allocator.free(tmp_encoding_buffer);
 
-        const send_buffer_list = try allocator.create(std.ArrayList(u8));
+        const send_buffer_list = try allocator.create(std.array_list.Managed(u8));
         errdefer allocator.destroy(send_buffer_list);
 
-        send_buffer_list.* = try std.ArrayList(u8).initCapacity(allocator, constants.connection_send_buffer_size);
+        send_buffer_list.* = try std.array_list.Managed(u8).initCapacity(allocator, constants.connection_send_buffer_size);
         errdefer send_buffer_list.deinit();
 
         const inbox = try allocator.create(RingBuffer(*Message));
@@ -247,8 +247,8 @@ pub const Connection = struct {
             .metrics = ConnectionMetrics{},
             .origin_id = origin_id,
             .outbox = outbox,
-            .parsed_message_ptrs = try std.ArrayList(*Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
-            .parsed_messages = try std.ArrayList(Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
+            .parsed_message_ptrs = try std.array_list.Managed(*Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
+            .parsed_messages = try std.array_list.Managed(Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
             .parser = Parser.init(allocator),
             .peer_id = 0,
             .protocol_state = .inactive,
@@ -307,9 +307,9 @@ pub const Connection = struct {
                 // self.recv_submitted is never flipped to false
                 // if (!self.recv_submitted and !self.send_submitted and !self.connect_submitted) {
                 if (self.connection_id == 0) {
-                    log.info("uninitialized connection closed {}", .{self.connection_id});
+                    log.info("uninitialized connection closed {d}", .{self.connection_id});
                 } else {
-                    log.info("connection closed {}", .{self.connection_id});
+                    log.info("connection closed {d}", .{self.connection_id});
                 }
 
                 self.connection_state = .closed;
@@ -401,8 +401,7 @@ pub const Connection = struct {
                 if (self.tmp_encoding_buffer.len >= message_size) {
                     message.encode(self.tmp_encoding_buffer[0..message_size]);
                 } else {
-                    log.err("buf len: {}, message_size: {}", .{ self.tmp_encoding_buffer.len, message_size });
-                    log.err("message.headers.body_length {any}", .{message.headers.body_length});
+                    log.err("buf len: {d}, message_size: {d}", .{ self.tmp_encoding_buffer.len, message_size });
                     @panic("buffer was not big enough to hold message");
                 }
 
@@ -469,7 +468,10 @@ pub const Connection = struct {
         defer self.allocator.free(message_ptrs);
 
         if (message_ptrs.len != self.parsed_messages.items.len) {
-            log.err("not enough node ptrs {} for parsed_messages {}", .{ message_ptrs.len, self.parsed_messages.items.len });
+            log.err("not enough node ptrs {d} for parsed_messages {d}", .{
+                message_ptrs.len,
+                self.parsed_messages.items.len,
+            });
             for (message_ptrs) |message_ptr| {
                 self.memory_pool.destroy(message_ptr);
             }
@@ -489,7 +491,7 @@ pub const Connection = struct {
 
         const n = self.inbox.enqueueMany(message_ptrs);
         if (n < message_ptrs.len) {
-            log.err("could not enqueue all message ptrs. dropping {} messages", .{message_ptrs[n..].len});
+            log.err("could not enqueue all message ptrs. dropping {d} messages", .{message_ptrs[n..].len});
             for (message_ptrs[n..]) |message_ptr| {
                 message_ptr.deref();
                 self.memory_pool.destroy(message_ptr);
@@ -509,7 +511,7 @@ pub const Connection = struct {
 
         // Connection closed by peer
         if (bytes == 0) {
-            log.err("connection {} received no bytes, closing", .{self.connection_id});
+            log.err("connection {d} received no bytes, closing", .{self.connection_id});
             self.connection_state = .closing;
             return;
         }

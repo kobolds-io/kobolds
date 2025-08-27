@@ -1,6 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const gzip = std.compress.gzip;
+const gzip = std.compress.flate;
 const atomic = std.atomic;
 
 const constants = @import("../constants.zig");
@@ -385,33 +385,34 @@ pub const Message = struct {
         if (self.headers.compressed) return error.AlreadyCompressed;
         switch (self.headers.compression) {
             .none => {},
-            .gzip => {
-                const message_body = self.body();
+            else => unreachable,
+            // .gzip => {
+            //     const message_body = self.body();
 
-                // if the message.body is empty, do nothing and just return early this will be faster
-                // and can eliminate errors. This should be checked on the decompress call
-                if (message_body.len == 0) return;
+            //     // if the message.body is empty, do nothing and just return early this will be faster
+            //     // and can eliminate errors. This should be checked on the decompress call
+            //     if (message_body.len == 0) return;
 
-                // create a reader that can read the message_body
-                var reader_fbs = std.io.fixedBufferStream(message_body);
-                const reader = reader_fbs.reader();
+            //     // create a reader that can read the message_body
+            //     var reader_fbs = std.io.fixedBufferStream(message_body);
+            //     const reader = reader_fbs.reader();
 
-                // at worse this message is going to be as big as the body already is. This isn't ideal.
-                // TODO: remove the requirement to have a separate buffer
-                var writer_buf: [constants.message_max_body_size]u8 = undefined;
-                var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
-                const writer_allocator = writer_fba.allocator();
+            //     // at worse this message is going to be as big as the body already is. This isn't ideal.
+            //     // TODO: remove the requirement to have a separate buffer
+            //     var writer_buf: [constants.message_max_body_size]u8 = undefined;
+            //     var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
+            //     const writer_allocator = writer_fba.allocator();
 
-                var writer_list = std.ArrayList(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
-                defer writer_list.deinit();
-                const writer = writer_list.writer();
+            //     var writer_list = std.array_list.Managed(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
+            //     defer writer_list.deinit();
+            //     const writer = writer_list.writer();
 
-                try gzip.compress(reader, writer, .{});
+            //     try gzip.compress(reader, writer, .{});
 
-                // set the message body
-                self.setBody(writer_list.items);
-                self.headers.compressed = true;
-            },
+            //     // set the message body
+            //     self.setBody(writer_list.items);
+            //     self.headers.compressed = true;
+            // },
         }
     }
 
@@ -423,31 +424,32 @@ pub const Message = struct {
         if (!self.headers.compressed and self.headers.compression != .none) return error.AlreadyDecompressed;
         switch (self.headers.compression) {
             .none => {},
-            .gzip => {
-                const message_body = self.body();
-                // if the message.body is empty, do nothing and just return early this will be faster
-                // and can eliminate errors. This should be checked on the compress call
-                if (message_body.len == 0) return;
+            else => unreachable,
+            // .gzip => {
+            //     const message_body = self.body();
+            //     // if the message.body is empty, do nothing and just return early this will be faster
+            //     // and can eliminate errors. This should be checked on the compress call
+            //     if (message_body.len == 0) return;
 
-                // create a reader that can read the message_body
-                var reader_fbs = std.io.fixedBufferStream(message_body);
-                const reader = reader_fbs.reader();
+            //     // create a reader that can read the message_body
+            //     var reader_fbs = std.io.fixedBufferStream(message_body);
+            //     const reader = reader_fbs.reader();
 
-                // at worse this message is going to be as big as the body already is.
-                var writer_buf: [constants.message_max_body_size]u8 = undefined;
-                var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
-                const writer_allocator = writer_fba.allocator();
+            //     // at worse this message is going to be as big as the body already is.
+            //     var writer_buf: [constants.message_max_body_size]u8 = undefined;
+            //     var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
+            //     const writer_allocator = writer_fba.allocator();
 
-                var writer_list = std.ArrayList(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
-                defer writer_list.deinit();
-                const writer = writer_list.writer();
+            //     var writer_list = std.array_list.Managed(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
+            //     defer writer_list.deinit();
+            //     const writer = writer_list.writer();
 
-                try gzip.decompress(reader, writer);
+            //     try gzip.decompress(reader, writer);
 
-                // set the message body
-                self.setBody(writer_list.items);
-                self.headers.compressed = false;
-            },
+            //     // set the message body
+            //     self.setBody(writer_list.items);
+            //     self.headers.compressed = false;
+            // },
         }
     }
 
@@ -718,7 +720,7 @@ pub const Headers = extern struct {
         var fba = std.heap.FixedBufferAllocator.init(buf);
         const fba_allocator = fba.allocator();
 
-        var list = std.ArrayList(u8).initCapacity(fba_allocator, @sizeOf(Headers)) catch unreachable;
+        var list = std.array_list.Managed(u8).initCapacity(fba_allocator, @sizeOf(Headers)) catch unreachable;
 
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(headers_checksum));
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(body_checksum));

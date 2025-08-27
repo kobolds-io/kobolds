@@ -29,7 +29,7 @@ test "parse parses a message" {
     defer _ = messages_gpa.deinit();
     const messages_allocator = messages_gpa.allocator();
 
-    var messages = std.ArrayList(Message).init(messages_allocator);
+    var messages = std.array_list.Managed(Message).init(messages_allocator);
     defer messages.deinit();
 
     var parser = Parser.init(allocator);
@@ -61,7 +61,7 @@ test "parse parses multiple messages" {
     var fba = std.heap.FixedBufferAllocator.init(&data_buf);
     const fba_allocator = fba.allocator();
 
-    var data = std.ArrayList(u8).init(fba_allocator);
+    var data = std.array_list.Managed(u8).init(fba_allocator);
 
     for (0..5) |_| {
         // we append the same encoded message 5 times
@@ -72,7 +72,7 @@ test "parse parses multiple messages" {
     defer _ = messages_gpa.deinit();
     const messages_allocator = messages_gpa.allocator();
 
-    var messages = std.ArrayList(Message).init(messages_allocator);
+    var messages = std.array_list.Managed(Message).init(messages_allocator);
     defer messages.deinit();
 
     var parser = Parser.init(allocator);
