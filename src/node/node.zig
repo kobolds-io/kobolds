@@ -37,6 +37,9 @@ const Requestor = @import("../services/requestor.zig").Requestor;
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 const Envelope = @import("../data_structures/envelope.zig").Envelope;
 
+const Authenticator = @import("./authenticator.zig").Authenticator;
+const AuthenticatorConfig = @import("./authenticator.zig").AuthenticatorConfig;
+
 pub const NodeConfig = struct {
     const Self = @This();
 
@@ -45,6 +48,7 @@ pub const NodeConfig = struct {
     memory_pool_capacity: usize = 100_000,
     listener_configs: ?[]const ListenerConfig = null,
     outbound_configs: ?[]const OutboundConnectionConfig = null,
+    authenticator_config: AuthenticatorConfig = .{ .none = .{} },
 
     pub fn validate(self: Self) ?[]const u8 {
         const cpu_core_count = std.Thread.getCpuCount() catch @panic("could not get getCpuCount");
@@ -64,11 +68,14 @@ pub const NodeConfig = struct {
         if (self.outbound_configs) |outbound_configs| {
             if (outbound_configs.len == 0) return "NodeConfig `outbound_configs` is non null but contains no entries";
             for (outbound_configs) |outbound_config| {
+                if (outbound_config.peer_type != .node) return "Node config `outbound_configs` contains a non .node peer_type";
                 switch (outbound_config.transport) {
                     .tcp => {},
                 }
             }
         }
+
+        // if (self.authenticator_config.validate()) |reason| return reason;
 
         return null;
     }
@@ -87,7 +94,6 @@ pub const Node = struct {
     close_channel: *UnbufferedChannel(bool),
     config: NodeConfig,
     connection_outboxes: std.AutoHashMap(u128, *RingBuffer(Envelope)),
-    connections: *std.AutoHashMap(u128, *Connection),
     done_channel: *UnbufferedChannel(bool),
     id: uuid.Uuid,
     inbox: *RingBuffer(*Message),
@@ -100,6 +106,7 @@ pub const Node = struct {
     topics: std.StringHashMap(*Topic),
     services: std.StringHashMap(*Service),
     workers: *std.AutoHashMap(usize, *Worker),
+    authenticator: *Authenticator,
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
         if (config.validate()) |err_message| {
@@ -133,12 +140,6 @@ pub const Node = struct {
         workers.* = std.AutoHashMap(usize, *Worker).init(allocator);
         errdefer workers.deinit();
 
-        const connections = try allocator.create(std.AutoHashMap(u128, *Connection));
-        errdefer allocator.destroy(connections);
-
-        connections.* = std.AutoHashMap(u128, *Connection).init(allocator);
-        errdefer connections.deinit();
-
         const memory_pool = try allocator.create(MemoryPool(Message));
         errdefer allocator.destroy(memory_pool);
 
@@ -157,12 +158,17 @@ pub const Node = struct {
         listeners.* = std.AutoHashMap(usize, *Listener).init(allocator);
         errdefer listeners.deinit();
 
+        const authenticator = try allocator.create(Authenticator);
+        errdefer allocator.destroy(authenticator);
+
+        authenticator.* = try Authenticator.init(allocator, config.authenticator_config);
+        errdefer authenticator.deinit();
+
         return Self{
             .allocator = allocator,
             .close_channel = close_channel,
             .config = config,
             .connection_outboxes = std.AutoHashMap(u128, *RingBuffer(Envelope)).init(allocator),
-            .connections = connections,
             .done_channel = done_channel,
             .id = uuid.v7.new(),
             .inbox = inbox,
@@ -175,6 +181,7 @@ pub const Node = struct {
             .topics = std.StringHashMap(*Topic).init(allocator),
             .services = std.StringHashMap(*Service).init(allocator),
             .workers = workers,
+            .authenticator = authenticator,
         };
     }
 
@@ -184,14 +191,6 @@ pub const Node = struct {
             const listener = entry.*;
             listener.deinit();
             self.allocator.destroy(listener);
-        }
-
-        var connections_iter = self.connections.valueIterator();
-        while (connections_iter.next()) |entry| {
-            const connection = entry.*;
-
-            connection.deinit();
-            self.allocator.destroy(connection);
         }
 
         var workers_iterator = self.workers.valueIterator();
@@ -237,20 +236,20 @@ pub const Node = struct {
         self.workers.deinit();
         self.memory_pool.deinit();
         self.io.deinit();
-        self.connections.deinit();
         self.topics.deinit();
         self.services.deinit();
         self.inbox.deinit();
         self.connection_outboxes.deinit();
+        self.authenticator.deinit();
 
         self.allocator.destroy(self.close_channel);
-        self.allocator.destroy(self.connections);
         self.allocator.destroy(self.done_channel);
         self.allocator.destroy(self.inbox);
         self.allocator.destroy(self.io);
         self.allocator.destroy(self.listeners);
         self.allocator.destroy(self.memory_pool);
         self.allocator.destroy(self.workers);
+        self.allocator.destroy(self.authenticator);
     }
 
     pub fn start(self: *Self) !void {
@@ -282,12 +281,12 @@ pub const Node = struct {
     pub fn run(self: *Node, ready_channel: *UnbufferedChannel(bool)) void {
         self.state = .running;
         ready_channel.send(true);
-        log.info("node {} running", .{self.id});
+        log.info("node {d} running", .{self.id});
         while (true) {
             // check if the close channel has received a close command
             const close_channel_received = self.close_channel.tryReceive(0) catch false;
             if (close_channel_received) {
-                log.info("node {} closing", .{self.id});
+                log.info("node {d} closing", .{self.id});
                 self.state = .closing;
             }
 
@@ -299,7 +298,7 @@ pub const Node = struct {
                     // self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
                 },
                 .closing => {
-                    log.info("node {}: closed", .{self.id});
+                    log.info("node {d}: closed", .{self.id});
                     self.state = .closed;
                     self.done_channel.send(true);
                     return;
@@ -341,6 +340,17 @@ pub const Node = struct {
     }
 
     fn tick(self: *Self) !void {
+        self.handlePrintingIntervalMetrics();
+
+        try self.pruneDeadConnections();
+        try self.maybeAddInboundConnections();
+        try self.gatherMessages();
+        try self.processMessages();
+        try self.aggregateMessages();
+        try self.distributeMessages();
+    }
+
+    fn handlePrintingIntervalMetrics(self: *Self) void {
         const now_ms = std.time.milliTimestamp();
         const difference = now_ms - self.metrics.last_printed_at_ms;
         if (difference >= 1_000) {
@@ -354,7 +364,7 @@ pub const Node = struct {
             const bytes_processed_delta = bytes_processed - self.metrics.last_bytes_processed_printed;
             self.metrics.last_bytes_processed_printed = bytes_processed;
 
-            log.info("messages_processed: {}, bytes_processed: {}, messages_delta: {}, bytes_delta: {}, memory_pool: {}", .{
+            log.info("messages_processed: {d}, bytes_processed: {d}, messages_delta: {d}, bytes_delta: {d}, memory_pool: {d}", .{
                 messages_processed,
                 bytes_processed,
                 messages_processed_delta,
@@ -362,13 +372,6 @@ pub const Node = struct {
                 self.memory_pool.available(),
             });
         }
-
-        try self.pruneDeadConnections();
-        try self.maybeAddInboundConnections();
-        try self.gatherMessages();
-        try self.processMessages();
-        try self.aggregateMessages();
-        try self.distributeMessages();
     }
 
     fn gatherMessages(self: *Self) !void {
@@ -408,6 +411,8 @@ pub const Node = struct {
                     .unadvertise => try self.handleUnadvertise(message),
                     .request => try self.handleRequest(message),
                     .reply => try self.handleReply(message),
+                    .ping => try self.handlePing(message),
+                    .pong => try self.handlePong(message),
                     else => |t| {
                         log.err("received unhandled message type {any}", .{t});
                         @panic("unhandled message!");
@@ -581,7 +586,7 @@ pub const Node = struct {
                     self.allocator.destroy(outbox);
                 }
 
-                log.info("node: {} removed connection {}", .{ self.id, conn_id });
+                log.info("node: {d} removed connection {d}", .{ self.id, conn_id });
             }
 
             // remove all the dead connections from the list
@@ -685,7 +690,7 @@ pub const Node = struct {
             for (outbound_configs) |outbound_config| {
                 switch (outbound_config.transport) {
                     .tcp => {
-                        _ = try self.addOutboundConnectionToNextWorker(outbound_config);
+                        try self.addOutboundConnectionToNextWorker(outbound_config);
                     },
                 }
             }
@@ -702,13 +707,15 @@ pub const Node = struct {
                 defer listener.mutex.unlock();
 
                 while (listener.sockets.pop()) |socket| {
-                    try self.addInboundConnectionToNextWorker(socket);
+                    try self.addInboundConnectionToNextWorker(socket, .{
+                        .peer_type = listener.config.peer_type,
+                    });
                 }
             }
         }
     }
 
-    fn addInboundConnectionToNextWorker(self: *Self, socket: posix.socket_t) !void {
+    fn addInboundConnectionToNextWorker(self: *Self, socket: posix.socket_t, config: InboundConnectionConfig) !void {
         assert(self.workers.count() > 0);
         // we are just gonna try to close this socket if anything blows up
         errdefer posix.close(socket);
@@ -735,10 +742,10 @@ pub const Node = struct {
         if (worker_with_min_connections == null) unreachable;
         const worker = worker_with_min_connections.?;
 
-        try worker.addInboundConnection(socket);
+        try worker.addInboundConnection(socket, config);
     }
 
-    fn addOutboundConnectionToNextWorker(self: *Self, config: OutboundConnectionConfig) !ConnectionHandle {
+    fn addOutboundConnectionToNextWorker(self: *Self, config: OutboundConnectionConfig) !void {
         var worker_iter = self.workers.valueIterator();
         var worker_with_min_connections: ?*Worker = null;
         var min_connections: u32 = 0;
@@ -760,14 +767,7 @@ pub const Node = struct {
         if (worker_with_min_connections == null) unreachable;
         const worker = worker_with_min_connections.?;
 
-        const connection = try worker.addOutboundConnection(config);
-
-        const ch = ConnectionHandle{
-            .connection = connection,
-            .worker = worker,
-        };
-
-        return ch;
+        try worker.addOutboundConnection(config);
     }
 
     fn handlePublish(self: *Self, message: *Message) !void {
@@ -941,6 +941,48 @@ pub const Node = struct {
         service.replies_queue.enqueue(message) catch message.deref();
     }
 
+    fn handlePing(self: *Self, message: *Message) !void {
+        assert(message.refs() == 1);
+
+        log.debug("received ping from origin_id: {d}, connection_id: {d}", .{
+            message.headers.origin_id,
+            message.headers.connection_id,
+        });
+        // Since this is a `ping` we don't need to do any extra work to figure out how to respond
+        message.headers.message_type = .pong;
+        message.headers.origin_id = self.id;
+        message.setTransactionId(message.transactionId());
+        message.setErrorCode(.ok);
+
+        const conn_outbox = self.findOrCreateConnectionOutbox(message.headers.connection_id) catch |err| {
+            log.err("Failed to findOrCreateConnectionOutbox: {any}", .{err});
+            return;
+        };
+
+        message.ref();
+        const envelope = Envelope{
+            .connection_id = message.headers.connection_id,
+            .message = message,
+        };
+
+        if (conn_outbox.enqueue(envelope)) |_| {} else |err| {
+            log.err("Failed to enqueue message to conn_outbox: {any}", .{err});
+            message.deref();
+        }
+    }
+
+    fn handlePong(self: *Self, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        log.debug("received pong from origin_id: {d}, connection_id: {d}", .{
+            message.headers.origin_id,
+            message.headers.connection_id,
+        });
+    }
+
     fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
         _ = options;
 
@@ -973,18 +1015,6 @@ pub const Node = struct {
             try self.services.put(topic_name, service);
             return service;
         }
-    }
-};
-
-pub const ConnectionHandle = struct {
-    const Self = @This();
-
-    connection: *Connection,
-    worker: *Worker,
-
-    pub fn enqueueMessage(self: Self, message: *Message) !void {
-        _ = self;
-        _ = message;
     }
 };
 

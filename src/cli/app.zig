@@ -1,7 +1,7 @@
 const std = @import("std");
 const posix = std.posix;
 const assert = std.debug.assert;
-const cli = @import("zig-cli");
+const cli = @import("cli");
 const log = std.log.scoped(.CLI);
 
 const constants = @import("../constants.zig");
@@ -12,20 +12,35 @@ const IO = @import("../io.zig").IO;
 
 const Node = @import("../node/node.zig").Node;
 const NodeConfig = @import("../node/node.zig").NodeConfig;
+
 const Client = @import("../client/client.zig").Client;
+const AuthenticationConfig = @import("../client/client.zig").AuthenticationConfig;
 const ClientConfig = @import("../client/client.zig").ClientConfig;
-const Transaction = @import("../client/client.zig").Transaction;
-const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
+
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
+const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 const AllowedInboundConnectionConfig = @import("../node/listener.zig").AllowedInboundConnectionConfig;
+
+const AuthenticatorConfig = @import("../node/authenticator.zig").AuthenticatorConfig;
 const Signal = @import("stdx").Signal;
 
 var node_config = NodeConfig{
     .max_connections = 5,
+    .authenticator_config = .{
+        .none = .{},
+        // .token = .{
+        //     .tokens = &[_][]const u8{"asdf"},
+        // },
+    },
 };
 
 var client_config = ClientConfig{
     .max_connections = 100,
+    .authentication_config = .{
+        .token_config = .{
+            .token = "asdf",
+        },
+    },
 };
 
 const RequestConfig = struct {
@@ -66,8 +81,8 @@ pub fn run() !void {
         .target = cli.CommandTarget{ .action = cli.CommandAction{ .exec = version } },
     };
 
-    const node_listen_command = cli.Command{
-        .name = "listen",
+    const node_listen_0_command = cli.Command{
+        .name = "listen0",
         .description = cli.Description{
             .one_line = "listen for incomming connections",
             .detailed = "start a node and listen for incomming connections",
@@ -91,7 +106,35 @@ pub fn run() !void {
             },
         },
 
-        .target = .{ .action = .{ .exec = nodeListen } },
+        .target = .{ .action = .{ .exec = nodeListen0 } },
+    };
+
+    const node_listen_1_command = cli.Command{
+        .name = "listen1",
+        .description = cli.Description{
+            .one_line = "listen for incomming connections",
+            .detailed = "start a node and listen for incomming connections",
+        },
+
+        .options = &.{
+            // .{
+            //     .long_name = "host",
+            //     .help = "host to listen on",
+            //     .value_ref = app_runner.mkRef(&node_config.host),
+            // },
+            // .{
+            //     .long_name = "port",
+            //     .help = "port to bind to",
+            //     .value_ref = app_runner.mkRef(&node_config.port),
+            // },
+            .{
+                .long_name = "worker-threads",
+                .help = "worker threads to be spawned",
+                .value_ref = app_runner.mkRef(&node_config.worker_threads),
+            },
+        },
+
+        .target = .{ .action = .{ .exec = nodeListen1 } },
     };
 
     const node_connect_command = cli.Command{
@@ -243,7 +286,8 @@ pub fn run() !void {
         .description = cli.Description{ .one_line = "commands to control nodes" },
         .target = .{
             .subcommands = &.{
-                node_listen_command,
+                node_listen_0_command,
+                node_listen_1_command,
                 node_connect_command,
                 node_ping_command,
                 node_request_command,
@@ -275,24 +319,90 @@ pub fn run() !void {
     return app_runner.run(&app);
 }
 
-pub fn nodeListen() !void {
+pub fn nodeListen0() !void {
     // creating a client to communicate with the node
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
     // This is just a test used to whitelist a certain inbound connection origins
-    const allowed_inbound_connection_config = AllowedInboundConnectionConfig{
-        .host = "0.0.0.0",
-    };
+    const allowed_inbound_connection_config = AllowedInboundConnectionConfig{ .host = "0.0.0.0" };
     const allowed_inbound_connection_configs = [_]AllowedInboundConnectionConfig{allowed_inbound_connection_config};
-    const listener_config = ListenerConfig{
+
+    const client_listener_config = ListenerConfig{
         .host = "127.0.0.1",
         .port = 8000,
         .transport = .tcp,
         .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
+        .peer_type = .client,
     };
-    const listener_configs = [_]ListenerConfig{listener_config};
+
+    const node_listener_config = ListenerConfig{
+        .host = "127.0.0.1",
+        .port = 8001,
+        .transport = .tcp,
+        .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
+        .peer_type = .node,
+    };
+
+    const listener_configs = [_]ListenerConfig{ client_listener_config, node_listener_config };
+    node_config.listener_configs = &listener_configs;
+
+    const outbound_node_connection_config = OutboundConnectionConfig{
+        .host = "127.0.0.1",
+        .port = 8006,
+        .transport = .tcp,
+        .peer_type = .node,
+        .reconnect_config = .{
+            .enabled = true,
+            .max_attempts = 0,
+            .reconnection_strategy = .timed,
+        },
+    };
+
+    const outbound_connection_configs = [_]OutboundConnectionConfig{outbound_node_connection_config};
+    node_config.outbound_configs = &outbound_connection_configs;
+
+    var node = try Node.init(allocator, node_config);
+    defer node.deinit();
+
+    try node.start();
+    defer node.close();
+
+    registerSigintHandler();
+
+    while (!sigint_received) {
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
+}
+
+pub fn nodeListen1() !void {
+    // creating a client to communicate with the node
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+
+    // This is just a test used to whitelist a certain inbound connection origins
+    const allowed_inbound_connection_config = AllowedInboundConnectionConfig{ .host = "0.0.0.0" };
+    const allowed_inbound_connection_configs = [_]AllowedInboundConnectionConfig{allowed_inbound_connection_config};
+
+    const client_listener_config = ListenerConfig{
+        .host = "127.0.0.1",
+        .port = 8005,
+        .transport = .tcp,
+        .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
+        .peer_type = .client,
+    };
+
+    const node_listener_config = ListenerConfig{
+        .host = "127.0.0.1",
+        .port = 8006,
+        .transport = .tcp,
+        .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
+        .peer_type = .node,
+    };
+
+    const listener_configs = [_]ListenerConfig{ client_listener_config, node_listener_config };
     node_config.listener_configs = &listener_configs;
 
     var node = try Node.init(allocator, node_config);
@@ -304,7 +414,7 @@ pub fn nodeListen() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 
@@ -316,17 +426,9 @@ pub fn nodePing() !void {
 
     const outbound_connection_config = OutboundConnectionConfig{
         .host = "127.0.0.1",
-        .port = 8000,
+        .port = 8001,
         .transport = .tcp,
-        .reconnect_config = .{
-            .enabled = true,
-            .max_attempts = 0,
-            .reconnection_strategy = .timed,
-        },
-        .keep_alive_config = .{
-            .enabled = true,
-            .interval_ms = 300,
-        },
+        .peer_type = .node,
     };
 
     var client = try Client.init(allocator, client_config);
@@ -335,16 +437,21 @@ pub fn nodePing() !void {
     try client.start();
     defer client.close();
 
+    var timer = try std.time.Timer.start();
+
+    const total_start = timer.read();
+    const connect_start = timer.read();
+
     const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
     defer client.disconnect(conn);
 
-    var signals = std.ArrayList(*Signal(*Message)).init(allocator);
+    const connect_end = timer.read();
+
+    var signals = std.array_list.Managed(*Signal(*Message)).init(allocator);
     defer signals.deinit();
 
     const ITERATIONS: usize = 1;
 
-    var timer = try std.time.Timer.start();
-    const total_start = timer.read();
     for (0..ITERATIONS) |_| {
         const signal = try allocator.create(Signal(*Message));
         errdefer allocator.destroy(signal);
@@ -358,44 +465,42 @@ pub fn nodePing() !void {
         }
     }
 
+    const send_start = timer.read();
     var i: usize = 0;
     while (i < ITERATIONS) {
-        const send_start = timer.read();
         const signal = signals.items[i];
         client.ping(conn, signal, .{}) catch {
-            std.time.sleep(1 * std.time.ns_per_ms);
+            std.Thread.sleep(1 * std.time.ns_per_ms);
             continue;
         };
-        const send_end = timer.read();
-
-        const send_time = (send_end - send_start) / std.time.ns_per_ms;
-        if (send_time > 1) {
-            log.err("send took > 1ms: {}ms", .{send_time});
-        }
 
         i += 1;
     }
+    const send_end = timer.read();
 
+    const receive_start = timer.read();
     for (signals.items) |signal| {
-        const receive_start = timer.read();
         const rep = try signal.tryReceive(5_000 * std.time.ns_per_ms);
-        const receive_end = timer.read();
 
         const error_code = rep.errorCode();
         if (error_code != .ok) return error.BadRequest;
 
         rep.deref();
         if (rep.refs() == 0) client.memory_pool.destroy(rep);
-
-        const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
-        if (receive_time > 1) {
-            log.err("receive took > 1ms: {}ms", .{receive_time});
-        }
     }
+    const receive_end = timer.read();
 
     const total_end = timer.read();
     const total_time = (total_end - total_start) / std.time.ns_per_ms;
-    log.err("total time took: {}ms", .{total_time});
+    const connect_time = (connect_end - connect_start) / std.time.ns_per_ms;
+    const send_time = (send_end - send_start) / std.time.ns_per_ms;
+    const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
+    log.err("total time took: {d}ms, connect_time: {d}ms, send_time: {d}ms, receive_time: {d}ms", .{
+        total_time,
+        connect_time,
+        send_time,
+        receive_time,
+    });
 }
 
 pub fn nodeConnect() !void {
@@ -430,7 +535,7 @@ pub fn nodeConnect() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
     log.warn("sigint received", .{});
 }
@@ -462,10 +567,10 @@ pub fn nodePublish() !void {
     try client.start();
     defer client.close();
 
-    var connections = std.ArrayList(*Connection).init(allocator);
+    var connections = std.array_list.Managed(*Connection).init(allocator);
     defer connections.deinit();
 
-    const CONNECTION_COUNT = 1;
+    const CONNECTION_COUNT = 20;
 
     for (0..CONNECTION_COUNT) |_| {
         const conn = try client.connect(outbound_connection_config, 10_000 * std.time.ns_per_ms);
@@ -489,11 +594,11 @@ pub fn nodePublish() !void {
         for (connections.items) |conn| {
             client.publish(conn, topic_name, body, .{}) catch |err| {
                 log.err("error {any}", .{err});
-                std.time.sleep(10 * std.time.ns_per_ms);
+                std.Thread.sleep(10 * std.time.ns_per_ms);
                 continue;
             };
         }
-        std.time.sleep(100 * std.time.ns_per_us);
+        // std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 
@@ -537,7 +642,7 @@ pub fn nodeSubscribe() !void {
             subscriber_bytes_count += message.size();
             if (subscriber_msg_count % 100 == 0) {
                 log.info(
-                    "received message topic: {s}, messages_count: {}, bytes_count: {}",
+                    "received message topic: {s}, messages_count: {d}, bytes_count: {d}",
                     .{
                         message.topicName(),
                         subscriber_msg_count,
@@ -568,7 +673,7 @@ pub fn nodeSubscribe() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 
@@ -602,7 +707,7 @@ pub fn nodeRequest() !void {
     const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
     defer client.disconnect(conn);
 
-    var signals = std.ArrayList(*Signal(*Message)).init(allocator);
+    var signals = std.array_list.Managed(*Signal(*Message)).init(allocator);
     defer signals.deinit();
 
     const ITERATIONS: usize = 1;
@@ -632,14 +737,14 @@ pub fn nodeRequest() !void {
         const signal = signals.items[i];
 
         client.request(conn, signal, topic_name, body, .{}) catch {
-            std.time.sleep(1 * std.time.ns_per_ms);
+            std.Thread.sleep(1 * std.time.ns_per_ms);
             continue;
         };
         const send_end = timer.read();
 
         const send_time = (send_end - send_start) / std.time.ns_per_ms;
         if (send_time > 1) {
-            log.err("send took > 1ms: {}ms", .{send_time});
+            log.err("send took > 1ms: {d}ms", .{send_time});
         }
 
         i += 1;
@@ -658,13 +763,13 @@ pub fn nodeRequest() !void {
 
         const receive_time = (receive_end - receive_start) / std.time.ns_per_ms;
         if (receive_time > 1) {
-            log.err("receive took > 1ms: {}ms", .{receive_time});
+            log.err("receive took > 1ms: {d}ms", .{receive_time});
         }
     }
 
     const total_end = timer.read();
     const total_time = (total_end - total_start) / std.time.ns_per_ms;
-    log.err("total time took: {}ms", .{total_time});
+    log.err("total time took: {d}ms", .{total_time});
 }
 
 var advertiser_msg_count: u64 = 0;
@@ -706,7 +811,7 @@ pub fn nodeAdvertise() !void {
             advertiser_bytes_count += req.size();
             if (advertiser_msg_count % 100 == 0) {
                 log.info(
-                    "received message service: {s}, messages_count: {}, bytes_count: {}",
+                    "received message service: {s}, messages_count: {d}, bytes_count: {d}",
                     .{
                         req.topicName(),
                         advertiser_msg_count,
@@ -740,7 +845,7 @@ pub fn nodeAdvertise() !void {
     registerSigintHandler();
 
     while (!sigint_received) {
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.sleep(1 * std.time.ns_per_ms);
     }
 }
 
@@ -755,12 +860,12 @@ var sigint_received: bool = false;
 /// Intercepts the SIGINT signal and allows for actions after the signal is triggered
 fn registerSigintHandler() void {
     const onSigint = struct {
-        fn onSigint(_: i32) callconv(.C) void {
+        fn onSigint(_: i32) callconv(.c) void {
             sigint_received = true;
         }
     }.onSigint;
 
-    const mask: [32]u32 = [_]u32{0} ** 32;
+    const mask: [1]c_ulong = [_]c_ulong{0};
     var sa = posix.Sigaction{
         .mask = mask,
         .flags = 0,

@@ -24,6 +24,7 @@ pub const InboundConnectionConfig = struct {
     host: []const u8 = "0.0.0.0",
     port: u16 = 0,
     transport: Transport = .tcp,
+    peer_type: PeerType = .client,
 };
 
 // TODO: a user should be able to provide a token/key for authentication to remotes
@@ -31,9 +32,12 @@ pub const OutboundConnectionConfig = struct {
     host: []const u8,
     port: u16,
     transport: Transport = .tcp,
-    /// The reconnection configuration to be used. If `null`, no reconnection attempts will be performed.
+    peer_type: PeerType = .node,
+    /// If `null`, no reconnection attempts will be performed.
     reconnect_config: ?ReconnectionConfig = null,
+    /// If `null`, no keep alive messages will be performed.
     keep_alive_config: ?KeepAliveConfig = null,
+    authentication_config: ?AuthenticationConfig = .{ .none_config = NoneAuthConfig{} },
 
     pub fn validate(self: OutboundConnectionConfig) ?[]const u8 {
         if (self.host.len == 0) return "OutboundConnectionConfig `host` invalid length must be > 0";
@@ -49,6 +53,17 @@ pub const OutboundConnectionConfig = struct {
         return null;
     }
 };
+
+pub const AuthenticationConfig = struct {
+    token_config: ?TokenAuthConfig = null,
+    none_config: ?NoneAuthConfig = null,
+};
+
+pub const TokenAuthConfig = struct {
+    token: []const u8,
+};
+
+pub const NoneAuthConfig = struct {};
 
 pub const KeepAliveConfig = struct {
     enabled: bool = true,
@@ -85,16 +100,9 @@ pub const Transport = enum {
     tcp,
 };
 
-const ConnectionConfig = union(ConnectionType) {
-    inbound: InboundConnectionConfig,
-    outbound: OutboundConnectionConfig,
-};
-
-const ConnectionState = enum {
-    closing,
-    closed,
-    connected,
-    connecting,
+pub const PeerType = enum(u8) {
+    client,
+    node,
 };
 
 const ConnectionType = enum {
@@ -102,6 +110,28 @@ const ConnectionType = enum {
     outbound,
 };
 
+const ConnectionState = enum {
+    disconnected,
+    connecting,
+    connected,
+    closing,
+    closed,
+    err,
+};
+
+const ProtocolState = enum {
+    inactive,
+    accepting,
+    authenticating,
+    ready,
+    terminating,
+    terminated,
+};
+
+const ConnectionConfig = union(ConnectionType) {
+    inbound: InboundConnectionConfig,
+    outbound: OutboundConnectionConfig,
+};
 const ConnectionMetrics = struct {
     bytes_recv_total: u128 = 0,
     bytes_send_total: u128 = 0,
@@ -127,37 +157,36 @@ pub const Connection = struct {
     config: ConnectionConfig,
     connect_completion: *IO.Completion,
     connection_id: uuid.Uuid,
-    connection_type: ConnectionType,
     connect_submitted: bool,
     inbox: *RingBuffer(*Message),
     io: *IO,
     memory_pool: *MemoryPool(Message),
-    metrics: ConnectionMetrics,
     messages_recv: u128,
     messages_sent: u128,
+    metrics: ConnectionMetrics,
     origin_id: uuid.Uuid,
     outbox: *RingBuffer(*Message),
-    parsed_message_ptrs: std.ArrayList(*Message),
-    parsed_messages: std.ArrayList(Message),
+    parsed_message_ptrs: std.array_list.Managed(*Message),
+    parsed_messages: std.array_list.Managed(Message),
     parser: Parser,
+    peer_id: uuid.Uuid,
+    protocol_state: ProtocolState,
     recv_buffer: []u8,
     recv_bytes: usize,
     recv_completion: *IO.Completion,
     recv_submitted: bool,
-    remote_id: uuid.Uuid,
-    send_buffer_list: *std.ArrayList(u8),
+    send_buffer_list: *std.array_list.Managed(u8),
     send_buffer_overflow: [constants.message_max_size]u8,
     send_buffer_overflow_count: usize,
     send_completion: *IO.Completion,
     send_submitted: bool,
     socket: posix.socket_t,
-    state: ConnectionState,
+    connection_state: ConnectionState,
     tmp_encoding_buffer: []u8,
 
     pub fn init(
         id: uuid.Uuid,
         origin_id: uuid.Uuid,
-        connection_type: ConnectionType,
         io: *IO,
         socket: posix.socket_t,
         allocator: std.mem.Allocator,
@@ -182,10 +211,10 @@ pub const Connection = struct {
         const tmp_encoding_buffer = try allocator.alloc(u8, constants.message_max_size);
         errdefer allocator.free(tmp_encoding_buffer);
 
-        const send_buffer_list = try allocator.create(std.ArrayList(u8));
+        const send_buffer_list = try allocator.create(std.array_list.Managed(u8));
         errdefer allocator.destroy(send_buffer_list);
 
-        send_buffer_list.* = try std.ArrayList(u8).initCapacity(allocator, constants.connection_send_buffer_size);
+        send_buffer_list.* = try std.array_list.Managed(u8).initCapacity(allocator, constants.connection_send_buffer_size);
         errdefer send_buffer_list.deinit();
 
         const inbox = try allocator.create(RingBuffer(*Message));
@@ -206,39 +235,42 @@ pub const Connection = struct {
             .bytes_sent = 0,
             .close_completion = close_completion,
             .close_submitted = false,
+            .config = config,
             .connect_completion = connect_completion,
-            .connection_type = connection_type,
+            .connection_id = id,
             .connect_submitted = false,
             .inbox = inbox,
             .io = io,
             .memory_pool = memory_pool,
-            .metrics = ConnectionMetrics{},
             .messages_recv = 0,
             .messages_sent = 0,
-            .connection_id = id,
+            .metrics = ConnectionMetrics{},
             .origin_id = origin_id,
-            .remote_id = 0,
             .outbox = outbox,
-            .parsed_messages = try std.ArrayList(Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
-            .parsed_message_ptrs = try std.ArrayList(*Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
+            .parsed_message_ptrs = try std.array_list.Managed(*Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
+            .parsed_messages = try std.array_list.Managed(Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
             .parser = Parser.init(allocator),
+            .peer_id = 0,
+            .protocol_state = .inactive,
             .recv_buffer = recv_buffer,
             .recv_bytes = 0,
             .recv_completion = recv_completion,
             .recv_submitted = false,
+            .send_buffer_list = send_buffer_list,
             .send_buffer_overflow_count = 0,
             .send_buffer_overflow = undefined,
-            .tmp_encoding_buffer = tmp_encoding_buffer,
-            .send_buffer_list = send_buffer_list,
             .send_completion = send_completion,
             .send_submitted = false,
             .socket = socket,
-            .state = .closed,
-            .config = config,
+            .connection_state = .closed,
+            .tmp_encoding_buffer = tmp_encoding_buffer,
         };
     }
 
     pub fn deinit(self: *Connection) void {
+        self.connection_state = .closed;
+        self.protocol_state = .inactive;
+
         while (self.outbox.dequeue()) |message| {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
@@ -269,17 +301,22 @@ pub const Connection = struct {
     }
 
     pub fn tick(self: *Connection) !void {
-        switch (self.state) {
+        switch (self.connection_state) {
             .closing => {
+                // NOTE: uncommenting this line will lead the client to hang when closing connections because
+                // self.recv_submitted is never flipped to false
+                // if (!self.recv_submitted and !self.send_submitted and !self.connect_submitted) {
                 if (self.connection_id == 0) {
-                    log.info("uninitialized connection closed {}", .{self.connection_id});
+                    log.info("uninitialized connection closed {d}", .{self.connection_id});
                 } else {
-                    log.info("connection closed {}", .{self.connection_id});
+                    log.info("connection closed {d}", .{self.connection_id});
                 }
 
-                self.state = .closed;
+                self.connection_state = .closed;
+                posix.close(self.socket);
                 // break out of the tick
                 return;
+                // }
             },
             .closed => return,
             else => {},
@@ -364,8 +401,7 @@ pub const Connection = struct {
                 if (self.tmp_encoding_buffer.len >= message_size) {
                     message.encode(self.tmp_encoding_buffer[0..message_size]);
                 } else {
-                    log.err("buf len: {}, message_size: {}", .{ self.tmp_encoding_buffer.len, message_size });
-                    log.err("message.headers.body_length {any}", .{message.headers.body_length});
+                    log.err("buf len: {d}, message_size: {d}", .{ self.tmp_encoding_buffer.len, message_size });
                     @panic("buffer was not big enough to hold message");
                 }
 
@@ -403,6 +439,7 @@ pub const Connection = struct {
 
         // FIX: there should be an assert that enforces that the parser is being passed the right amount
         // of bytes to be parsed
+        assert(self.parsed_message_ptrs.items.len == self.parsed_messages.items.len);
 
         // Parse received bytes into messages
         self.parser.parse(&self.parsed_messages, self.recv_buffer[0..self.recv_bytes]) catch unreachable;
@@ -415,14 +452,11 @@ pub const Connection = struct {
         for (self.parsed_messages.items) |message| {
             // assume that invalid messages are poison and close this connection
             if (message.validate()) |reason| {
-                self.state = .closing;
+                self.connection_state = .closing;
                 log.err("invalid message: {s}", .{reason});
                 return;
             }
         }
-
-        // FIX: does this need to actually just be in the init?
-        assert(self.parsed_message_ptrs.items.len >= self.parsed_message_ptrs.items.len);
 
         const message_ptrs = self.memory_pool.createN(
             self.allocator,
@@ -434,7 +468,10 @@ pub const Connection = struct {
         defer self.allocator.free(message_ptrs);
 
         if (message_ptrs.len != self.parsed_messages.items.len) {
-            log.err("not enough node ptrs {} for parsed_messages {}", .{ message_ptrs.len, self.parsed_messages.items.len });
+            log.err("not enough node ptrs {d} for parsed_messages {d}", .{
+                message_ptrs.len,
+                self.parsed_messages.items.len,
+            });
             for (message_ptrs) |message_ptr| {
                 self.memory_pool.destroy(message_ptr);
             }
@@ -454,7 +491,7 @@ pub const Connection = struct {
 
         const n = self.inbox.enqueueMany(message_ptrs);
         if (n < message_ptrs.len) {
-            log.err("could not enqueue all message ptrs. dropping {} messages", .{message_ptrs[n..].len});
+            log.err("could not enqueue all message ptrs. dropping {d} messages", .{message_ptrs[n..].len});
             for (message_ptrs[n..]) |message_ptr| {
                 message_ptr.deref();
                 self.memory_pool.destroy(message_ptr);
@@ -474,8 +511,8 @@ pub const Connection = struct {
 
         // Connection closed by peer
         if (bytes == 0) {
-            log.err("connection {} received no bytes, closing", .{self.connection_id});
-            self.state = .closing;
+            log.err("connection {d} received no bytes, closing", .{self.connection_id});
+            self.connection_state = .closing;
             return;
         }
 
@@ -490,13 +527,15 @@ pub const Connection = struct {
         self.send_submitted = false;
     }
 
-    pub fn onConnect(self: *Connection, completion: *IO.Completion, result: IO.ConnectError!void) void {
+    pub fn onConnect(self: *Connection, _: *IO.Completion, result: IO.ConnectError!void) void {
         self.connect_submitted = false;
 
-        _ = completion;
         result catch |err| {
             log.err("onConnect err closing conn {any}", .{err});
-            self.state = .closing;
+            self.connection_state = .closing;
+            return;
         };
+
+        self.connection_state = .connected;
     }
 };

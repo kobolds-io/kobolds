@@ -19,6 +19,8 @@ const MemoryPool = @import("stdx").MemoryPool;
 const RingBuffer = @import("stdx").RingBuffer;
 
 const Message = @import("../protocol/message.zig").Message;
+const Accept = @import("../protocol/message.zig").Accept;
+const AuthChallenge = @import("../protocol/message.zig").AuthChallenge;
 const Connection = @import("../protocol/connection.zig").Connection;
 
 const Topic = @import("../pubsub/topic.zig").Topic;
@@ -36,9 +38,18 @@ const SubscribeOptions = struct {};
 const RequestOptions = struct {};
 const AdvertiseOptions = struct {};
 
+pub const AuthenticationConfig = struct {
+    token_config: ?TokenAuthConfig = null,
+};
+
+pub const TokenAuthConfig = struct {
+    token: []const u8,
+};
+
 pub const ClientConfig = struct {
     max_connections: u16 = 100,
-    memory_pool_capacity: usize = 1_000,
+    memory_pool_capacity: usize = 10_000,
+    authentication_config: ?AuthenticationConfig = .{},
 };
 
 const ClientState = enum {
@@ -95,14 +106,16 @@ pub const Client = struct {
         const memory_pool = try allocator.create(MemoryPool(Message));
         errdefer allocator.destroy(memory_pool);
 
-        memory_pool.* = try MemoryPool(Message).init(allocator, 100_000);
+        memory_pool.* = try MemoryPool(Message).init(allocator, 10_000);
         errdefer memory_pool.deinit();
 
         const inbox = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(inbox);
 
-        inbox.* = try RingBuffer(*Message).init(allocator, 10_000);
+        inbox.* = try RingBuffer(*Message).init(allocator, 5_000);
         errdefer inbox.deinit();
+
+        // TODO: we should add an outbox to act as the global outbound communicator
 
         return Self{
             .id = uuid.v7.new(),
@@ -139,7 +152,7 @@ pub const Client = struct {
         while (connections_iterator.next()) |entry| {
             const connection = entry.*;
 
-            assert(connection.state == .closed);
+            assert(connection.connection_state == .closed);
 
             connection.deinit();
             self.allocator.destroy(connection);
@@ -149,7 +162,7 @@ pub const Client = struct {
         while (uninitialized_connections_iterator.next()) |entry| {
             const connection = entry.*;
 
-            assert(connection.state == .closed);
+            assert(connection.connection_state == .closed);
 
             connection.deinit();
             self.allocator.destroy(connection);
@@ -261,17 +274,40 @@ pub const Client = struct {
             return error.InvalidConfig;
         }
 
+        // clients can only connect to nodes
+        assert(config.peer_type == .node);
+
         const conn = try self.addOutboundConnection(config);
         errdefer self.disconnect(conn);
 
         const deadline = std.time.nanoTimestamp() + timeout_ns;
         while (deadline > std.time.nanoTimestamp()) {
-            if (conn.state == .connected) return conn;
+            log.debug("conn.connection_state {any}, conn.protocol_state {any}", .{
+                conn.connection_state,
+                conn.protocol_state,
+            });
 
-            // FIX: this is some baaaaad code. There should instead be a signal or channel that this thread could
-            // wait on instead. Since this call happens on a foreground thread, an unbuffered channel seems the most
-            // appropriate.
-            std.time.sleep(constants.io_tick_ms * std.time.ns_per_ms);
+            // FIX: fix this so that we gracefully exit the connect function when we have a bad error
+
+            // switch (conn.connection_state) {
+            //     .disconnected, .connecting => continue,
+            //     .err, .closed, .closing => return error.ConnectionFailed,
+            //     .connected => {},
+            // }
+
+            // switch (conn.protocol_state) {
+            //     .ready => return conn,
+            //     .terminating, .terminated => return error.ConnectionTerminated,
+            //     else => {},
+            // }
+
+            if (conn.connection_state == .connected and conn.protocol_state == .ready) return conn;
+
+            // // FIX: this is some baaaaad code. There should instead be a signal or channel that this thread could
+            // // wait on instead. Since this call happens on a foreground thread, an unbuffered channel seems the most
+            // // appropriate.
+            std.Thread.sleep(constants.io_tick_us * std.time.ns_per_us);
+            // std.Thread.sleep(constants.io_tick_ms * std.time.ns_per_ms);
         } else {
             return error.DeadlineExceeded;
         }
@@ -281,7 +317,7 @@ pub const Client = struct {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
-        conn.state = .closing;
+        conn.connection_state = .closing;
     }
 
     pub fn awaitConnected(self: *Self, conn: *Connection, timeout_ns: i128) !void {
@@ -312,8 +348,8 @@ pub const Client = struct {
             const conn = entry.value_ptr.*;
 
             // check if this connection was closed for whatever reason
-            if (conn.state == .closed) {
-                // try self.cleanupConnection(conn);
+            if (conn.connection_state == .closed) {
+                try self.cleanupConnection(conn);
                 continue;
             }
 
@@ -333,8 +369,17 @@ pub const Client = struct {
             const tmp_id = entry.key_ptr.*;
             const conn = entry.value_ptr.*;
 
+            switch (conn.protocol_state) {
+                .terminating => {
+                    log.debug("need to clean up any thing related to this connection", .{});
+                    conn.protocol_state = .terminated;
+                    conn.connection_state = .closing;
+                },
+                else => {},
+            }
+
             // check if this connection was closed for whatever reason
-            if (conn.state == .closed) {
+            if (conn.connection_state == .closed) {
                 try self.cleanupUninitializedConnection(tmp_id, conn);
                 break;
             }
@@ -344,7 +389,7 @@ pub const Client = struct {
                 break;
             };
 
-            if (conn.state == .connected and conn.connection_id != 0) {
+            if (conn.connection_state == .connected and conn.protocol_state == .ready) {
                 // the connection is now valid and ready for events
                 // move the connection to the regular connections map
                 try self.connections.put(conn.connection_id, conn);
@@ -400,6 +445,8 @@ pub const Client = struct {
 
                 switch (message.headers.message_type) {
                     .accept => try self.handleAcceptMessage(conn, message),
+                    .auth_challenge => try self.handleAuthChallengeMessage(conn, message),
+                    .auth_result => try self.handleAuthResultMessage(conn, message),
                     else => {
                         log.err("received unexpected message {any}", .{message.headers.message_type});
                         message.deref();
@@ -521,32 +568,95 @@ pub const Client = struct {
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
-        // ensure that this connection is not fully connected
-        assert(conn.state != .connected);
+        // ensure that this connection is fully connected
+        assert(conn.connection_state == .connected);
 
+        // ensure the client.connection is expecting this accept message
+        assert(conn.protocol_state == .accepting);
+
+        // assert(conn.connection_state != .connected);
+        // ensure that this connection_id is not set
         assert(conn.connection_id == 0);
+
         // An error here would be a protocol error
-        assert(conn.remote_id != message.headers.origin_id);
+        assert(conn.peer_id != message.headers.origin_id);
         assert(conn.connection_id != message.headers.connection_id);
 
         conn.connection_id = message.headers.connection_id;
-        conn.remote_id = message.headers.origin_id;
+        conn.peer_id = message.headers.origin_id;
 
-        // enqueue a message to immediately convey the node id of this Node
-        message.headers.origin_id = conn.origin_id;
-        message.headers.connection_id = conn.connection_id;
+        conn.connection_state = .connected;
+        conn.protocol_state = .authenticating;
 
-        message.ref();
-        try conn.outbox.enqueue(message);
-
-        assert(conn.connection_type == .outbound);
-
-        conn.state = .connected;
-        log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}", .{
+        log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
             conn.origin_id,
             conn.connection_id,
-            conn.remote_id,
+            conn.peer_id,
+            conn.config.outbound.peer_type,
         });
+    }
+
+    fn handleAuthChallengeMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        // ensure that this connection is fully connected
+        assert(conn.connection_state == .connected);
+
+        // ensure the client.connection is expecting this challenge message
+        assert(conn.protocol_state == .authenticating);
+
+        const auth_challenge_message: *const AuthChallenge = message.headers.intoConst(.auth_challenge).?;
+
+        const auth_response_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(auth_response_message);
+
+        auth_response_message.* = Message.new2(.auth_response);
+        auth_response_message.setTransactionId(message.transactionId());
+        auth_response_message.setChallengeMethod(auth_challenge_message.challenge_method);
+        auth_response_message.ref();
+        errdefer auth_response_message.deref();
+
+        switch (auth_challenge_message.challenge_method) {
+            .none => auth_response_message.setBody(""),
+            .token => {
+                if (self.config.authentication_config) |auth_config| {
+                    if (auth_config.token_config) |token_config| {
+                        auth_response_message.setBody(token_config.token);
+                    }
+                }
+            },
+        }
+
+        assert(auth_response_message.validate() == null);
+
+        try conn.outbox.enqueue(auth_response_message);
+
+        log.debug("sending auth_response", .{});
+    }
+
+    // FIX: this doesn't actually fulfill a transaction or enforce that THIS connection is the one authenticating
+    //   There should be a mechanism where we lookup and clear a transaction
+    pub fn handleAuthResultMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        assert(conn.connection_state == .connected);
+        assert(conn.protocol_state == .authenticating);
+
+        if (message.errorCode() != .ok) {
+            log.err("connection did not successfully authenticate. {any}", .{message.errorCode()});
+            conn.protocol_state = .terminating;
+            return;
+        }
+
+        log.info("connection successfully authenticated", .{});
+
+        conn.protocol_state = .ready;
     }
 
     fn handlePongMessage(self: *Self, conn: *Connection, message: *Message) !void {
@@ -613,14 +723,19 @@ pub const Client = struct {
         log.debug("remove uninitialized connection called", .{});
 
         _ = self.uninitialized_connections.remove(tmp_id);
-        log.info("worker: {} removed uninitialized_connection {}", .{ self.id, conn.connection_id });
+        log.info("client: {} removed uninitialized_connection {}", .{ self.id, conn.connection_id });
 
-        conn.deinit();
-        self.allocator.destroy(conn);
+        // conn.deinit();
+        // self.allocator.destroy(conn);
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {
-        self.removeConnection(conn);
+        _ = self.connections.remove(conn.connection_id);
+
+        log.info("client: {} removed connection {}", .{ self.id, conn.connection_id });
+
+        // conn.deinit();
+        // self.allocator.destroy(conn);
     }
 
     fn closeAllConnections(self: *Self) bool {
@@ -629,13 +744,13 @@ pub const Client = struct {
         var uninitialized_connections_iter = self.uninitialized_connections.valueIterator();
         while (uninitialized_connections_iter.next()) |entry| {
             var conn = entry.*;
-            switch (conn.state) {
+            switch (conn.connection_state) {
                 .closed => continue,
                 .closing => {
                     all_connections_closed = false;
                 },
                 else => {
-                    conn.state = .closing;
+                    conn.connection_state = .closing;
                     all_connections_closed = false;
                 },
             }
@@ -649,13 +764,13 @@ pub const Client = struct {
         var connections_iter = self.connections.valueIterator();
         while (connections_iter.next()) |entry| {
             var conn = entry.*;
-            switch (conn.state) {
+            switch (conn.connection_state) {
                 .closed => continue,
                 .closing => {
                     all_connections_closed = false;
                 },
                 else => {
-                    conn.state = .closing;
+                    conn.connection_state = .closing;
                     all_connections_closed = false;
                 },
             }
@@ -687,7 +802,6 @@ pub const Client = struct {
         conn.* = try Connection.init(
             0,
             self.id,
-            .outbound,
             self.io,
             socket,
             self.allocator,
@@ -696,7 +810,8 @@ pub const Client = struct {
         );
         errdefer conn.deinit();
 
-        conn.state = .connecting;
+        conn.connection_state = .connecting;
+        conn.protocol_state = .accepting;
 
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
@@ -720,7 +835,7 @@ pub const Client = struct {
     pub fn ping(self: *Self, conn: *Connection, signal: *Signal(*Message), options: PingOptions) !void {
         _ = options;
         // FIX: this will just crash and that is bad
-        assert(conn.state == .connected);
+        assert(conn.connection_state == .connected);
 
         const ping_message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(ping_message);
@@ -754,7 +869,7 @@ pub const Client = struct {
         options: PublishOptions,
     ) !void {
         _ = options;
-        assert(conn.state == .connected);
+        assert(conn.connection_state == .connected);
 
         const message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(message);
@@ -779,7 +894,7 @@ pub const Client = struct {
         callback: SubscriberCallback,
         options: SubscribeOptions,
     ) !void {
-        assert(conn.state == .connected);
+        assert(conn.connection_state == .connected);
 
         self.topics_mutex.lock();
         defer self.topics_mutex.unlock();
@@ -920,7 +1035,7 @@ pub const Client = struct {
         callback: AdvertiserCallback,
         options: AdvertiseOptions,
     ) !void {
-        assert(conn.state == .connected);
+        assert(conn.connection_state == .connected);
 
         self.services_mutex.lock();
         defer self.services_mutex.unlock();

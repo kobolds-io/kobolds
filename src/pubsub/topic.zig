@@ -29,7 +29,7 @@ pub const Topic = struct {
     memory_pool: *MemoryPool(Message),
     publishers: std.AutoHashMap(u128, *Publisher),
     queue: *RingBuffer(*Message),
-    subscriber_queues: std.ArrayList(*RingBuffer(*Message)),
+    subscriber_queues: std.array_list.Managed(*RingBuffer(*Message)),
     subscribers: std.AutoHashMap(u128, *Subscriber),
     topic_name: []const u8,
     tmp_copy_buffer: []*Message,
@@ -55,7 +55,7 @@ pub const Topic = struct {
             .memory_pool = memory_pool,
             .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
             .queue = queue,
-            .subscriber_queues = std.ArrayList(*RingBuffer(*Message)).init(allocator),
+            .subscriber_queues = std.array_list.Managed(*RingBuffer(*Message)).init(allocator),
             .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
             .topic_name = topic_name,
             .tmp_copy_buffer = tmp_copy_buffer,
@@ -92,18 +92,6 @@ pub const Topic = struct {
 
         self.allocator.destroy(self.queue);
         self.allocator.free(self.tmp_copy_buffer);
-    }
-
-    // FIX: remove this function
-    pub fn enqueue(self: *Self, message: *Message) !void {
-        self.queue.enqueue(message) catch |err| {
-            // log.err("topic unable to enqueue message: {s}, err: {any}", .{ self.topic_name, err });
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
-            return err;
-        };
-
-        message.ref();
     }
 
     pub fn tick(self: *Self) !void {

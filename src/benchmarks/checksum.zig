@@ -126,7 +126,9 @@ pub fn BenchmarkCRC32VerifyMessageBody(_: std.mem.Allocator) void {
 }
 
 test "checksum benchmarks" {
-    var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = std.math.maxInt(u16) });
+    var bench = zbench.Benchmark.init(std.testing.allocator, .{
+        .iterations = benchmark_constants.benchmark_max_iterations,
+    });
     defer bench.deinit();
 
     try bench.add("xxhash32 checksum 16 bytes", BenchmarkXxHash32Checksum16Bytes, .{});
@@ -139,16 +141,20 @@ test "checksum benchmarks" {
     try bench.add("crc32 checksum 128 bytes", BenchmarkCRC32Checksum128Bytes, .{});
     try bench.add("crc32 checksum message body", BenchmarkCRC32ChecksumMessageBody, .{});
 
-    const stderr = std.io.getStdErr().writer();
-    try stderr.writeAll("\n");
-    try stderr.writeAll("|---------------------|\n");
-    try stderr.writeAll("| checksum Benchmarks |\n");
-    try stderr.writeAll("|---------------------|\n");
-    try bench.run(stderr);
+    var stderr = std.fs.File.stderr().writerStreaming(&.{});
+    const writer = &stderr.interface;
+
+    try writer.writeAll("\n");
+    try writer.writeAll("|---------------------|\n");
+    try writer.writeAll("| Checksum Benchmarks |\n");
+    try writer.writeAll("|---------------------|\n");
+    try bench.run(writer);
 }
 
 test "verify benchmarks" {
-    var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = std.math.maxInt(u16) });
+    var bench = zbench.Benchmark.init(std.testing.allocator, .{
+        .iterations = benchmark_constants.benchmark_max_iterations,
+    });
     defer bench.deinit();
 
     try bench.add("xxhash32 verify 16 bytes", BenchmarkXxHash32Verify16Bytes, .{});
@@ -161,10 +167,12 @@ test "verify benchmarks" {
     try bench.add("crc32 verify 128 bytes", BenchmarkCRC32Verify128Bytes, .{});
     try bench.add("crc32 verify message body", BenchmarkCRC32VerifyMessageBody, .{});
 
-    const stderr = std.io.getStdErr().writer();
-    try stderr.writeAll("\n");
-    try stderr.writeAll("|-------------------|\n");
-    try stderr.writeAll("| verify Benchmarks |\n");
-    try stderr.writeAll("|-------------------|\n");
-    try bench.run(stderr);
+    var stderr = std.fs.File.stderr().writerStreaming(&.{});
+    const writer = &stderr.interface;
+
+    try writer.writeAll("\n");
+    try writer.writeAll("|----------------------------|\n");
+    try writer.writeAll("| Checksum Verify Benchmarks |\n");
+    try writer.writeAll("|----------------------------|\n");
+    try bench.run(writer);
 }

@@ -13,13 +13,13 @@ pub const RoundRobinLoadBalancer = struct {
 
     allocator: std.mem.Allocator,
     current_index: usize,
-    keys: std.ArrayList(u128),
+    keys: std.array_list.Managed(u128),
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
             .allocator = allocator,
             .current_index = 0,
-            .keys = std.ArrayList(u128).init(allocator),
+            .keys = std.array_list.Managed(u128).init(allocator),
         };
     }
 

@@ -1,6 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const gzip = std.compress.gzip;
+const gzip = std.compress.flate;
 const atomic = std.atomic;
 
 const constants = @import("../constants.zig");
@@ -20,6 +20,9 @@ pub const MessageType = enum(u8) {
     publish,
     subscribe,
     unsubscribe,
+    auth_response,
+    auth_challenge,
+    auth_result,
 };
 
 pub const ErrorCode = enum(u8) {
@@ -42,6 +45,11 @@ pub const ProtocolVersion = enum(u8) {
     v1,
 };
 
+pub const ChallengeMethod = enum(u8) {
+    none,
+    token,
+};
+
 pub const Message = struct {
     const Self = @This();
     headers: Headers,
@@ -54,6 +62,14 @@ pub const Message = struct {
     pub fn new() Message {
         return Message{
             .headers = Headers{ .message_type = .undefined },
+            .body_buffer = undefined,
+            .ref_count = atomic.Value(u32).init(0),
+        };
+    }
+
+    pub fn new2(message_type: MessageType) Self {
+        return Self{
+            .headers = Headers{ .message_type = message_type },
             .body_buffer = undefined,
             .ref_count = atomic.Value(u32).init(0),
         };
@@ -229,6 +245,18 @@ pub const Message = struct {
                 var headers: *Unsubscribe = self.headers.into(.unsubscribe).?;
                 headers.transaction_id = v;
             },
+            .auth_challenge => {
+                var headers: *AuthChallenge = self.headers.into(.auth_challenge).?;
+                headers.transaction_id = v;
+            },
+            .auth_response => {
+                var headers: *AuthResponse = self.headers.into(.auth_response).?;
+                headers.transaction_id = v;
+            },
+            .auth_result => {
+                var headers: *AuthResult = self.headers.into(.auth_result).?;
+                headers.transaction_id = v;
+            },
             else => unreachable,
         }
     }
@@ -267,6 +295,18 @@ pub const Message = struct {
                 const headers: *const Unsubscribe = self.headers.intoConst(.unsubscribe).?;
                 return headers.transaction_id;
             },
+            .auth_response => {
+                const headers: *const AuthResponse = self.headers.intoConst(.auth_response).?;
+                return headers.transaction_id;
+            },
+            .auth_challenge => {
+                const headers: *const AuthChallenge = self.headers.intoConst(.auth_challenge).?;
+                return headers.transaction_id;
+            },
+            .auth_result => {
+                const headers: *const AuthResult = self.headers.intoConst(.auth_result).?;
+                return headers.transaction_id;
+            },
             else => unreachable,
         }
     }
@@ -280,6 +320,10 @@ pub const Message = struct {
             },
             .pong => {
                 var headers: *Pong = self.headers.into(.pong).?;
+                headers.error_code = v;
+            },
+            .auth_result => {
+                var headers: *AuthResult = self.headers.into(.auth_result).?;
                 headers.error_code = v;
             },
             else => unreachable,
@@ -296,6 +340,39 @@ pub const Message = struct {
                 const headers: *const Pong = self.headers.intoConst(.pong).?;
                 return headers.error_code;
             },
+            .auth_result => {
+                const headers: *const AuthResult = self.headers.intoConst(.auth_result).?;
+                return headers.error_code;
+            },
+            else => unreachable,
+        }
+    }
+
+    pub fn setChallengeMethod(self: *Self, v: ChallengeMethod) void {
+        // This is an absolutely tedious way of handling setting fields.
+        switch (self.headers.message_type) {
+            .auth_challenge => {
+                var headers: *AuthChallenge = self.headers.into(.auth_challenge).?;
+                headers.challenge_method = v;
+            },
+            .auth_response => {
+                var headers: *AuthResponse = self.headers.into(.auth_response).?;
+                headers.challenge_method = v;
+            },
+            else => unreachable,
+        }
+    }
+
+    pub fn challengeMethod(self: *Self) ErrorCode {
+        switch (self.headers.message_type) {
+            .auth_challenge => {
+                const headers: *const AuthChallenge = self.headers.into(.auth_challenge).?;
+                return headers.challenge_method;
+            },
+            .auth_response => {
+                const headers: *const AuthResponse = self.headers.into(.auth_response).?;
+                return headers.challenge_method;
+            },
             else => unreachable,
         }
     }
@@ -308,33 +385,34 @@ pub const Message = struct {
         if (self.headers.compressed) return error.AlreadyCompressed;
         switch (self.headers.compression) {
             .none => {},
-            .gzip => {
-                const message_body = self.body();
+            else => unreachable,
+            // .gzip => {
+            //     const message_body = self.body();
 
-                // if the message.body is empty, do nothing and just return early this will be faster
-                // and can eliminate errors. This should be checked on the decompress call
-                if (message_body.len == 0) return;
+            //     // if the message.body is empty, do nothing and just return early this will be faster
+            //     // and can eliminate errors. This should be checked on the decompress call
+            //     if (message_body.len == 0) return;
 
-                // create a reader that can read the message_body
-                var reader_fbs = std.io.fixedBufferStream(message_body);
-                const reader = reader_fbs.reader();
+            //     // create a reader that can read the message_body
+            //     var reader_fbs = std.io.fixedBufferStream(message_body);
+            //     const reader = reader_fbs.reader();
 
-                // at worse this message is going to be as big as the body already is. This isn't ideal.
-                // TODO: remove the requirement to have a separate buffer
-                var writer_buf: [constants.message_max_body_size]u8 = undefined;
-                var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
-                const writer_allocator = writer_fba.allocator();
+            //     // at worse this message is going to be as big as the body already is. This isn't ideal.
+            //     // TODO: remove the requirement to have a separate buffer
+            //     var writer_buf: [constants.message_max_body_size]u8 = undefined;
+            //     var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
+            //     const writer_allocator = writer_fba.allocator();
 
-                var writer_list = std.ArrayList(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
-                defer writer_list.deinit();
-                const writer = writer_list.writer();
+            //     var writer_list = std.array_list.Managed(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
+            //     defer writer_list.deinit();
+            //     const writer = writer_list.writer();
 
-                try gzip.compress(reader, writer, .{});
+            //     try gzip.compress(reader, writer, .{});
 
-                // set the message body
-                self.setBody(writer_list.items);
-                self.headers.compressed = true;
-            },
+            //     // set the message body
+            //     self.setBody(writer_list.items);
+            //     self.headers.compressed = true;
+            // },
         }
     }
 
@@ -346,31 +424,32 @@ pub const Message = struct {
         if (!self.headers.compressed and self.headers.compression != .none) return error.AlreadyDecompressed;
         switch (self.headers.compression) {
             .none => {},
-            .gzip => {
-                const message_body = self.body();
-                // if the message.body is empty, do nothing and just return early this will be faster
-                // and can eliminate errors. This should be checked on the compress call
-                if (message_body.len == 0) return;
+            else => unreachable,
+            // .gzip => {
+            //     const message_body = self.body();
+            //     // if the message.body is empty, do nothing and just return early this will be faster
+            //     // and can eliminate errors. This should be checked on the compress call
+            //     if (message_body.len == 0) return;
 
-                // create a reader that can read the message_body
-                var reader_fbs = std.io.fixedBufferStream(message_body);
-                const reader = reader_fbs.reader();
+            //     // create a reader that can read the message_body
+            //     var reader_fbs = std.io.fixedBufferStream(message_body);
+            //     const reader = reader_fbs.reader();
 
-                // at worse this message is going to be as big as the body already is.
-                var writer_buf: [constants.message_max_body_size]u8 = undefined;
-                var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
-                const writer_allocator = writer_fba.allocator();
+            //     // at worse this message is going to be as big as the body already is.
+            //     var writer_buf: [constants.message_max_body_size]u8 = undefined;
+            //     var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
+            //     const writer_allocator = writer_fba.allocator();
 
-                var writer_list = std.ArrayList(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
-                defer writer_list.deinit();
-                const writer = writer_list.writer();
+            //     var writer_list = std.array_list.Managed(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
+            //     defer writer_list.deinit();
+            //     const writer = writer_list.writer();
 
-                try gzip.decompress(reader, writer);
+            //     try gzip.decompress(reader, writer);
 
-                // set the message body
-                self.setBody(writer_list.items);
-                self.headers.compressed = false;
-            },
+            //     // set the message body
+            //     self.setBody(writer_list.items);
+            //     self.headers.compressed = false;
+            // },
         }
     }
 
@@ -478,6 +557,18 @@ pub const Message = struct {
                 const headers: *const Unsubscribe = self.headers.intoConst(.unsubscribe).?;
                 return headers.validate();
             },
+            .auth_response => {
+                const headers: *const AuthResponse = self.headers.intoConst(.auth_response).?;
+                return headers.validate();
+            },
+            .auth_challenge => {
+                const headers: *const AuthChallenge = self.headers.intoConst(.auth_challenge).?;
+                return headers.validate();
+            },
+            .auth_result => {
+                const headers: *const AuthResult = self.headers.intoConst(.auth_result).?;
+                return headers.validate();
+            },
             else => "unsupported message type",
         };
     }
@@ -503,15 +594,18 @@ pub const Headers = extern struct {
 
     pub fn Type(comptime message_type: MessageType) type {
         return switch (message_type) {
-            .request => Request,
-            .reply => Reply,
-            .ping => Ping,
-            .pong => Pong,
             .accept => Accept,
             .advertise => Advertise,
-            .unadvertise => Unadvertise,
+            .auth_response => AuthResponse,
+            .auth_challenge => AuthChallenge,
+            .auth_result => AuthResult,
+            .ping => Ping,
+            .pong => Pong,
             .publish => Publish,
+            .reply => Reply,
+            .request => Request,
             .subscribe => Subscribe,
+            .unadvertise => Unadvertise,
             .unsubscribe => Unsubscribe,
             .undefined => unreachable,
         };
@@ -571,6 +665,9 @@ pub const Headers = extern struct {
             8 => MessageType.publish,
             9 => MessageType.subscribe,
             10 => MessageType.unsubscribe,
+            11 => MessageType.auth_response,
+            12 => MessageType.auth_challenge,
+            13 => MessageType.auth_result,
             else => MessageType.undefined,
         };
         i += 1;
@@ -623,7 +720,7 @@ pub const Headers = extern struct {
         var fba = std.heap.FixedBufferAllocator.init(buf);
         const fba_allocator = fba.allocator();
 
-        var list = std.ArrayList(u8).initCapacity(fba_allocator, @sizeOf(Headers)) catch unreachable;
+        var list = std.array_list.Managed(u8).initCapacity(fba_allocator, @sizeOf(Headers)) catch unreachable;
 
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(headers_checksum));
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(body_checksum));
@@ -1052,6 +1149,131 @@ pub const Unsubscribe = extern struct {
 
         // ensure this topic_name is valid (no empty topic_names allowed)
         if (self.topic_name_length == 0) return "invalid topic_name_length";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
+        return null;
+    }
+};
+
+pub const AuthChallenge = extern struct {
+    comptime {
+        assert(@sizeOf(@This()) == @sizeOf(Headers));
+    }
+
+    origin_id: u128 = 0,
+    connection_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
+    body_length: u16 = 0,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .auth_challenge,
+    compression: Compression = .none,
+    compressed: bool = false,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
+
+    transaction_id: u128 = 0,
+    challenge_method: ChallengeMethod = .none,
+
+    reserved: [47]u8 = [_]u8{0} ** 47,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .auth_challenge);
+
+        // common headers
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
+        return null;
+    }
+};
+
+/// The `body_buffer` of the `AuthResponse` message contains the auth_response for the challenge.
+/// example 1:
+///     message.headers.method = .none
+///     message.headers.encoding = .cbor
+///     ------- therefore
+///     body_buffer = "",
+/// example 2:
+///     message.headers.method = .token
+///     message.headers.encoding = .cbor
+///     ------- therefore
+///     body_buffer = token,
+pub const AuthResponse = extern struct {
+    comptime {
+        assert(@sizeOf(@This()) == @sizeOf(Headers));
+    }
+
+    origin_id: u128 = 0,
+    connection_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
+    body_length: u16 = 0,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .auth_response,
+    compression: Compression = .none,
+    compressed: bool = false,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
+
+    transaction_id: u128 = 0,
+    challenge_method: ChallengeMethod = .none,
+
+    reserved: [47]u8 = [_]u8{0} ** 47,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .auth_response);
+
+        // common headers
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
+
+        // ensure reserved is empty
+        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+
+        return null;
+    }
+};
+
+pub const AuthResult = extern struct {
+    comptime {
+        assert(@sizeOf(@This()) == @sizeOf(Headers));
+    }
+
+    origin_id: u128 = 0,
+    connection_id: u128 = 0,
+    headers_checksum: u64 = 0,
+    body_checksum: u64 = 0,
+    body_length: u16 = 0,
+    protocol_version: ProtocolVersion = .v1,
+    message_type: MessageType = .auth_result,
+    compression: Compression = .none,
+    compressed: bool = false,
+    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
+
+    transaction_id: u128 = 0,
+    error_code: ErrorCode = .ok,
+
+    reserved: [47]u8 = [_]u8{0} ** 47,
+
+    pub fn validate(self: @This()) ?[]const u8 {
+        assert(self.message_type == .auth_result);
+
+        // common headers
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
+        for (self.padding) |b| if (b != 0) return "invalid padding";
+
+        // ensure this transaction is valid
+        if (self.transaction_id == 0) return "invalid transaction_id";
 
         // ensure reserved is empty
         for (self.reserved) |b| if (b != 0) return "invalid reserved";
