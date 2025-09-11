@@ -720,7 +720,7 @@ pub const Headers = extern struct {
         var fba = std.heap.FixedBufferAllocator.init(buf);
         const fba_allocator = fba.allocator();
 
-        var list = std.array_list.Managed(u8).initCapacity(fba_allocator, @sizeOf(Headers)) catch unreachable;
+        var list = std.ArrayList(u8).initCapacity(fba_allocator, @sizeOf(Headers)) catch unreachable;
 
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(headers_checksum));
         list.appendSliceAssumeCapacity(&utils.u64ToBytes(body_checksum));
