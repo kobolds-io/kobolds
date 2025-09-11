@@ -6,13 +6,14 @@ const log = std.log.scoped(.Message);
 const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 
-const MAX_MESSAGE_SIZE = @sizeOf(FixedHeaders) + @sizeOf(ExtensionHeaders) + constants.message_max_body_size;
+const MAX_MESSAGE_SIZE = @sizeOf(FixedHeaders) + @sizeOf(ExtensionHeaders) + constants.message_max_body_size + @alignOf(u64);
 
 pub const Message = struct {
     const Self = @This();
     fixed_headers: FixedHeaders = FixedHeaders{},
     extension_headers: ExtensionHeaders = ExtensionHeaders{ .undefined = {} },
     body_buffer: [constants.message_max_body_size]u8 = undefined,
+    checksum: u64 = 0,
 
     pub fn new(message_type: MessageType) Self {
         return switch (message_type) {
@@ -22,13 +23,15 @@ pub const Message = struct {
                 },
                 .extension_headers = .{ .undefined = {} },
                 .body_buffer = undefined,
+                .checksum = 0,
             },
             .publish => Self{
                 .fixed_headers = .{
                     .message_type = message_type,
                 },
-                .extension_headers = .{ .publish = .{} },
+                .extension_headers = .{ .publish = PublishHeaders{} },
                 .body_buffer = undefined,
+                .checksum = 0,
             },
         };
     }
@@ -78,7 +81,7 @@ pub const Message = struct {
     }
 
     pub fn asBytes(self: *Self, buf: []u8) usize {
-        assert(buf.len == self.size());
+        assert(buf.len >= self.size());
 
         var i: usize = 0;
 
@@ -195,7 +198,7 @@ test "message size" {
     try testing.expectEqual(@sizeOf(FixedHeaders) + @sizeOf(PublishHeaders), publish_message.size());
 }
 
-test "message serializes to bytes" {
+test "message.asBytes" {
     const message_types = [_]MessageType{
         .undefined,
         .publish,
@@ -205,14 +208,12 @@ test "message serializes to bytes" {
 
     for (message_types) |message_type| {
         var message = Message.new(message_type);
-        switch (message_type) {
-            .publish => try testing.expectEqual(),
-        }
-
         const bytes = message.asBytes(buf[0..message.size()]);
         log.err("\nmessage_type: {any}, bytes: {any}, len: {}", .{ message.fixed_headers.message_type, buf[0..bytes], bytes });
     }
 }
+
+test "message.serialize" {}
 
 pub fn writeStructBigEndian(comptime T: type, value: T, buf: []u8) usize {
     const info = @typeInfo(T);
