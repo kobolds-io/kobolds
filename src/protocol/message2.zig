@@ -166,7 +166,7 @@ pub const FixedHeaders = packed struct {
     padding: u16 = 0,
 
     pub fn packedSize() usize {
-        return 6; // 2 + 1 + 1 + 2
+        return @sizeOf(u16) + @sizeOf(MessageType) + 1 + @sizeOf(u16);
     }
 
     pub inline fn toBytes(self: Self, buf: []u8) usize {
@@ -354,8 +354,6 @@ test "message serialization" {
         switch (message_type) {
             .undefined => try testing.expectEqual(bytes, 14),
             .publish => try testing.expectEqual(bytes, 23),
-            // .undefined => try testing.expectEqual(bytes, 10),
-            // .publish => try testing.expectEqual(bytes, 19),
         }
     }
 }
@@ -373,7 +371,6 @@ test "message deserialization" {
 
         // serialize the message
         const bytes = message.serialize(&buf);
-        // log.err("message_type {any} bytes deserialization {}", .{ message_type, bytes });
 
         // deserialize the message
         var deserialized_message = try Message.deserialize(buf[0..bytes]);
