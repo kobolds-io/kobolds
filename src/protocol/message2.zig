@@ -54,7 +54,7 @@ pub const Message = struct {
     pub fn packedSize(self: Self) usize {
         var sum: usize = 0;
         sum += FixedHeaders.packedSize();
-        sum += self.extension_headers.packedSize2();
+        sum += self.extension_headers.packedSize();
         sum += self.fixed_headers.body_length;
         sum += @sizeOf(u64);
 
@@ -125,7 +125,7 @@ pub const Message = struct {
         i += FixedHeaders.packedSize();
 
         const extension_headers = try ExtensionHeaders.fromBytes(fixed_headers.message_type, data[i..]);
-        i += extension_headers.packedSize2();
+        i += extension_headers.packedSize();
 
         if (fixed_headers.body_length > constants.message_max_body_size) return error.InvalidMessage;
         if (data[i..].len < fixed_headers.body_length) return error.Truncated;
@@ -166,16 +166,14 @@ pub const FixedHeaders = packed struct {
         return 6; // 2 + 1 + 1 + 2
     }
 
-    pub fn toBytes(self: *const Self, buf: []u8) usize {
+    pub inline fn toBytes(self: *const Self, buf: []u8) usize {
         std.debug.assert(buf.len >= @sizeOf(Self));
 
         var i: usize = 0;
 
-        // body_length (u16 big endian)
         std.mem.writeInt(u16, buf[i..][0..2], self.body_length, .big);
         i += 2;
 
-        // message_type (u8)
         buf[i] = @intFromEnum(self.message_type);
         i += 1;
 
@@ -183,7 +181,6 @@ pub const FixedHeaders = packed struct {
         buf[i] = (@as(u8, self.version) << 4) | @as(u8, self.flags);
         i += 1;
 
-        // padding (u16 big endian)
         std.mem.writeInt(u16, buf[i..][0..2], self.padding, .big);
         i += 2;
 
@@ -234,9 +231,9 @@ pub const ExtensionHeaders = union(MessageType) {
     undefined: void,
     publish: PublishHeaders,
 
-    pub inline fn packedSize2(self: *const Self) usize {
+    pub fn packedSize(self: *const Self) usize {
         return switch (self.*) {
-            .publish => |headers| 8 + 1 + headers.topic_name_length,
+            .publish => |headers| @sizeOf(u64) + @sizeOf(u8) + headers.topic_name_length,
             .undefined => 0,
         };
     }
