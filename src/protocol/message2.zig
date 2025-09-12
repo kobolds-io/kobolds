@@ -51,26 +51,12 @@ pub const Message = struct {
 
         // ensure the header.body_length
         self.fixed_headers.body_length = @intCast(v.len);
-
-        // switch (self.fixed_headers.message_type) {
-        //     .publish => {
-        //         // copy v into the body_buffer
-        //         @memcpy(self.body_buffer[0..v.len], v);
-
-        //         // ensure the header.body_length
-        //         self.fixed_headers.body_length = @intCast(v.len);
-        //     },
-        //     else => |message_type| {
-        //         log.err("invalid operation due to incompatible message_type: {any}", .{message_type});
-        //         @panic("invalid operation");
-        //     },
-        // }
     }
 
     pub fn packedSize(self: Self) usize {
         var sum: usize = 0;
         sum += FixedHeaders.packedSize();
-        sum += self.extension_headers.packedSize();
+        sum += self.extension_headers.packedSize2();
         sum += self.fixed_headers.body_length;
         sum += @sizeOf(u64);
 
@@ -113,10 +99,10 @@ pub const Message = struct {
 
         var i: usize = 0;
 
-        const fixed_headers_bytes_len = self.fixed_headers.toBytes(buf[0..]);
+        const fixed_headers_bytes_len = self.fixed_headers.toBytes2(buf[0..]);
         i += fixed_headers_bytes_len;
 
-        const extension_headers_bytes_len = self.extension_headers.toBytes(buf[i..]);
+        const extension_headers_bytes_len = self.extension_headers.toBytes2(buf[i..]);
         i += extension_headers_bytes_len;
 
         @memcpy(buf[i .. i + self.fixed_headers.body_length], self.body());
@@ -130,18 +116,56 @@ pub const Message = struct {
         return i;
     }
 
+    pub fn serialize2(self: *Self, buf: []u8) usize {
+        const checksum_size = @sizeOf(u64);
+        const required_len = self.size();
+        std.debug.assert(buf.len >= required_len);
+
+        var i: usize = 0;
+        var hash_state = std.hash.XxHash64.init(0x79810fb604cfd2d7); // same seed as deserialize
+
+        // --- Fixed Headers ---
+        {
+            const fh_bytes = self.fixed_headers.toBytes(buf[i..]);
+            hash_state.update(buf[i .. i + fh_bytes]);
+            i += fh_bytes;
+        }
+
+        // --- Extension Headers ---
+        {
+            const eh_bytes = self.extension_headers.toBytes(buf[i..]);
+            hash_state.update(buf[i .. i + eh_bytes]);
+            i += eh_bytes;
+        }
+
+        // --- Body ---
+        {
+            const body_len = self.fixed_headers.body_length;
+            @memcpy(buf[i .. i + body_len], self.body());
+            hash_state.update(buf[i .. i + body_len]);
+            i += body_len;
+        }
+
+        // --- Checksum ---
+        const checksum = hash_state.final();
+        std.mem.writeInt(u64, buf[i..][0..checksum_size], checksum, .big);
+        i += checksum_size;
+
+        return i;
+    }
+
     pub fn deserialize(data: []const u8) !Message {
         // ensure that the buffer is at least the minimum size that a message could possibly be.
-        if (data.len < FixedHeaders.packedSize()) return error.Truncated;
+        if (data.len < FixedHeaders.packedSize2()) return error.Truncated;
 
         var i: usize = 0;
 
         // get the fixed headers from the bytes
-        const fixed_headers = try FixedHeaders.fromBytes(data[0..FixedHeaders.packedSize()]);
-        i += FixedHeaders.packedSize();
+        const fixed_headers = try FixedHeaders.fromBytes2(data[0..FixedHeaders.packedSize2()]);
+        i += FixedHeaders.packedSize2();
 
-        const extension_headers = try ExtensionHeaders.fromBytes(fixed_headers.message_type, data[i..]);
-        i += extension_headers.packedSize();
+        const extension_headers = try ExtensionHeaders.fromBytes2(fixed_headers.message_type, data[i..]);
+        i += extension_headers.packedSize2();
 
         if (fixed_headers.body_length > constants.message_max_body_size) return error.InvalidMessage;
         if (data[i..].len < fixed_headers.body_length) return error.Truncated;
@@ -171,7 +195,7 @@ pub const FixedHeaders = packed struct {
     const Self = @This();
 
     comptime {
-        assert(6 == Self.packedSize());
+        assert(6 == Self.packedSize2());
     }
 
     body_length: u16 = 0,
@@ -179,6 +203,68 @@ pub const FixedHeaders = packed struct {
     version: u4 = 0,
     flags: u4 = 0,
     padding: u16 = 0,
+
+    pub inline fn packedSize2() usize {
+        return 6; // 2 + 1 + 1 + 2
+    }
+
+    pub inline fn toBytes2(self: *const Self, buf: []u8) usize {
+        // assert buffer is large enough
+        std.debug.assert(buf.len >= Self.packedSize2());
+
+        var i: usize = 0;
+
+        // body_length (big endian)
+        buf[i] = @intCast(self.body_length >> 8);
+        buf[i + 1] = @intCast(self.body_length & 0xFF);
+        i += 2;
+
+        // message_type
+        buf[i] = @intFromEnum(self.message_type);
+        i += 1;
+
+        // version + flags packed into one byte
+        buf[i] = (@as(u8, self.version) << 4) | @as(u8, self.flags);
+        i += 1;
+
+        // padding (big endian)
+        buf[i] = @intCast(self.padding >> 8);
+        buf[i + 1] = @intCast(self.padding & 0xFF);
+        i += 2;
+
+        return i;
+    }
+
+    pub inline fn fromBytes2(data: []const u8) !Self {
+        if (data.len < Self.packedSize2()) return error.Truncated;
+
+        var i: usize = 0;
+
+        const body_length = (@as(u16, data[i]) << 8) | @as(u16, data[i + 1]);
+        i += 2;
+
+        const message_type: MessageType = switch (data[i]) {
+            1 => .publish,
+            else => .undefined,
+        };
+        i += 1;
+
+        const version_flags = data[i];
+        const version: u4 = @intCast(version_flags >> 4);
+        const flags: u4 = @intCast(version_flags & 0xF);
+        i += 1;
+
+        const padding = (@as(u16, data[i]) << 8) | @as(u16, data[i + 1]);
+        i += 2;
+
+        return FixedHeaders{
+            .body_length = body_length,
+            .message_type = message_type,
+            .version = version,
+            .flags = flags,
+            .padding = padding,
+        };
+    }
 
     /// Writes the packed struct into `buf` in big-endian order.
     /// Returns the slice of written bytes.
@@ -251,6 +337,80 @@ pub const ExtensionHeaders = union(MessageType) {
     const Self = @This();
     undefined: void,
     publish: PublishHeaders,
+
+    pub inline fn packedSize2(self: *const Self) usize {
+        return switch (self.*) {
+            .publish => |headers| 8 + 1 + headers.topic_name_length,
+            .undefined => 0,
+        };
+    }
+
+    pub inline fn toBytes2(self: *const Self, buf: []u8) usize {
+        return switch (self.*) {
+            .undefined => 0,
+            .publish => |headers| {
+                var i: usize = 0;
+
+                // message_id big endian
+                buf[i] = @intCast((headers.message_id >> 56) & 0xFF);
+                buf[i + 1] = @intCast((headers.message_id >> 48) & 0xFF);
+                buf[i + 2] = @intCast((headers.message_id >> 40) & 0xFF);
+                buf[i + 3] = @intCast((headers.message_id >> 32) & 0xFF);
+                buf[i + 4] = @intCast((headers.message_id >> 24) & 0xFF);
+                buf[i + 5] = @intCast((headers.message_id >> 16) & 0xFF);
+                buf[i + 6] = @intCast((headers.message_id >> 8) & 0xFF);
+                buf[i + 7] = @intCast(headers.message_id & 0xFF);
+                i += 8;
+
+                // topic_name_length
+                buf[i] = headers.topic_name_length;
+                i += 1;
+
+                // topic_name bytes
+                @memcpy(buf[i .. i + headers.topic_name_length], headers.topic_name[0..headers.topic_name_length]);
+                i += @intCast(headers.topic_name_length);
+
+                return i;
+            },
+        };
+    }
+
+    pub inline fn fromBytes2(message_type: MessageType, data: []const u8) !Self {
+        return switch (message_type) {
+            .publish => blk: {
+                var i: usize = 0;
+
+                if (data.len < 9) return error.Truncated; // 8 + 1 minimum
+
+                const message_id =
+                    (@as(u64, data[i]) << 56) |
+                    (@as(u64, data[i + 1]) << 48) |
+                    (@as(u64, data[i + 2]) << 40) |
+                    (@as(u64, data[i + 3]) << 32) |
+                    (@as(u64, data[i + 4]) << 24) |
+                    (@as(u64, data[i + 5]) << 16) |
+                    (@as(u64, data[i + 6]) << 8) |
+                    (@as(u64, data[i + 7]));
+                i += 8;
+
+                const topic_name_length = data[i];
+                i += 1;
+
+                if (topic_name_length > constants.message_max_topic_name_size) return error.InvalidTopicName;
+                if (i + topic_name_length > data.len) return error.Truncated;
+
+                var topic_name: [constants.message_max_topic_name_size]u8 = undefined;
+                @memcpy(topic_name[0..topic_name_length], data[i .. i + topic_name_length]);
+
+                break :blk ExtensionHeaders{ .publish = PublishHeaders{
+                    .message_id = message_id,
+                    .topic_name_length = topic_name_length,
+                    .topic_name = topic_name,
+                } };
+            },
+            .undefined => ExtensionHeaders{ .undefined = {} },
+        };
+    }
 
     pub fn toBytes(self: *Self, buf: []u8) usize {
         return switch (self.*) {

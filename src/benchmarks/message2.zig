@@ -16,6 +16,7 @@ pub fn BenchmarkMessageSerializeLarge(_: std.mem.Allocator) void {
     message.setBody(body);
 
     _ = message.serialize(backing_buf[0..message.size()]);
+    // _ = message.serialize2(backing_buf[0..message.size()]);
 
     // std.debug.print("serialized message {any}", .{backing_buf[0..bytes]});
 }
@@ -33,6 +34,7 @@ pub fn BenchmarkMessageSerializeSmall(_: std.mem.Allocator) void {
     var message = Message.new(.undefined);
 
     _ = message.serialize(backing_buf[0..message.size()]);
+    // _ = message.serialize2(backing_buf[0..message.size()]);
 
     // std.debug.print("serialized message {any}", .{backing_buf[0..bytes]});
 }
