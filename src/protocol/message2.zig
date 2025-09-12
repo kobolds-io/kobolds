@@ -5,6 +5,7 @@ const log = std.log.scoped(.Message);
 
 const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
+const hash = @import("../hash.zig");
 
 const MAX_MESSAGE_SIZE = @sizeOf(FixedHeaders) + @sizeOf(ExtensionHeaders) + constants.message_max_body_size + @alignOf(u64);
 
@@ -72,15 +73,17 @@ pub const Message = struct {
         }
     }
 
+    /// Calculate the size of the unserialized message.
     pub fn size(self: Self) usize {
         const extension_size: usize = switch (self.fixed_headers.message_type) {
             .undefined => 0,
             .publish => @sizeOf(PublishHeaders),
         };
-        return @sizeOf(FixedHeaders) + extension_size + self.fixed_headers.body_length;
+
+        return @sizeOf(FixedHeaders) + extension_size + self.fixed_headers.body_length + @sizeOf(u64);
     }
 
-    pub fn asBytes(self: *Self, buf: []u8) usize {
+    pub fn serialize(self: *Self, buf: []u8) usize {
         assert(buf.len >= self.size());
 
         var i: usize = 0;
@@ -94,12 +97,39 @@ pub const Message = struct {
         @memcpy(buf[i .. i + self.fixed_headers.body_length], self.body());
         i += self.fixed_headers.body_length;
 
+        // take the entire buffer that has been written and calculate a checksum
+        const checksum = hash.xxHash64Checksum(buf[0..i]);
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], checksum, .big);
+        i += @sizeOf(u64);
+
         return i;
+    }
+
+    pub fn deserialize(data: []u8) !Message {
+        // ensure that the buffer is at least the minimum size that a message could
+        // possibly be.
+        if (data.len < FixedHeaders.packed_size) return error.Truncated;
+
+        var i: usize = 0;
+
+        // get the fixed headers from the bytes
+        const fixed_headers = FixedHeaders.fromBytes(data[0..FixedHeaders.packed_size]);
+        i += FixedHeaders.packed_size;
+
+        log.err("fixed headers {any}", .{fixed_headers});
+
+        // FIX: this is a stub
+        return Message.new(.undefined);
     }
 };
 
 pub const FixedHeaders = packed struct {
     const Self = @This();
+    const packed_size = @sizeOf(Self) - 2;
+
+    comptime {
+        assert(6 == packed_size);
+    }
 
     body_length: u16 = 0,
     message_type: MessageType = .undefined,
@@ -131,6 +161,39 @@ pub const FixedHeaders = packed struct {
         i += 2;
 
         return i;
+    }
+
+    pub fn fromBytes(data: []u8) !FixedHeaders {
+        if (data.len < FixedHeaders.packed_size) {
+            return error.Truncated;
+        }
+
+        var i: usize = 0;
+
+        const body_length = std.mem.readInt(u16, data[i..][0..2], .big);
+        i += 2;
+
+        const message_type: MessageType = switch (data[i]) {
+            1 => .publish,
+            else => .undefined,
+        };
+        i += 1;
+
+        const vf = data[i];
+        const version: u4 = @intCast((vf >> 4) & 0xF);
+        const flags: u4 = @intCast(vf & 0xF);
+        i += 1;
+
+        const padding = std.mem.readInt(u16, data[i..][0..2], .big);
+        i += 2;
+
+        return FixedHeaders{
+            .body_length = body_length,
+            .message_type = message_type,
+            .version = version,
+            .flags = flags,
+            .padding = padding,
+        };
     }
 };
 
@@ -192,13 +255,13 @@ test "message can comprise of variable size extensions" {
 
 test "message size" {
     var undefined_message = Message.new(.undefined);
-    try testing.expectEqual(@sizeOf(FixedHeaders) + 0, undefined_message.size());
+    try testing.expectEqual(@sizeOf(FixedHeaders) + 0 + @sizeOf(u64), undefined_message.size());
 
     var publish_message = Message.new(.publish);
-    try testing.expectEqual(@sizeOf(FixedHeaders) + @sizeOf(PublishHeaders), publish_message.size());
+    try testing.expectEqual(@sizeOf(FixedHeaders) + @sizeOf(PublishHeaders) + @sizeOf(u64), publish_message.size());
 }
 
-test "message.asBytes" {
+test "message serialization" {
     const message_types = [_]MessageType{
         .undefined,
         .publish,
@@ -208,38 +271,35 @@ test "message.asBytes" {
 
     for (message_types) |message_type| {
         var message = Message.new(message_type);
-        const bytes = message.asBytes(buf[0..message.size()]);
-        log.err("\nmessage_type: {any}, bytes: {any}, len: {}", .{ message.fixed_headers.message_type, buf[0..bytes], bytes });
+
+        const bytes = message.serialize(&buf);
+
+        try testing.expect(bytes < message.size());
+
+        switch (message_type) {
+            .undefined => try testing.expectEqual(bytes, 14),
+            .publish => try testing.expectEqual(bytes, 23),
+        }
     }
 }
 
-test "message.serialize" {}
+test "message deserialization" {
+    const message_types = [_]MessageType{
+        .undefined,
+        .publish,
+    };
 
-pub fn writeStructBigEndian(comptime T: type, value: T, buf: []u8) usize {
-    const info = @typeInfo(T);
-    switch (info) {
-        .@"struct" => |s| {
-            var offset: usize = 0;
-            inline for (s.fields) |field| {
-                const F = field.type;
-                const val = @field(value, field.name);
+    var buf: [@sizeOf(Message)]u8 = undefined;
 
-                if (@typeInfo(F) == .int) {
-                    const size = @sizeOf(F);
-                    assert(buf.len >= offset + size);
+    for (message_types) |message_type| {
+        var message = Message.new(message_type);
 
-                    const ptr = buf[offset .. offset + size];
-                    std.mem.writeInt(F, @ptrCast(ptr), val, .big);
+        // serialize the message
+        const bytes = message.serialize(&buf);
 
-                    offset += size;
-                } else {
-                    @compileError("Unsupported field type in writeStructBigEndian: " ++ field.name);
-                }
-            }
-            return offset;
-        },
-        else => @compileError("writeStructBigEndian only works on structs"),
+        // deserialize the message
+        const deserialized_message = try Message.deserialize(buf[0..bytes]);
+        _ = deserialized_message;
+        // log.err("deserialized message {any}", .{deserialized_message});
     }
-
-    // return @as(usize, 0);
 }
