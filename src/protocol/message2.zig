@@ -53,7 +53,7 @@ pub const Message = struct {
 
     pub fn packedSize(self: Self) usize {
         var sum: usize = 0;
-        sum += FixedHeaders.packedSize2();
+        sum += FixedHeaders.packedSize();
         sum += self.extension_headers.packedSize2();
         sum += self.fixed_headers.body_length;
         sum += @sizeOf(u64);
@@ -116,15 +116,15 @@ pub const Message = struct {
 
     pub fn deserialize(data: []const u8) !Message {
         // ensure that the buffer is at least the minimum size that a message could possibly be.
-        if (data.len < FixedHeaders.packedSize2()) return error.Truncated;
+        if (data.len < FixedHeaders.packedSize()) return error.Truncated;
 
         var i: usize = 0;
 
         // get the fixed headers from the bytes
-        const fixed_headers = try FixedHeaders.fromBytes2(data[0..FixedHeaders.packedSize2()]);
-        i += FixedHeaders.packedSize2();
+        const fixed_headers = try FixedHeaders.fromBytes(data[0..FixedHeaders.packedSize()]);
+        i += FixedHeaders.packedSize();
 
-        const extension_headers = try ExtensionHeaders.fromBytes2(fixed_headers.message_type, data[i..]);
+        const extension_headers = try ExtensionHeaders.fromBytes(fixed_headers.message_type, data[i..]);
         i += extension_headers.packedSize2();
 
         if (fixed_headers.body_length > constants.message_max_body_size) return error.InvalidMessage;
@@ -153,7 +153,7 @@ pub const FixedHeaders = packed struct {
     const Self = @This();
 
     comptime {
-        assert(6 == Self.packedSize2());
+        assert(6 == Self.packedSize());
     }
 
     body_length: u16 = 0,
@@ -162,7 +162,7 @@ pub const FixedHeaders = packed struct {
     flags: u4 = 0,
     padding: u16 = 0,
 
-    pub inline fn packedSize2() usize {
+    pub inline fn packedSize() usize {
         return 6; // 2 + 1 + 1 + 2
     }
 
@@ -192,8 +192,8 @@ pub const FixedHeaders = packed struct {
 
     /// Writes the packed struct into `buf` in big-endian order.
     /// Returns the slice of written bytes.
-    pub inline fn fromBytes2(data: []const u8) !Self {
-        if (data.len < Self.packedSize2()) return error.Truncated;
+    pub inline fn fromBytes(data: []const u8) !Self {
+        if (data.len < Self.packedSize()) return error.Truncated;
 
         var i: usize = 0;
 
@@ -253,7 +253,7 @@ pub const ExtensionHeaders = union(MessageType) {
         };
     }
 
-    pub inline fn fromBytes2(message_type: MessageType, data: []const u8) !Self {
+    pub inline fn fromBytes(message_type: MessageType, data: []const u8) !Self {
         return switch (message_type) {
             .publish => blk: {
                 const headers = try PublishHeaders.fromBytes(data);
@@ -320,7 +320,7 @@ pub const PublishHeaders = struct {
 
 test "size of structs" {
     try testing.expectEqual(8, @sizeOf(FixedHeaders));
-    try testing.expectEqual(6, FixedHeaders.packedSize2());
+    try testing.expectEqual(6, FixedHeaders.packedSize());
 
     const message = Message.new(.undefined);
     try testing.expectEqual(16, message.size());
