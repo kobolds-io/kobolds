@@ -116,44 +116,6 @@ pub const Message = struct {
         return i;
     }
 
-    pub fn serialize2(self: *Self, buf: []u8) usize {
-        const checksum_size = @sizeOf(u64);
-        const required_len = self.size();
-        std.debug.assert(buf.len >= required_len);
-
-        var i: usize = 0;
-        var hash_state = std.hash.XxHash64.init(0x79810fb604cfd2d7); // same seed as deserialize
-
-        // --- Fixed Headers ---
-        {
-            const fh_bytes = self.fixed_headers.toBytes(buf[i..]);
-            hash_state.update(buf[i .. i + fh_bytes]);
-            i += fh_bytes;
-        }
-
-        // --- Extension Headers ---
-        {
-            const eh_bytes = self.extension_headers.toBytes(buf[i..]);
-            hash_state.update(buf[i .. i + eh_bytes]);
-            i += eh_bytes;
-        }
-
-        // --- Body ---
-        {
-            const body_len = self.fixed_headers.body_length;
-            @memcpy(buf[i .. i + body_len], self.body());
-            hash_state.update(buf[i .. i + body_len]);
-            i += body_len;
-        }
-
-        // --- Checksum ---
-        const checksum = hash_state.final();
-        std.mem.writeInt(u64, buf[i..][0..checksum_size], checksum, .big);
-        i += checksum_size;
-
-        return i;
-    }
-
     pub fn deserialize(data: []const u8) !Message {
         // ensure that the buffer is at least the minimum size that a message could possibly be.
         if (data.len < FixedHeaders.packedSize2()) return error.Truncated;
