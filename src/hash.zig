@@ -7,7 +7,7 @@ const XxHash3 = std.hash.XxHash3;
 const XxHash32 = std.hash.XxHash32;
 
 const xxhash_32_hash_seed: u32 = 0x79810fb6;
-const xxhash_64_hash_seed: u64 = 0x79810fb604cfd2d7;
+pub const xxhash_64_hash_seed: u64 = 0x79810fb604cfd2d7;
 
 pub fn xxHash64Checksum(in: []const u8) u64 {
     return XxHash3.hash(xxhash_64_hash_seed, in);
