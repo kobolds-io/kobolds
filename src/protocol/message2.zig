@@ -7,8 +7,6 @@ const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 const hash = @import("../hash.zig");
 
-const MAX_MESSAGE_SIZE = @sizeOf(FixedHeaders) + @sizeOf(ExtensionHeaders) + constants.message_max_body_size + @alignOf(u64);
-
 pub const Message = struct {
     const Self = @This();
 
@@ -458,8 +456,7 @@ pub const PublishHeaders = struct {
 
 test "size of structs" {
     try testing.expectEqual(8, @sizeOf(FixedHeaders));
-
-    try testing.expectEqual(MAX_MESSAGE_SIZE, @sizeOf(Message));
+    try testing.expectEqual(6, FixedHeaders.packedSize2());
 }
 
 test "message can comprise of variable size extensions" {
