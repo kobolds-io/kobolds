@@ -18,17 +18,13 @@ pub const Message = struct {
     pub fn new(message_type: MessageType) Self {
         return switch (message_type) {
             .undefined => Self{
-                .fixed_headers = .{
-                    .message_type = message_type,
-                },
+                .fixed_headers = .{ .message_type = message_type },
                 .extension_headers = .{ .undefined = {} },
                 .body_buffer = undefined,
                 .checksum = 0,
             },
             .publish => Self{
-                .fixed_headers = .{
-                    .message_type = message_type,
-                },
+                .fixed_headers = .{ .message_type = message_type },
                 .extension_headers = .{ .publish = PublishHeaders{} },
                 .body_buffer = undefined,
                 .checksum = 0,
@@ -92,29 +88,36 @@ pub const Message = struct {
         return @sizeOf(FixedHeaders) + extension_size + self.fixed_headers.body_length + @sizeOf(u64);
     }
 
-    pub fn serialize(self: *Self, buf: []u8) usize {
+    //// UPDATED VERSION
+    pub inline fn serialize(self: *Self, buf: []u8) usize {
+        // Ensure the buffer is large enough
         assert(buf.len >= self.packedSize());
 
         var i: usize = 0;
 
-        const fixed_headers_bytes_len = self.fixed_headers.toBytes(buf[0..]);
-        i += fixed_headers_bytes_len;
+        // Fixed headers
+        i += self.fixed_headers.toBytes(buf[i..]);
 
-        const extension_headers_bytes_len = self.extension_headers.toBytes(buf[i..]);
-        i += extension_headers_bytes_len;
+        // Extension headers
+        i += self.extension_headers.toBytes(buf[i..]);
 
-        @memcpy(buf[i .. i + self.fixed_headers.body_length], self.body());
-        i += self.fixed_headers.body_length;
+        const body_len = self.fixed_headers.body_length;
+        @memcpy(buf[i .. i + body_len], self.body_buffer[0..body_len]);
+        i += body_len;
 
-        // take the entire buffer that has been written and calculate a checksum
+        // Compute checksum directly on the written slice
         const checksum = hash.xxHash64Checksum(buf[0..i]);
-        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], checksum, .big);
+
+        // Write checksum in-place (avoids creating buf[i..][0..size])
+        std.mem.writeInt(u64, buf.ptr[i..][0..@sizeOf(u64)], checksum, .big);
         i += @sizeOf(u64);
+
+        // if this didn't work something went wrong
+        assert(self.packedSize() == i);
 
         return i;
     }
-
-    pub fn deserialize(data: []const u8) !Message {
+    pub inline fn deserialize(data: []const u8) !Message {
         // ensure that the buffer is at least the minimum size that a message could possibly be.
         if (data.len < FixedHeaders.packedSize()) return error.Truncated;
 
@@ -162,17 +165,17 @@ pub const FixedHeaders = packed struct {
     flags: u4 = 0,
     padding: u16 = 0,
 
-    pub inline fn packedSize() usize {
+    pub fn packedSize() usize {
         return 6; // 2 + 1 + 1 + 2
     }
 
-    pub inline fn toBytes(self: *const Self, buf: []u8) usize {
-        std.debug.assert(buf.len >= @sizeOf(Self));
+    pub inline fn toBytes(self: Self, buf: []u8) usize {
+        assert(buf.len >= @sizeOf(Self));
 
         var i: usize = 0;
 
         std.mem.writeInt(u16, buf[i..][0..2], self.body_length, .big);
-        i += 2;
+        i += @sizeOf(u16);
 
         buf[i] = @intFromEnum(self.message_type);
         i += 1;
@@ -182,7 +185,7 @@ pub const FixedHeaders = packed struct {
         i += 1;
 
         std.mem.writeInt(u16, buf[i..][0..2], self.padding, .big);
-        i += 2;
+        i += @sizeOf(u16);
 
         return i;
     }
@@ -266,6 +269,10 @@ pub const PublishHeaders = struct {
     topic_name_length: u8 = 0,
     topic_name: [constants.message_max_topic_name_size]u8 = undefined,
 
+    pub fn packedSize(self: PublishHeaders) usize {
+        return @sizeOf(u64) + 1 + self.topic_name_length;
+    }
+
     pub inline fn toBytes(self: PublishHeaders, buf: []u8) usize {
         var i: usize = 0;
 
@@ -287,15 +294,7 @@ pub const PublishHeaders = struct {
 
         if (data.len < minimum_size) return error.Truncated; // 8 + 1 minimum
 
-        const message_id =
-            (@as(u64, data[i]) << 56) |
-            (@as(u64, data[i + 1]) << 48) |
-            (@as(u64, data[i + 2]) << 40) |
-            (@as(u64, data[i + 3]) << 32) |
-            (@as(u64, data[i + 4]) << 24) |
-            (@as(u64, data[i + 5]) << 16) |
-            (@as(u64, data[i + 6]) << 8) |
-            (@as(u64, data[i + 7]));
+        const message_id = std.mem.readInt(u64, data[0..8], .big);
         i += 8;
 
         const topic_name_length = data[i];
