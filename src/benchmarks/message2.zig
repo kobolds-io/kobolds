@@ -15,15 +15,17 @@ pub fn BenchmarkMessageSerializeLarge(_: std.mem.Allocator) void {
     var message = Message.new(.undefined);
     message.setBody(body);
 
-    _ = message.serialize(backing_buf[0..message.size()]);
+    const bytes = message.serialize(backing_buf[0..message.size()]);
     // _ = message.serialize2(backing_buf[0..message.size()]);
 
+    _ = bytes;
     // std.debug.print("serialized message {any}", .{backing_buf[0..bytes]});
 }
 
 pub fn BenchmarkMessageDeserializeLarge(_: std.mem.Allocator) void {
     const body = [_]u8{97} ** constants.message_max_body_size;
     const checksum = [_]u8{ 44, 70, 157, 175, 168, 53, 152, 96 };
+    // const checksum = [_]u8{ 253, 10, 237, 227 };
     const encoded_message = ([_]u8{ 32, 0, 0, 0, 0, 0 } ++ body ++ checksum);
     _ = Message.deserialize(&encoded_message) catch unreachable;
 }
@@ -33,14 +35,16 @@ pub fn BenchmarkMessageSerializeSmall(_: std.mem.Allocator) void {
 
     var message = Message.new(.undefined);
 
-    _ = message.serialize(backing_buf[0..message.size()]);
+    const bytes = message.serialize(backing_buf[0..message.size()]);
     // _ = message.serialize2(backing_buf[0..message.size()]);
 
+    _ = bytes;
     // std.debug.print("serialized message {any}", .{backing_buf[0..bytes]});
 }
 
 pub fn BenchmarkMessageDeserializeSmall(_: std.mem.Allocator) void {
     const checksum = [_]u8{ 58, 247, 81, 79, 183, 108, 92, 217 };
+    // const checksum = [_]u8{ 177, 194, 161, 163 };
     const encoded_message = ([_]u8{ 0, 0, 0, 0, 0, 0 } ++ checksum);
     _ = Message.deserialize(&encoded_message) catch unreachable;
 }

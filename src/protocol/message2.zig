@@ -16,6 +16,7 @@ pub const Message = struct {
     extension_headers: ExtensionHeaders = ExtensionHeaders{ .undefined = {} },
     body_buffer: [constants.message_max_body_size]u8 = undefined,
     checksum: u64 = 0,
+    // checksum: u32 = 0,
 
     pub fn new(message_type: MessageType) Self {
         return switch (message_type) {
@@ -113,6 +114,10 @@ pub const Message = struct {
         std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], checksum, .big);
         i += @sizeOf(u64);
 
+        // const checksum = hash.checksumCrc32(buf[0..i]);
+        // std.mem.writeInt(u32, buf[i..][0..@sizeOf(u32)], checksum, .big);
+        // i += @sizeOf(u32);
+
         return i;
     }
 
@@ -141,6 +146,12 @@ pub const Message = struct {
 
         if (!hash.xxHash64Verify(checksum, data[0..i])) return error.InvalidChecksum;
         i += @sizeOf(u64);
+
+        // if (data[i..].len < @sizeOf(u32)) return error.Truncated;
+        // const checksum = std.mem.readInt(u32, data[i .. i + @sizeOf(u32)][0..@sizeOf(u32)], .big);
+
+        // if (!hash.verifyCrc32(checksum, data[0..i])) return error.InvalidChecksum;
+        // i += @sizeOf(u32);
 
         // TODO: validate the message
 
@@ -482,6 +493,8 @@ test "message serialization" {
         switch (message_type) {
             .undefined => try testing.expectEqual(bytes, 14),
             .publish => try testing.expectEqual(bytes, 23),
+            // .undefined => try testing.expectEqual(bytes, 10),
+            // .publish => try testing.expectEqual(bytes, 19),
         }
     }
 }
