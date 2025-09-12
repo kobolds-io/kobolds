@@ -94,7 +94,8 @@ pub const Message = struct {
     }
 
     pub fn serialize(self: *Self, buf: []u8) usize {
-        assert(buf.len >= self.size());
+        assert(buf.len >= self.packedSize());
+        // assert(buf.len >= self.size());
 
         var i: usize = 0;
 
@@ -457,6 +458,10 @@ pub const PublishHeaders = struct {
 test "size of structs" {
     try testing.expectEqual(8, @sizeOf(FixedHeaders));
     try testing.expectEqual(6, FixedHeaders.packedSize2());
+
+    const message = Message.new(.undefined);
+    try testing.expectEqual(16, message.size());
+    try testing.expectEqual(14, message.packedSize());
 }
 
 test "message can comprise of variable size extensions" {
@@ -485,7 +490,7 @@ test "message serialization" {
 
         const bytes = message.serialize(&buf);
 
-        try testing.expect(bytes < message.size());
+        try testing.expect(bytes == message.packedSize());
 
         switch (message_type) {
             .undefined => try testing.expectEqual(bytes, 14),
@@ -507,15 +512,6 @@ test "message deserialization" {
     for (message_types) |message_type| {
         var message = Message.new(message_type);
 
-        switch (message_type) {
-            .publish => {
-                // message.setBody("hello");
-                // message.extension_headers.publish.message_id = 123;
-                // message.setTopicName("asdf");
-            },
-            else => {},
-        }
-
         // serialize the message
         const bytes = message.serialize(&buf);
         // log.err("message_type {any} bytes deserialization {}", .{ message_type, bytes });
@@ -524,6 +520,7 @@ test "message deserialization" {
         var deserialized_message = try Message.deserialize(buf[0..bytes]);
 
         try testing.expectEqual(message.size(), deserialized_message.size());
+        try testing.expectEqual(message.packedSize(), deserialized_message.packedSize());
         try testing.expect(std.mem.eql(u8, message.body(), deserialized_message.body()));
 
         switch (message_type) {
