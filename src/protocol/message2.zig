@@ -95,7 +95,7 @@ pub const Message = struct {
     }
 
     //// UPDATED VERSION
-    pub inline fn serialize(self: *Self, buf: []u8) usize {
+    pub fn serialize(self: *Self, buf: []u8) usize {
         // Ensure the buffer is large enough
         assert(buf.len >= self.packedSize());
 
@@ -124,7 +124,7 @@ pub const Message = struct {
         return i;
     }
 
-    pub inline fn deserialize(data: []const u8) !Message {
+    pub fn deserialize(data: []const u8) !Message {
         // ensure that the buffer is at least the minimum size that a message could possibly be.
         if (data.len < FixedHeaders.packedSize()) return error.Truncated;
 
@@ -176,7 +176,7 @@ pub const FixedHeaders = packed struct {
         return @sizeOf(u16) + @sizeOf(MessageType) + 1 + @sizeOf(u16);
     }
 
-    pub inline fn toBytes(self: Self, buf: []u8) usize {
+    pub fn toBytes(self: Self, buf: []u8) usize {
         assert(buf.len >= @sizeOf(Self));
 
         var i: usize = 0;
@@ -199,7 +199,7 @@ pub const FixedHeaders = packed struct {
 
     /// Writes the packed struct into `buf` in big-endian order.
     /// Returns the slice of written bytes.
-    pub inline fn fromBytes(data: []const u8) !Self {
+    pub fn fromBytes(data: []const u8) !Self {
         if (data.len < Self.packedSize()) return error.Truncated;
 
         var i: usize = 0;
@@ -252,7 +252,7 @@ pub const ExtensionHeaders = union(MessageType) {
         };
     }
 
-    pub inline fn toBytes(self: *Self, buf: []u8) usize {
+    pub fn toBytes(self: *Self, buf: []u8) usize {
         return switch (self.*) {
             .undefined => 0,
             inline else => |headers| blk: {
@@ -264,7 +264,7 @@ pub const ExtensionHeaders = union(MessageType) {
         };
     }
 
-    pub inline fn fromBytes(message_type: MessageType, data: []const u8) !Self {
+    pub fn fromBytes(message_type: MessageType, data: []const u8) !Self {
         return switch (message_type) {
             .undefined => ExtensionHeaders{ .undefined = {} },
             .publish => blk: {
@@ -294,7 +294,7 @@ pub const PublishHeaders = struct {
         return @sizeOf(u64) + 1;
     }
 
-    pub inline fn toBytes(self: Self, buf: []u8) usize {
+    pub fn toBytes(self: Self, buf: []u8) usize {
         var i: usize = 0;
 
         std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.message_id, .big);
@@ -309,7 +309,7 @@ pub const PublishHeaders = struct {
         return i;
     }
 
-    pub inline fn fromBytes(data: []const u8) !Self {
+    pub fn fromBytes(data: []const u8) !Self {
         var i: usize = 0;
 
         if (data.len < Self.minimumSize()) return error.Truncated;
@@ -350,7 +350,7 @@ pub const SubscribeHeaders = struct {
         return @sizeOf(u64) + @sizeOf(u64) + 1;
     }
 
-    pub inline fn toBytes(self: Self, buf: []u8) usize {
+    pub fn toBytes(self: Self, buf: []u8) usize {
         var i: usize = 0;
 
         std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.message_id, .big);
@@ -368,7 +368,7 @@ pub const SubscribeHeaders = struct {
         return i;
     }
 
-    pub inline fn fromBytes(data: []const u8) !Self {
+    pub fn fromBytes(data: []const u8) !Self {
         var i: usize = 0;
 
         if (data.len < Self.minimumSize()) return error.Truncated;
