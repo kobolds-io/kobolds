@@ -37,58 +37,54 @@ pub const Parser = struct {
     pub fn parse(self: *Self, messages: []Message, data: []const u8) ParseError!usize {
         if (self.buffer.items.len + data.len > constants.parser_max_buffer_size) return ParseError.BufferOverflow;
 
-        // Add the data to the internal buffer
         self.buffer.appendSliceAssumeCapacity(data);
 
-        var i: usize = 0;
-        // var read_offset: usize = 0;
+        var count: usize = 0;
+        var read_offset: usize = 0;
 
-        // check if there is enough data to at least fit fixed headers
-        while (self.buffer.items.len >= FixedHeaders.packedSize() and i < messages.len) : (i += 1) {
-            // pull out the data for the fixed headers
-            const fixed_headers = FixedHeaders.fromBytes(self.buffer.items[0..FixedHeaders.packedSize()]) catch unreachable;
+        var buf = self.buffer.items;
 
-            // FIX: this actually is incorrect since topics are variable length.
-            const extension_size = switch (fixed_headers.message_type) {
-                .undefined => 0,
-                .publish => (ExtensionHeaders{ .publish = .{} }).packedSize(),
-                .subscribe => (ExtensionHeaders{ .subscribe = .{} }).packedSize(),
+        while (count < messages.len) {
+            if (buf.len - read_offset < FixedHeaders.packedSize()) break;
+
+            const parsed = Message.deserialize2(buf[read_offset..]) catch |err| switch (err) {
+                error.Truncated => break, // there is nothing more for us to do in this loop
+                error.InvalidMessageType, error.InvalidChecksum => {
+                    read_offset += 1; // skip bad byte
+                    continue;
+                },
+                else => {
+                    log.err("unhandled error: {any}", .{err});
+                    unreachable;
+                },
             };
-            const packed_message_size = FixedHeaders.packedSize() + extension_size + fixed_headers.body_length + 8;
 
-            if (self.buffer.items.len >= packed_message_size) {
-                const message = Message.deserialize(self.buffer.items[0..packed_message_size]) catch |err| switch (err) {
-                    error.Truncated => {
-                        // there were not enough bytes in the buffer to parse the full message. There
-                        // is nothing left for us to do here except move on
-                        return i;
-                    },
-                    error.InvalidMessage, error.InvalidChecksum => {
-                        // The message could not be parse so we are going to just drop the first byte
-                        // and walk the buffer forward in order to gracefully recover. This is not the most efficient
-                        // mechanism to to keep the parser moving but.
-                        std.mem.copyForwards(u8, self.buffer.items, self.buffer.items[1..]);
-                        self.buffer.items.len -= 1;
-                        continue;
-                    },
-                    else => {
-                        log.err("unhandled error: {any}", .{err});
-                        unreachable;
-                    },
-                };
-
-                messages[i] = message;
-                std.mem.copyForwards(u8, self.buffer.items, self.buffer.items[packed_message_size..]);
-                self.buffer.items.len -= packed_message_size;
+            // protect against buggy deserialize
+            if (parsed.bytes_consumed == 0) {
+                read_offset += 1;
                 continue;
             }
 
-            // There are not enough bytes in the buffer to be able to parse a full message. At this
-            // point all messages that are parseable have been parsed
-            break;
+            // parsed says it consumed more than available — treat as corrupted, drop a byte and continue to resync.
+            if (read_offset + parsed.bytes_consumed > buf.len) {
+                read_offset += 1;
+                continue;
+            }
+
+            messages[count] = parsed.message;
+            count += 1;
+
+            // advance the read offset
+            read_offset += parsed.bytes_consumed;
         }
 
-        return i;
+        if (read_offset > 0) {
+            // Remove consumed bytes from buffer
+            std.mem.copyForwards(u8, self.buffer.items, self.buffer.items[read_offset..]);
+            self.buffer.items.len -= read_offset;
+        }
+
+        return count;
     }
 };
 
@@ -122,50 +118,47 @@ test "parser.parse" {
     _ = try parser.parse(&messages, buf[0..n]);
 }
 
-// pub const Parser = struct {
-//     const Self = @This();
+test "parse parses multiple messages" {
+    const want_body = "a" ** constants.message_max_body_size;
 
-//     buffer: std.array_list.Managed(u8),
+    const allocator = testing.allocator;
 
-//     pub fn init(allocator: std.mem.Allocator) Parser {
-//         return Parser{
-//             .buffer = std.array_list.Managed(u8).initCapacity(allocator, constants.parser_max_buffer_size) catch unreachable,
-//         };
-//     }
+    var message = Message.new(.undefined);
+    message.setBody(want_body);
 
-//     pub fn deinit(self: *Self) void {
-//         self.buffer.deinit();
-//     }
+    const buf = try allocator.alloc(u8, message.packedSize());
+    defer allocator.free(buf);
 
-//     /// parse n messages from a data set. return the number of bytes successfully parsed from the data
-//     pub fn parse(self: *Self, messages: *std.array_list.Managed(Message), data: []const u8) !void {
-//         if (self.buffer.items.len + data.len > constants.parser_max_buffer_size) {
-//             return error.BufferOverflow;
-//         }
+    _ = message.serialize(buf);
 
-//         // append the new data to the parser buffer
-//         try self.buffer.appendSlice(data);
+    // make a buffer that could fit 10 messages
+    var data_buf: [@sizeOf(Message) * 10]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&data_buf);
+    const fba_allocator = fba.allocator();
 
-//         // if able to append new data to the buffer loop over the data in the buffer
-//         while (self.buffer.items.len >= @sizeOf(Headers)) {
-//             // we are going to try and parse another message out of the buffer
-//             var message = Message.new();
-//             message.decode(self.buffer.items) catch |err| switch (err) {
-//                 ProtocolError.NotEnoughData => return,
-//                 ProtocolError.InvalidHeadersChecksum, ProtocolError.InvalidBodyChecksum => {
-//                     // try to gracefully recover from this state
-//                     std.mem.copyForwards(u8, self.buffer.items, self.buffer.items[1..]);
-//                     self.buffer.items.len -= 1;
-//                     continue;
-//                 },
-//                 else => return err,
-//             };
+    var data = try std.ArrayList(u8).initCapacity(fba_allocator, data_buf.len);
+    defer data.deinit(fba_allocator);
 
-//             try messages.append(message);
+    for (0..5) |_| {
+        // we append the same encoded message 5 times
+        try data.appendSlice(allocator, buf);
+    }
 
-//             // remove the parsed message from the buffer
-//             std.mem.copyForwards(u8, self.buffer.items, self.buffer.items[message.size()..]);
-//             self.buffer.items.len -= message.size();
-//         }
-//     }
-// };
+    var parser = try Parser.init(allocator);
+    defer parser.deinit(allocator);
+
+    // Stack allocated reusable list of messages
+    var messages: [10]Message = undefined;
+
+    const consumed = try parser.parse(&messages, data.items);
+
+    try std.testing.expectEqual(5, messages[0..consumed].len);
+    try testing.expect(std.mem.eql(u8, want_body, messages[0].body()));
+    try testing.expect(std.mem.eql(u8, want_body, messages[1].body()));
+    try testing.expect(std.mem.eql(u8, want_body, messages[2].body()));
+    try testing.expect(std.mem.eql(u8, want_body, messages[3].body()));
+    try testing.expect(std.mem.eql(u8, want_body, messages[4].body()));
+
+    // we know that we parsed EVERYTHING so there should be no more bytes in the buffer
+    try testing.expectEqual(0, parser.buffer.items.len);
+}

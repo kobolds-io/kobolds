@@ -7,6 +7,11 @@ const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 const hash = @import("../hash.zig");
 
+pub const DeserializeResult = struct {
+    message: Message,
+    bytes_consumed: usize,
+};
+
 pub const Message = struct {
     const Self = @This();
 
@@ -155,6 +160,57 @@ pub const Message = struct {
             .extension_headers = extension_headers,
             .body_buffer = body_buffer,
             .checksum = checksum,
+        };
+    }
+
+    pub fn deserialize2(data: []const u8) !DeserializeResult {
+        // ensure that the buffer is at least the minimum size that a message could possibly be.
+        if (data.len < FixedHeaders.packedSize()) return error.Truncated;
+
+        var read_offset: usize = 0;
+
+        // get the fixed headers from the bytes
+        const fixed_headers = try FixedHeaders.fromBytes(data[0..FixedHeaders.packedSize()]);
+        read_offset += FixedHeaders.packedSize();
+
+        const extension_headers = try ExtensionHeaders.fromBytes(
+            fixed_headers.message_type,
+            data[FixedHeaders.packedSize()..],
+        );
+        const extension_headers_size = extension_headers.packedSize();
+        read_offset += extension_headers_size;
+
+        const total_message_size =
+            FixedHeaders.packedSize() +
+            extension_headers_size +
+            fixed_headers.body_length +
+            @sizeOf(u64);
+
+        if (data.len < total_message_size) return error.Truncated;
+
+        if (fixed_headers.body_length > constants.message_max_body_size) return error.InvalidMessage;
+        if (data[read_offset..].len < fixed_headers.body_length) return error.Truncated;
+
+        var body_buffer: [constants.message_max_body_size]u8 = undefined;
+        @memcpy(body_buffer[0..fixed_headers.body_length], data[read_offset .. read_offset + fixed_headers.body_length]);
+        read_offset += fixed_headers.body_length;
+
+        if (data[read_offset..].len < @sizeOf(u64)) return error.Truncated;
+        const checksum = std.mem.readInt(u64, data[read_offset .. read_offset + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+
+        if (!hash.xxHash64Verify(checksum, data[0..read_offset])) return error.InvalidChecksum;
+        read_offset += @sizeOf(u64);
+
+        assert(read_offset == total_message_size);
+
+        return DeserializeResult{
+            .message = Message{
+                .fixed_headers = fixed_headers,
+                .extension_headers = extension_headers,
+                .body_buffer = body_buffer,
+                .checksum = checksum,
+            },
+            .bytes_consumed = read_offset,
         };
     }
 };
@@ -460,6 +516,64 @@ test "message deserialization" {
 
         // deserialize the message
         var deserialized_message = try Message.deserialize(buf[0..bytes]);
+
+        try testing.expectEqual(message.size(), deserialized_message.size());
+        try testing.expectEqual(message.packedSize(), deserialized_message.packedSize());
+        try testing.expect(std.mem.eql(u8, message.body(), deserialized_message.body()));
+
+        switch (message_type) {
+            .publish => {
+                try testing.expectEqual(
+                    message.extension_headers.publish.message_id,
+                    deserialized_message.extension_headers.publish.message_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.publish.topic_name_length,
+                    deserialized_message.extension_headers.publish.topic_name_length,
+                );
+                try testing.expect(std.mem.eql(u8, message.topicName(), deserialized_message.topicName()));
+            },
+            .subscribe => {
+                try testing.expectEqual(
+                    message.extension_headers.subscribe.message_id,
+                    deserialized_message.extension_headers.subscribe.message_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.subscribe.transaction_id,
+                    deserialized_message.extension_headers.subscribe.transaction_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.subscribe.topic_name_length,
+                    deserialized_message.extension_headers.subscribe.topic_name_length,
+                );
+                try testing.expect(std.mem.eql(u8, message.topicName(), deserialized_message.topicName()));
+            },
+            else => {},
+        }
+    }
+}
+
+test "message deserialization2" {
+    const message_types = [_]MessageType{
+        .undefined,
+        .publish,
+        .subscribe,
+    };
+
+    var buf: [@sizeOf(Message)]u8 = undefined;
+
+    for (message_types) |message_type| {
+        var message = Message.new(message_type);
+
+        // serialize the message
+        const bytes = message.serialize(&buf);
+
+        // deserialize the message
+        const deserialized_result = try Message.deserialize2(buf[0..bytes]);
+
+        try testing.expectEqual(bytes, deserialized_result.bytes_consumed);
+
+        var deserialized_message = deserialized_result.message;
 
         try testing.expectEqual(message.size(), deserialized_message.size());
         try testing.expectEqual(message.packedSize(), deserialized_message.packedSize());
