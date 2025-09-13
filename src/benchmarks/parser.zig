@@ -37,7 +37,7 @@ var parser_messages: std.array_list.Managed(Message) = undefined;
 
 test "Parser benchmarks" {
     var bench = zbench.Benchmark.init(std.testing.allocator, .{
-        .iterations = benchmark_constants.benchmark_max_iterations,
+        .iterations = 1_000,
     });
     defer bench.deinit();
 
