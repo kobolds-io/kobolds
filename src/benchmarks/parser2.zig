@@ -27,26 +27,17 @@ const ParserParseBenchmark = struct {
     }
 };
 
-fn afterEach() void {
-    // reset the messages array list so we don't eat through all the memory on the machine
-    // drop the len completely
-    parser_messages.items.len = 0;
-}
-
 var parser_messages: std.ArrayList(Message) = undefined;
 
 test "Parser benchmarks" {
     var bench = zbench.Benchmark.init(std.testing.allocator, .{
-        .iterations = 100,
+        .iterations = 1_000,
     });
     defer bench.deinit();
 
-    var parser_messages_gpa = std.heap.GeneralPurposeAllocator(.{}).init;
-    defer _ = parser_messages_gpa.deinit();
-    const parser_messages_allocator = parser_messages_gpa.allocator();
-
-    parser_messages = std.ArrayList(Message).initCapacity(parser_messages_allocator, std.math.maxInt(u16)) catch unreachable;
-    defer parser_messages.deinit(parser_messages_allocator);
+    var messages_gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+    defer _ = messages_gpa.deinit();
+    const messages_allocator = messages_gpa.allocator();
 
     var parser_gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     defer _ = parser_gpa.deinit();
@@ -59,17 +50,17 @@ test "Parser benchmarks" {
     var message_1 = Message.new(.undefined);
     message_1.setBody(&body);
 
-    const message_1_buf = try parser_messages_allocator.alloc(u8, message_1.packedSize());
-    defer parser_messages_allocator.free(message_1_buf);
+    const message_1_buf = try messages_allocator.alloc(u8, message_1.packedSize());
+    defer messages_allocator.free(message_1_buf);
 
     const serialized_bytes_1_count = message_1.serialize(message_1_buf);
 
-    const bytes_1 = try parser_messages_allocator.alloc(u8, serialized_bytes_1_count * 1);
-    defer parser_messages_allocator.free(bytes_1);
-    const bytes_2 = try parser_messages_allocator.alloc(u8, serialized_bytes_1_count * 2);
-    defer parser_messages_allocator.free(bytes_2);
-    const bytes_3 = try parser_messages_allocator.alloc(u8, serialized_bytes_1_count * 3);
-    defer parser_messages_allocator.free(bytes_3);
+    const bytes_1 = try messages_allocator.alloc(u8, serialized_bytes_1_count * 1);
+    defer messages_allocator.free(bytes_1);
+    const bytes_2 = try messages_allocator.alloc(u8, serialized_bytes_1_count * 2);
+    defer messages_allocator.free(bytes_2);
+    const bytes_3 = try messages_allocator.alloc(u8, serialized_bytes_1_count * 3);
+    defer messages_allocator.free(bytes_3);
 
     const serialized_message = message_1_buf[0..serialized_bytes_1_count];
     @memcpy(bytes_1, serialized_message);
@@ -81,8 +72,8 @@ test "Parser benchmarks" {
     @memcpy(bytes_3[serialized_bytes_1_count .. serialized_bytes_1_count * 2], serialized_message);
     @memcpy(bytes_3[serialized_bytes_1_count * 2 .. serialized_bytes_1_count * 3], serialized_message);
 
-    const recv_buffer = try parser_messages_allocator.alloc(u8, constants.connection_recv_buffer_size);
-    defer parser_messages_allocator.free(recv_buffer);
+    const recv_buffer = try messages_allocator.alloc(u8, constants.connection_recv_buffer_size);
+    defer messages_allocator.free(recv_buffer);
 
     // write as many messages as possible into the recv_buffer. This is the closest represenation of what the parser
     // would have to deal with for each connection
@@ -93,97 +84,77 @@ test "Parser benchmarks" {
     }
 
     const parser_parse_1_title = try std.fmt.allocPrint(
-        parser_messages_allocator,
+        messages_allocator,
         "parse {} bytes",
         .{bytes_1.len},
     );
-    defer parser_messages_allocator.free(parser_parse_1_title);
+    defer messages_allocator.free(parser_parse_1_title);
 
     const parser_parse_2_title = try std.fmt.allocPrint(
-        parser_messages_allocator,
+        messages_allocator,
         "parse {} bytes",
         .{bytes_2.len},
     );
-    defer parser_messages_allocator.free(parser_parse_2_title);
+    defer messages_allocator.free(parser_parse_2_title);
 
     const parser_parse_3_title = try std.fmt.allocPrint(
-        parser_messages_allocator,
+        messages_allocator,
         "parse {} bytes",
         .{bytes_3.len},
     );
-    defer parser_messages_allocator.free(parser_parse_3_title);
+    defer messages_allocator.free(parser_parse_3_title);
 
     // create a single encoded message with no body
     var message_2 = Message.new(.undefined);
-    const message_2_buf = try parser_messages_allocator.alloc(u8, message_2.packedSize());
-    defer parser_messages_allocator.free(message_2_buf);
+    const message_2_buf = try messages_allocator.alloc(u8, message_2.packedSize());
+    defer messages_allocator.free(message_2_buf);
 
     const serialized_bytes_2_count = message_2.serialize(message_2_buf);
 
-    const bytes_4 = try parser_messages_allocator.alloc(u8, message_2.packedSize());
-    defer parser_messages_allocator.free(bytes_4);
+    const bytes_4 = try messages_allocator.alloc(u8, message_2.packedSize());
+    defer messages_allocator.free(bytes_4);
     @memcpy(bytes_4[0..serialized_bytes_2_count], message_2_buf[0..serialized_bytes_2_count]);
 
     const parser_parse_4_title = try std.fmt.allocPrint(
-        parser_messages_allocator,
+        messages_allocator,
         "parse {} bytes",
         .{bytes_4.len},
     );
-    defer parser_messages_allocator.free(parser_parse_4_title);
+    defer messages_allocator.free(parser_parse_4_title);
 
     const parser_parse_5_title = try std.fmt.allocPrint(
-        parser_messages_allocator,
+        messages_allocator,
         "parse {} bytes",
         .{recv_buffer[0..recv_buffer_index].len},
     );
-    defer parser_messages_allocator.free(parser_parse_5_title);
+    defer messages_allocator.free(parser_parse_5_title);
 
     var messages: [10]Message = undefined;
 
     try bench.addParam(
         parser_parse_4_title,
         &ParserParseBenchmark.new(&messages, &parser, bytes_4),
-        .{
-            .hooks = .{
-                .after_each = afterEach,
-            },
-        },
+        .{},
     );
     try bench.addParam(
         parser_parse_1_title,
         &ParserParseBenchmark.new(&messages, &parser, bytes_1),
-        .{
-            .hooks = .{
-                .after_each = afterEach,
-            },
-        },
+        .{},
     );
     try bench.addParam(
         parser_parse_2_title,
         &ParserParseBenchmark.new(&messages, &parser, bytes_2),
-        .{
-            .hooks = .{
-                .after_each = afterEach,
-            },
-        },
+        .{},
     );
     try bench.addParam(
         parser_parse_3_title,
         &ParserParseBenchmark.new(&messages, &parser, bytes_3),
-        .{
-            .hooks = .{
-                .after_each = afterEach,
-            },
-        },
+        .{},
     );
     try bench.addParam(
         parser_parse_5_title,
         &ParserParseBenchmark.new(&messages, &parser, recv_buffer[0..recv_buffer_index]),
-        .{
-            .hooks = .{
-                .after_each = afterEach,
-            },
-        },
+        .{},
     );
 
     var stderr = std.fs.File.stderr().writerStreaming(&.{});
