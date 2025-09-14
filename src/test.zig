@@ -9,6 +9,7 @@ comptime {
     _ = @import("./node/listener.zig");
     _ = @import("./node/node.zig");
     _ = @import("./node/worker.zig");
+    _ = @import("./protocol/kid.zig");
     _ = @import("./protocol/message2.zig");
     _ = @import("./protocol/parser2.zig");
     _ = @import("./protocol/message_test.zig");
