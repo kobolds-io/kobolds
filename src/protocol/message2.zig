@@ -99,7 +99,6 @@ pub const Message = struct {
         return @sizeOf(FixedHeaders) + extension_size + self.fixed_headers.body_length + @sizeOf(u64);
     }
 
-    //// UPDATED VERSION
     pub fn serialize(self: *Self, buf: []u8) usize {
         // Ensure the buffer is large enough
         assert(buf.len >= self.packedSize());
@@ -129,41 +128,7 @@ pub const Message = struct {
         return i;
     }
 
-    pub fn deserialize(data: []const u8) !Message {
-        // ensure that the buffer is at least the minimum size that a message could possibly be.
-        if (data.len < FixedHeaders.packedSize()) return error.Truncated;
-
-        var i: usize = 0;
-
-        // get the fixed headers from the bytes
-        const fixed_headers = try FixedHeaders.fromBytes(data[0..FixedHeaders.packedSize()]);
-        i += FixedHeaders.packedSize();
-
-        const extension_headers = try ExtensionHeaders.fromBytes(fixed_headers.message_type, data[i..]);
-        i += extension_headers.packedSize();
-
-        if (fixed_headers.body_length > constants.message_max_body_size) return error.InvalidMessage;
-        if (data[i..].len < fixed_headers.body_length) return error.Truncated;
-
-        var body_buffer: [constants.message_max_body_size]u8 = undefined;
-        @memcpy(body_buffer[0..fixed_headers.body_length], data[i .. i + fixed_headers.body_length]);
-        i += fixed_headers.body_length;
-
-        if (data[i..].len < @sizeOf(u64)) return error.Truncated;
-        const checksum = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
-
-        if (!hash.xxHash64Verify(checksum, data[0..i])) return error.InvalidChecksum;
-        i += @sizeOf(u64);
-
-        return Message{
-            .fixed_headers = fixed_headers,
-            .extension_headers = extension_headers,
-            .body_buffer = body_buffer,
-            .checksum = checksum,
-        };
-    }
-
-    pub fn deserialize2(data: []const u8) !DeserializeResult {
+    pub fn deserialize(data: []const u8) !DeserializeResult {
         // ensure that the buffer is at least the minimum size that a message could possibly be.
         if (data.len < FixedHeaders.packedSize()) return error.Truncated;
 
@@ -515,61 +480,7 @@ test "message deserialization" {
         const bytes = message.serialize(&buf);
 
         // deserialize the message
-        var deserialized_message = try Message.deserialize(buf[0..bytes]);
-
-        try testing.expectEqual(message.size(), deserialized_message.size());
-        try testing.expectEqual(message.packedSize(), deserialized_message.packedSize());
-        try testing.expect(std.mem.eql(u8, message.body(), deserialized_message.body()));
-
-        switch (message_type) {
-            .publish => {
-                try testing.expectEqual(
-                    message.extension_headers.publish.message_id,
-                    deserialized_message.extension_headers.publish.message_id,
-                );
-                try testing.expectEqual(
-                    message.extension_headers.publish.topic_name_length,
-                    deserialized_message.extension_headers.publish.topic_name_length,
-                );
-                try testing.expect(std.mem.eql(u8, message.topicName(), deserialized_message.topicName()));
-            },
-            .subscribe => {
-                try testing.expectEqual(
-                    message.extension_headers.subscribe.message_id,
-                    deserialized_message.extension_headers.subscribe.message_id,
-                );
-                try testing.expectEqual(
-                    message.extension_headers.subscribe.transaction_id,
-                    deserialized_message.extension_headers.subscribe.transaction_id,
-                );
-                try testing.expectEqual(
-                    message.extension_headers.subscribe.topic_name_length,
-                    deserialized_message.extension_headers.subscribe.topic_name_length,
-                );
-                try testing.expect(std.mem.eql(u8, message.topicName(), deserialized_message.topicName()));
-            },
-            else => {},
-        }
-    }
-}
-
-test "message deserialization2" {
-    const message_types = [_]MessageType{
-        .undefined,
-        .publish,
-        .subscribe,
-    };
-
-    var buf: [@sizeOf(Message)]u8 = undefined;
-
-    for (message_types) |message_type| {
-        var message = Message.new(message_type);
-
-        // serialize the message
-        const bytes = message.serialize(&buf);
-
-        // deserialize the message
-        const deserialized_result = try Message.deserialize2(buf[0..bytes]);
+        const deserialized_result = try Message.deserialize(buf[0..bytes]);
 
         try testing.expectEqual(bytes, deserialized_result.bytes_consumed);
 

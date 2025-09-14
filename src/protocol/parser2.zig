@@ -47,7 +47,7 @@ pub const Parser = struct {
         while (count < messages.len) {
             if (buf.len - read_offset < FixedHeaders.packedSize()) break;
 
-            const parsed = Message.deserialize2(buf[read_offset..]) catch |err| switch (err) {
+            const parsed = Message.deserialize(buf[read_offset..]) catch |err| switch (err) {
                 error.Truncated => break, // there is nothing more for us to do in this loop
                 error.InvalidMessageType, error.InvalidChecksum => {
                     read_offset += 1; // skip bad byte
@@ -78,8 +78,8 @@ pub const Parser = struct {
             read_offset += parsed.bytes_consumed;
         }
 
+        // Remove consumed bytes from buffer
         if (read_offset > 0) {
-            // Remove consumed bytes from buffer
             std.mem.copyForwards(u8, self.buffer.items, self.buffer.items[read_offset..]);
             self.buffer.items.len -= read_offset;
         }
