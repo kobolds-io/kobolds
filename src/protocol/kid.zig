@@ -18,7 +18,12 @@ pub const KIDOptions = struct {
 ///
 /// [ timestamp 40 bits ] | [ counter 13 bits ] | [ node_id 11 bits ]
 ///
+/// Current implementation should support the following criteria.
+/// - Timestamp: 40 bits usable until 2059 (34 years)
+/// - Counter:   13 bits 8192 ids/ms/node_id
+/// - Node ID:   11 bits 2048 nodes
 ///
+/// If this implementation was to change it would be to support more nodes and less ids per ms
 pub const KID = struct {
     const Self = @This();
 
