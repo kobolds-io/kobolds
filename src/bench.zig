@@ -16,4 +16,5 @@ comptime {
     _ = @import("./benchmarks/message2.zig");
     _ = @import("./benchmarks/parser.zig");
     _ = @import("./benchmarks/parser2.zig");
+    _ = @import("./benchmarks/kid.zig");
 }
