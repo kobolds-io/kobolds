@@ -45,6 +45,12 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     const stdx_mod = stdx_dep.module("stdx");
 
+    const kid_dep = b.dependency("kid", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const kid_mod = kid_dep.module("kid");
+
     const cli_dep = b.dependency("cli", .{
         .target = target,
         .optimize = optimize,
@@ -60,6 +66,7 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     kobolds_exe.root_module.addImport("cli", cli_mod);
     kobolds_exe.root_module.addImport("uuid", uuid_mod);
     kobolds_exe.root_module.addImport("stdx", stdx_mod);
+    kobolds_exe.root_module.addImport("kid", kid_mod);
 
     b.installArtifact(kobolds_exe);
 
@@ -93,8 +100,15 @@ fn setupTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.bui
     });
     const stdx_mod = stdx_dep.module("stdx");
 
+    const kid_dep = b.dependency("kid", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const kid_mod = kid_dep.module("kid");
+
     kobolds_unit_tests.root_module.addImport("uuid", uuid_mod);
     kobolds_unit_tests.root_module.addImport("stdx", stdx_mod);
+    kobolds_unit_tests.root_module.addImport("kid", kid_mod);
 
     const run_unit_tests = b.addRunArtifact(kobolds_unit_tests);
     const test_step = b.step("test", "Run unit tests");
@@ -124,8 +138,15 @@ fn setupCICDTests(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
     });
     const stdx_mod = stdx_dep.module("stdx");
 
+    const kid_dep = b.dependency("kid", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const kid_mod = kid_dep.module("kid");
+
     kobolds_unit_tests.root_module.addImport("uuid", uuid_mod);
     kobolds_unit_tests.root_module.addImport("stdx", stdx_mod);
+    kobolds_unit_tests.root_module.addImport("kid", kid_mod);
 
     const run_unit_tests = b.addRunArtifact(kobolds_unit_tests);
     const test_step = b.step("cicd:test", "Run unit tests");
@@ -155,6 +176,13 @@ fn setupBenchmarks(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     const stdx_mod = stdx_dep.module("stdx");
 
+    const kid_dep = b.dependency("kid", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const kid_mod = kid_dep.module("kid");
+
+    bench_lib.root_module.addImport("kid", kid_mod);
     bench_lib.root_module.addImport("zbench", zbench_mod);
     bench_lib.root_module.addImport("stdx", stdx_mod);
 

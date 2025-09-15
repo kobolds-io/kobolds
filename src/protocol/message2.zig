@@ -6,6 +6,7 @@ const log = std.log.scoped(.Message);
 const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 const hash = @import("../hash.zig");
+const KID = @import("kid").KID;
 
 pub const DeserializeResult = struct {
     message: Message,
@@ -520,4 +521,9 @@ test "message deserialization" {
             else => {},
         }
     }
+}
+
+test "kid works" {
+    var kid = KID.init(0, .{});
+    _ = kid.generate();
 }
