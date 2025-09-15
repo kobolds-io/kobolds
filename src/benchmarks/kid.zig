@@ -60,7 +60,7 @@ test "KID benchmarks" {
     try bench.add("generate 8192 ids", BenchmarkKIDGenerate8192, .{});
     try bench.add("generate 10_000 ids", BenchmarkKIDGenerate10000, .{});
     try bench.add("generate 100_000 ids", BenchmarkKIDGenerate100000, .{});
-    try bench.add("generate 1_000_000 ids", BenchmarkKIDGenerate1000000, .{});
+    try bench.add("generate 1_000_000 ids", BenchmarkKIDGenerate1000000, .{ .iterations = 5 });
 
     var stderr = std.fs.File.stderr().writerStreaming(&.{});
     const writer = &stderr.interface;
