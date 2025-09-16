@@ -10,7 +10,7 @@
 
 ### Prerequisites
 
-- `zig` 0.14.0
+- `zig` 0.15.1
 
 ### Get Started
 
@@ -131,59 +131,80 @@ It draws inspiration from many sources namely; `nats`, `mqtt`, `nanomsg` and esp
 ```plaintext
 --------------------------------------------------------
   Operating System: linux x86_64
-  CPU:              13th Gen Intel(R) Core(TM) i9-13900K
-  CPU Cores:        24
-  Total Memory:     23.298GiB
+  CPU:              12th Gen Intel(R) Core(TM) i7-12700H
+  CPU Cores:        14
+  Total Memory:     31.021GiB
 --------------------------------------------------------
 
 |---------------------|
-| checksum Benchmarks |
+| Checksum Benchmarks |
 |---------------------|
-benchmark              runs     total time     time/run (avg ± σ)     (min ... max)                p75        p99        p995
+benchmark              runs     total time     time/run (avg ± σ)    (min ... max)                p75        p99        p995      
 -----------------------------------------------------------------------------------------------------------------------------
-xxhash32 checksum 16 b 65535    1.691ms        25ns ± 1.031us         (18ns ... 260.378us)         21ns       22ns       23ns
-xxhash32 checksum 128  65535    2.53ms         38ns ± 272ns           (31ns ... 65.559us)          37ns       38ns       38ns
-xxhash32 checksum mess 65535    83.509ms       1.274us ± 387ns        (1.245us ... 36.937us)       1.258us    1.284us    1.808us
-xxhash64 checksum 16 b 65535    803.08us       12ns ± 30ns            (11ns ... 6.67us)            12ns       13ns       13ns
-xxhash64 checksum 128  65535    1.093ms        16ns ± 29ns            (15ns ... 6.283us)           17ns       18ns       18ns
-xxhash64 checksum mess 65535    8.127ms        124ns ± 94ns           (120ns ... 10.284us)         123ns      125ns      135ns
-crc32 checksum 16 byte 65535    806.179us      12ns ± 23ns            (11ns ... 5.535us)           12ns       13ns       13ns
-crc32 checksum 128 byt 65535    803.89us       12ns ± 29ns            (11ns ... 7.206us)           12ns       13ns       13ns
-crc32 checksum message 65535    793.341us      12ns ± 5ns             (11ns ... 786ns)             12ns       13ns       13ns
+xxhash32 checksum 16 b 65535    2.694ms        41ns ± 41ns           (36ns ... 7.051us)           41ns       67ns       68ns      
+xxhash32 checksum 128  65535    4.335ms        66ns ± 172ns          (55ns ... 39.871us)          67ns       70ns       89ns      
+xxhash32 checksum mess 65535    125.034ms      1.907us ± 236ns       (1.886us ... 43.665us)       1.903us    1.94us     2.09us    
+xxhash64 checksum 16 b 65535    2.363ms        36ns ± 33ns           (32ns ... 8.588us)           37ns       38ns       58ns      
+xxhash64 checksum 128  65535    2.742ms        41ns ± 19ns           (38ns ... 3.832us)           42ns       52ns       52ns      
+xxhash64 checksum mess 65535    21.54ms        328ns ± 203ns         (301ns ... 34.082us)         310ns      849ns      969ns     
+crc32 checksum 16 byte 65535    2.372ms        36ns ± 21ns           (32ns ... 5.478us)           37ns       58ns       59ns      
+crc32 checksum 128 byt 65535    2.352ms        35ns ± 37ns           (32ns ... 6.996us)           36ns       58ns       59ns      
+crc32 checksum message 65535    2.339ms        35ns ± 12ns           (32ns ... 2.962us)           36ns       58ns       59ns      
 
-|-------------------|
-| verify Benchmarks |
-|-------------------|
-benchmark              runs     total time     time/run (avg ± σ)     (min ... max)                p75        p99        p995
+|----------------------------|
+| Checksum Verify Benchmarks |
+|----------------------------|
+benchmark              runs     total time     time/run (avg ± σ)    (min ... max)                p75        p99        p995      
 -----------------------------------------------------------------------------------------------------------------------------
-xxhash32 verify 16 byt 65535    1.352ms        20ns ± 53ns            (18ns ... 13.356us)          21ns       21ns       22ns
-xxhash32 verify 128 by 65535    2.509ms        38ns ± 98ns            (35ns ... 11.193us)          37ns       38ns       38ns
-xxhash32 verify messag 65535    83.814ms       1.278us ± 498ns        (1.244us ... 37.41us)        1.258us    1.266us    1.33us
-xxhash64 verify 16 byt 65535    800.444us      12ns ± 29ns            (11ns ... 6.068us)           12ns       13ns       13ns
-xxhash64 verify 128 by 65535    1.1ms          16ns ± 50ns            (15ns ... 10.43us)           17ns       18ns       18ns
-xxhash64 verify messag 65535    8.349ms        127ns ± 227ns          (120ns ... 36.744us)         123ns      168ns      169ns
-crc32 verify 16 bytes  65535    806.846us      12ns ± 45ns            (11ns ... 10.216us)          12ns       13ns       13ns
-crc32 verify 128 bytes 65535    11.6ms         177ns ± 143ns          (171ns ... 12.236us)         174ns      176ns      176ns
-crc32 verify message b 65535    798.7ms        12.187us ± 7.169us     (11.899us ... 1.663ms)       11.934us   19.019us   22.093us
+xxhash32 verify 16 byt 65535    2.746ms        41ns ± 25ns           (37ns ... 4.202us)           44ns       48ns       67ns      
+xxhash32 verify 128 by 65535    4.001ms        61ns ± 48ns           (55ns ... 10.485us)          64ns       90ns       94ns      
+xxhash32 verify messag 65535    125.045ms      1.908us ± 182ns       (1.886us ... 30.272us)       1.903us    1.939us    2.088us   
+xxhash64 verify 16 byt 65535    2.371ms        36ns ± 27ns           (32ns ... 4.974us)           37ns       38ns       58ns      
+xxhash64 verify 128 by 65535    2.766ms        42ns ± 20ns           (38ns ... 4.595us)           43ns       50ns       52ns      
+xxhash64 verify messag 65535    20.491ms       312ns ± 64ns          (303ns ... 5.806us)          310ns      424ns      484ns     
+crc32 verify 16 bytes  65535    2.395ms        36ns ± 139ns          (32ns ... 35.478us)          36ns       58ns       59ns      
+crc32 verify 128 bytes 65535    28.15ms        429ns ± 84ns          (422ns ... 13.821us)         429ns      441ns      443ns     
+crc32 verify message b 65535    1.969s         30.056us ± 1.336us    (26.198us ... 147.521us)     29.879us   33.724us   36.512us  
+
+|---------------------|
+| Message2 Benchmarks |
+|---------------------|
+benchmark              runs     total time     time/run (avg ± σ)    (min ... max)                p75        p99        p995      
+-----------------------------------------------------------------------------------------------------------------------------
+serialize large        65535    88.31ms        1.347us ± 223ns       (1.317us ... 28.101us)       1.329us    1.827us    2.08us    
+deserialize large      65535    43.791ms       668ns ± 124ns         (641ns ... 14.854us)         652ns      1.02us     1.19us    
+serialize small        65535    44.023ms       671ns ± 105ns         (660ns ... 20.442us)         669ns      701ns      772ns     
+deserialize small      65535    13.325ms       203ns ± 50ns          (180ns ... 4.878us)          206ns      237ns      239ns     
 
 |--------------------|
 | Message Benchmarks |
 |--------------------|
-benchmark              runs     total time     time/run (avg ± σ)     (min ... max)                p75        p99        p995
+benchmark              runs     total time     time/run (avg ± σ)    (min ... max)                p75        p99        p995      
 -----------------------------------------------------------------------------------------------------------------------------
-encode                 65535    15.452ms       235ns ± 176ns          (226ns ... 17.01us)          230ns      317ns      330ns
-decode                 65535    13.889ms       211ns ± 252ns          (202ns ... 33.846us)         205ns      281ns      284ns
-compress gzip          65535    1.583s         24.169us ± 36.025us    (22.978us ... 8.999ms)       23.682us   33.11us    37.737us
-decompress gzip        65535    1.757s         26.81us ± 11.572us     (25.909us ... 2.7ms)         26.3us     37.419us   42.609us
+encode large           65535    51.785ms       790ns ± 133ns         (765ns ... 16.996us)         786ns      970ns      1.067us   
+decode large           65535    36.532ms       557ns ± 69ns          (543ns ... 5.258us)          556ns      584ns      602ns     
+encode small           65535    10.346ms       157ns ± 87ns          (153ns ... 20.998us)         157ns      183ns      185ns     
+decode small           65535    7.913ms        120ns ± 53ns          (116ns ... 10.777us)         120ns      145ns      153ns     
+
+|--------------------|
+| Parser2 Benchmarks |
+|--------------------|
+benchmark              runs     total time     time/run (avg ± σ)    (min ... max)                p75        p99        p995      
+-----------------------------------------------------------------------------------------------------------------------------
+parse 14 bytes         1000     496.408us      496ns ± 263ns         (469ns ... 8.258us)          483ns      552ns      579ns     
+parse 8206 bytes       1000     1.233ms        1.233us ± 124ns       (1.115us ... 4.956us)        1.249us    1.306us    1.338us   
+parse 16412 bytes      1000     3.164ms        3.164us ± 176ns       (3.003us ... 6.803us)        3.18us     3.31us     3.427us   
+parse 24618 bytes      1000     4.68ms         4.68us ± 368ns        (4.453us ... 10.94us)        4.648us    5.655us    6.168us   
+parse 24618 bytes      1000     4.648ms        4.648us ± 985ns       (4.329us ... 35.036us)       4.632us    4.721us    7.261us   
 
 |-------------------|
 | Parser Benchmarks |
 |-------------------|
-benchmark              runs     total time     time/run (avg ± σ)     (min ... max)                p75        p99        p995
+benchmark              runs     total time     time/run (avg ± σ)    (min ... max)                p75        p99        p995      
 -----------------------------------------------------------------------------------------------------------------------------
-parse 128 bytes        65535    3.513ms        53ns ± 49ns            (49ns ... 10.225us)          55ns       65ns       67ns
-parse 8320 bytes       65535    21.597ms       329ns ± 264ns          (318ns ... 30.684us)         323ns      356ns      440ns
-parse 16640 bytes      65535    63.169ms       963ns ± 464ns          (880ns ... 69.977us)         966ns      1.035us    1.272us
-parse 24960 bytes      65535    95.644ms       1.459us ± 435ns        (1.384us ... 35.798us)       1.444us    1.577us    2.141us
-parse 249600 bytes     65535    3.535s         53.944us ± 22.645us    (51.889us ... 4.56ms)        52.804us   73.087us   82.991us
+parse 128 bytes        1000     199.038us      199ns ± 56ns          (188ns ... 1.796us)          196ns      248ns      277ns     
+parse 8284 bytes       1000     1.476s         1.476ms ± 27.149us    (1.436ms ... 1.73ms)         1.473ms    1.659ms    1.7ms     
+parse 16568 bytes      1000     4.595s         4.595ms ± 59.657us    (4.575ms ... 5.197ms)        4.583ms    4.87ms     4.988ms   
+parse 24852 bytes      1000     9.356s         9.356ms ± 83.541us    (9.32ms ... 9.994ms)         9.332ms    9.703ms    9.743ms   
+parse 24852 bytes      1000     9.354s         9.354ms ± 75.958us    (9.32ms ... 9.739ms)         9.331ms    9.636ms    9.65ms
 ```
