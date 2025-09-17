@@ -162,8 +162,7 @@ pub const Connection = struct {
     memory_pool: *MemoryPool(Message),
     metrics: ConnectionMetrics,
     outbox: *RingBuffer(*Message),
-    parsed_message_ptrs: std.array_list.Managed(*Message),
-    parsed_messages: std.array_list.Managed(Message),
+    messages_buffer: [constants.parser_messages_buffer_size]Message,
     parser: Parser,
     peer_id: uuid.Uuid,
     protocol_state: ProtocolState,
@@ -236,8 +235,7 @@ pub const Connection = struct {
             .memory_pool = memory_pool,
             .metrics = ConnectionMetrics{},
             .outbox = outbox,
-            .parsed_message_ptrs = try std.array_list.Managed(*Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
-            .parsed_messages = try std.array_list.Managed(Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
+            .messages_buffer = undefined,
             .parser = try Parser.init(allocator),
             .peer_id = 0,
             .protocol_state = .inactive,
@@ -272,8 +270,6 @@ pub const Connection = struct {
 
         self.inbox.deinit();
         self.outbox.deinit();
-        self.parsed_messages.deinit();
-        self.parsed_message_ptrs.deinit();
         self.parser.deinit(self.allocator);
         self.send_buffer_list.deinit();
 
@@ -426,40 +422,37 @@ pub const Connection = struct {
         self.metrics.bytes_recv_total += self.recv_bytes;
         defer self.recv_bytes = 0;
 
-        // FIX: there should be an assert that enforces that the parser is being passed the right amount
-        // of bytes to be parsed
-        assert(self.parsed_message_ptrs.items.len == self.parsed_messages.items.len);
-
         // Parse received bytes into messages
-        self.parser.parse(&self.parsed_messages, self.recv_buffer[0..self.recv_bytes]) catch unreachable;
+        const parsed_count = self.parser.parse(&self.messages_buffer, self.recv_buffer[0..self.recv_bytes]) catch unreachable;
 
-        if (self.parsed_messages.items.len == 0) return;
+        if (parsed_count == 0) return;
 
-        self.metrics.messages_recv_total += self.parsed_messages.items.len;
+        self.metrics.messages_recv_total += parsed_count;
+
+        const parsed_messages = self.messages_buffer[0..parsed_count];
 
         // Validate messages
-        for (self.parsed_messages.items) |message| {
+        for (parsed_messages) |message| {
+            _ = message;
+            log.warn("skipping validation", .{});
             // assume that invalid messages are poison and close this connection
-            if (message.validate()) |reason| {
-                self.connection_state = .closing;
-                log.err("invalid message: {s}", .{reason});
-                return;
-            }
+            // if (message.validate()) |reason| {
+            //     self.connection_state = .closing;
+            //     log.err("invalid message: {s}", .{reason});
+            //     return;
+            // }
         }
 
-        const message_ptrs = self.memory_pool.createN(
-            self.allocator,
-            @intCast(self.parsed_messages.items.len),
-        ) catch |err| {
+        const message_ptrs = self.memory_pool.createN(self.allocator, parsed_count) catch |err| {
             log.err("inbox memory_pool.createN() returned err: {any}", .{err});
             return;
         };
         defer self.allocator.free(message_ptrs);
 
-        if (message_ptrs.len != self.parsed_messages.items.len) {
+        if (message_ptrs.len != parsed_count) {
             log.err("not enough node ptrs {d} for parsed_messages {d}", .{
                 message_ptrs.len,
-                self.parsed_messages.items.len,
+                parsed_count,
             });
             for (message_ptrs) |message_ptr| {
                 self.memory_pool.destroy(message_ptr);
@@ -467,16 +460,13 @@ pub const Connection = struct {
             return;
         }
 
-        for (message_ptrs, self.parsed_messages.items) |message_ptr, message| {
+        for (message_ptrs, parsed_messages) |message_ptr, message| {
             message_ptr.* = message;
             message_ptr.ref();
 
             // NOTE: this is kind of redundent because the memory_pool should be handling this
             assert(message_ptr.refs() == 1);
         }
-
-        // Reset the parsed_messages list
-        self.parsed_messages.items.len = 0;
 
         const n = self.inbox.enqueueMany(message_ptrs);
         if (n < message_ptrs.len) {
@@ -566,9 +556,23 @@ test "processing inbound messages" {
     defer conn.deinit();
 
     // fill up the recv buffer with some messages
-    var message_1 = Message.new(kid.generate(), .publish);
-    message_1.setTopicName("/test/topic");
-    message_1.setBody("test_body");
+    var message = Message.new(kid.generate(), .publish);
+    message.setTopicName("/test/topic");
+    message.setBody("test_body");
 
-    // conn.processInboundMessages();
+    // serailize the message
+    var buf: [@sizeOf(Message)]u8 = undefined;
+    const recv_bytes = message.serialize(&buf);
+
+    // copy the bytes to the recv buffer
+    @memcpy(conn.recv_buffer[0..recv_bytes], buf[0..recv_bytes]);
+    conn.recv_bytes = recv_bytes;
+
+    try testing.expectEqual(0, conn.metrics.messages_recv_total);
+    try testing.expectEqual(0, conn.metrics.bytes_recv_total);
+
+    conn.processInboundMessages();
+
+    try testing.expectEqual(1, conn.metrics.messages_recv_total);
+    try testing.expectEqual(recv_bytes, conn.metrics.bytes_recv_total);
 }

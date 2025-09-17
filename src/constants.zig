@@ -1,5 +1,5 @@
 const std = @import("std");
-const Message = @import("./protocol/message.zig").Message;
+const Message = @import("./protocol/message2.zig").Message;
 const Headers = @import("./protocol/message.zig").Headers;
 
 /// the maximum size of a message body
@@ -17,6 +17,7 @@ pub const message_min_size = @sizeOf(Headers);
 // pub const parser_max_buffer_size = (1024 * 256) * 2; // TODO: this number needs to be adjusted
 // pub const parser_max_buffer_size = (1024 * 64) * 2; // TODO: this number needs to be adjusted
 pub const parser_max_buffer_size = (1024 * 32) * 2; // TODO: this number needs to be adjusted
+pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, @sizeOf(Message));
 
 /// The number of bytes used as the recv buffer in each connection
 // pub const connection_recv_buffer_size = (1024 * 256);

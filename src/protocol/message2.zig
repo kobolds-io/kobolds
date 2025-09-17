@@ -524,7 +524,7 @@ test "message deserialization" {
     var buf: [@sizeOf(Message)]u8 = undefined;
 
     for (message_types) |message_type| {
-        var message = Message.new(0, message_type);
+        var message = Message.new(300, message_type);
 
         // serialize the message
         const bytes = message.serialize(&buf);
@@ -567,7 +567,9 @@ test "message deserialization" {
                 );
                 try testing.expect(std.mem.eql(u8, message.topicName(), deserialized_message.topicName()));
             },
-            else => {},
+            .undefined => {
+                try testing.expectEqual(message.size(), deserialized_message.size());
+            },
         }
     }
 }
