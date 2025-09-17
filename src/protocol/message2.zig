@@ -8,6 +8,11 @@ const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 const hash = @import("../hash.zig");
 
+pub const ProtocolVersion = enum(u4) {
+    unsupported,
+    v1,
+};
+
 pub const DeserializeResult = struct {
     message: Message,
     bytes_consumed: usize,
@@ -228,6 +233,17 @@ pub const Message = struct {
             .bytes_consumed = read_offset,
         };
     }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.fixed_headers.validate()) |e| return e;
+        switch (self.extension_headers) {
+            .publish => |headers| if (headers.validate()) |e| return e,
+            .subscribe => |headers| if (headers.validate()) |e| return e,
+            else => return "invalid headers",
+        }
+
+        return null;
+    }
 };
 
 pub const FixedHeaders = packed struct {
@@ -239,7 +255,7 @@ pub const FixedHeaders = packed struct {
 
     body_length: u16 = 0,
     message_type: MessageType = .undefined,
-    version: u4 = 0,
+    protocol_version: ProtocolVersion = .v1,
     flags: u4 = 0,
     padding: u16 = 0,
 
@@ -258,8 +274,8 @@ pub const FixedHeaders = packed struct {
         buf[i] = @intFromEnum(self.message_type);
         i += 1;
 
-        // version (u4) + flags (u4) packed into one byte
-        buf[i] = (@as(u8, self.version) << 4) | @as(u8, self.flags);
+        // protocol_version (u4) + flags (u4) packed into one byte
+        buf[i] = (@as(u8, @intFromEnum(self.protocol_version)) << 4) | @as(u8, self.flags);
         i += 1;
 
         std.mem.writeInt(u16, buf[i..][0..2], self.padding, .big);
@@ -286,9 +302,13 @@ pub const FixedHeaders = packed struct {
         };
         i += 1;
 
-        const version_flags = data[i];
-        const version: u4 = @intCast(version_flags >> 4);
-        const flags: u4 = @intCast(version_flags & 0xF);
+        const protocol_version_flags = data[i];
+        const protocol_version_int: u4 = @intCast(protocol_version_flags >> 4);
+        const protocol_version: ProtocolVersion = switch (protocol_version_int) {
+            1 => .v1,
+            else => .unsupported,
+        };
+        const flags: u4 = @intCast(protocol_version_flags & 0xF);
         i += 1;
 
         const padding = (@as(u16, data[i]) << 8) | @as(u16, data[i + 1]);
@@ -297,10 +317,18 @@ pub const FixedHeaders = packed struct {
         return FixedHeaders{
             .body_length = body_length,
             .message_type = message_type,
-            .version = version,
+            .protocol_version = protocol_version,
             .flags = flags,
             .padding = padding,
         };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.message_type == .undefined) return "invalid message_type";
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
+        if (self.padding != 0) return "invalid padding";
+
+        return null;
     }
 };
 
@@ -403,6 +431,14 @@ pub const PublishHeaders = struct {
             .topic_name = topic_name,
         };
     }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.message_id == 0) return "invalid message_id";
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+        if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
+
+        return null;
+    }
 };
 
 pub const SubscribeHeaders = struct {
@@ -465,6 +501,15 @@ pub const SubscribeHeaders = struct {
             .topic_name_length = topic_name_length,
             .topic_name = topic_name,
         };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.message_id == 0) return "invalid message_id";
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+        if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
+
+        return null;
     }
 };
 

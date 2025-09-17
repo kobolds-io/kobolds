@@ -170,13 +170,13 @@ pub const Connection = struct {
     recv_bytes: usize,
     recv_completion: *IO.Completion,
     recv_submitted: bool,
-    send_buffer_list: *std.array_list.Managed(u8),
+    send_buffer_list: *std.ArrayList(u8),
     send_buffer_overflow: [constants.message_max_size]u8,
     send_buffer_overflow_count: usize,
     send_completion: *IO.Completion,
     send_submitted: bool,
     socket: posix.socket_t,
-    tmp_encoding_buffer: []u8,
+    tmp_serialization_buffer: []u8,
 
     pub fn init(
         id: uuid.Uuid,
@@ -201,14 +201,14 @@ pub const Connection = struct {
         const recv_buffer = try allocator.alloc(u8, constants.connection_recv_buffer_size);
         errdefer allocator.free(recv_buffer);
 
-        const tmp_encoding_buffer = try allocator.alloc(u8, constants.message_max_size);
-        errdefer allocator.free(tmp_encoding_buffer);
+        const tmp_serialization_buffer = try allocator.alloc(u8, @sizeOf(Message));
+        errdefer allocator.free(tmp_serialization_buffer);
 
-        const send_buffer_list = try allocator.create(std.array_list.Managed(u8));
+        const send_buffer_list = try allocator.create(std.ArrayList(u8));
         errdefer allocator.destroy(send_buffer_list);
 
-        send_buffer_list.* = try std.array_list.Managed(u8).initCapacity(allocator, constants.connection_send_buffer_size);
-        errdefer send_buffer_list.deinit();
+        send_buffer_list.* = try std.ArrayList(u8).initCapacity(allocator, constants.connection_send_buffer_size);
+        errdefer send_buffer_list.deinit(allocator);
 
         const inbox = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(inbox);
@@ -250,7 +250,7 @@ pub const Connection = struct {
             .send_submitted = false,
             .socket = socket,
             .connection_state = .closed,
-            .tmp_encoding_buffer = tmp_encoding_buffer,
+            .tmp_serialization_buffer = tmp_serialization_buffer,
         };
     }
 
@@ -271,7 +271,7 @@ pub const Connection = struct {
         self.inbox.deinit();
         self.outbox.deinit();
         self.parser.deinit(self.allocator);
-        self.send_buffer_list.deinit();
+        self.send_buffer_list.deinit(self.allocator);
 
         self.allocator.destroy(self.recv_completion);
         self.allocator.destroy(self.send_completion);
@@ -282,7 +282,7 @@ pub const Connection = struct {
         self.allocator.destroy(self.send_buffer_list);
 
         self.allocator.free(self.recv_buffer);
-        self.allocator.free(self.tmp_encoding_buffer);
+        self.allocator.free(self.tmp_serialization_buffer);
     }
 
     pub fn tick(self: *Connection) !void {
@@ -378,35 +378,27 @@ pub const Connection = struct {
                     message.deref();
                     if (message.refs() == 0) self.memory_pool.destroy(message);
                 }
-                const message_size = message.size();
 
-                // message.headers.origin_id = self.origin_id;
-                // message.headers.connection_id = self.connection_id;
-
-                if (self.tmp_encoding_buffer.len >= message_size) {
-                    message.encode(self.tmp_encoding_buffer[0..message_size]);
-                } else {
-                    log.err("buf len: {d}, message_size: {d}", .{ self.tmp_encoding_buffer.len, message_size });
-                    @panic("buffer was not big enough to hold message");
-                }
+                assert(self.tmp_serialization_buffer.len > message.packedSize());
+                const bytes = message.serialize(self.tmp_serialization_buffer);
 
                 // add the maximum number of bytes possible to the send buffer
                 const bytes_available: usize = self.send_buffer_list.capacity - self.send_buffer_list.items.len;
-                if (bytes_available > self.tmp_encoding_buffer[0..message_size].len) {
-                    self.bytes_sent += message_size;
-                    self.messages_sent += 1;
+                if (bytes_available > self.tmp_serialization_buffer[0..bytes].len) {
+                    self.metrics.bytes_send_total += bytes;
+                    self.metrics.messages_send_total += 1;
 
                     // append the encoded message to the send_buffer
-                    self.send_buffer_list.appendSliceAssumeCapacity(self.tmp_encoding_buffer[0..message_size]);
+                    self.send_buffer_list.appendSliceAssumeCapacity(self.tmp_serialization_buffer[0..bytes]);
                 } else {
-                    self.send_buffer_list.appendSliceAssumeCapacity(self.tmp_encoding_buffer[0..bytes_available]);
+                    self.send_buffer_list.appendSliceAssumeCapacity(self.tmp_serialization_buffer[0..bytes_available]);
 
                     // save the remaining bytes for the next iteration
-                    const remaining_bytes = message_size - bytes_available;
+                    const remaining_bytes = bytes - bytes_available;
 
                     @memcpy(
                         self.send_buffer_overflow[0..remaining_bytes],
-                        self.tmp_encoding_buffer[bytes_available .. bytes_available + remaining_bytes],
+                        self.tmp_serialization_buffer[bytes_available .. bytes_available + remaining_bytes],
                     );
                     self.send_buffer_overflow_count = remaining_bytes;
                     break;
@@ -422,6 +414,10 @@ pub const Connection = struct {
         self.metrics.bytes_recv_total += self.recv_bytes;
         defer self.recv_bytes = 0;
 
+        // FIX: there is a case where the parser was not able to remove enough bytes from the internal buffer. When
+        // the next call to parser appends the data it will return an error.BufferOverflow. We should really check
+        // if the parser CAN handle more bytes.
+
         // Parse received bytes into messages
         const parsed_count = self.parser.parse(&self.messages_buffer, self.recv_buffer[0..self.recv_bytes]) catch unreachable;
 
@@ -433,14 +429,14 @@ pub const Connection = struct {
 
         // Validate messages
         for (parsed_messages) |message| {
-            _ = message;
-            log.warn("skipping validation", .{});
+            // _ = message;
+            // log.warn("skipping validation", .{});
             // assume that invalid messages are poison and close this connection
-            // if (message.validate()) |reason| {
-            //     self.connection_state = .closing;
-            //     log.err("invalid message: {s}", .{reason});
-            //     return;
-            // }
+            if (message.validate()) |reason| {
+                self.connection_state = .closing;
+                log.err("invalid message: {s}", .{reason});
+                return;
+            }
         }
 
         const message_ptrs = self.memory_pool.createN(self.allocator, parsed_count) catch |err| {
@@ -547,7 +543,7 @@ test "processing inbound messages" {
 
     const socket: posix.socket_t = undefined;
 
-    var memory_pool = try MemoryPool(Message).init(allocator, 10);
+    var memory_pool = try MemoryPool(Message).init(allocator, 1_000);
     defer memory_pool.deinit();
 
     const config = ConnectionConfig{ .inbound = .{} };
@@ -555,24 +551,79 @@ test "processing inbound messages" {
     var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
     defer conn.deinit();
 
-    // fill up the recv buffer with some messages
-    var message = Message.new(kid.generate(), .publish);
-    message.setTopicName("/test/topic");
-    message.setBody("test_body");
-
     // serailize the message
     var buf: [@sizeOf(Message)]u8 = undefined;
-    const recv_bytes = message.serialize(&buf);
 
-    // copy the bytes to the recv buffer
-    @memcpy(conn.recv_buffer[0..recv_bytes], buf[0..recv_bytes]);
-    conn.recv_bytes = recv_bytes;
+    // fill up the recv buffer with some messages
+    var current_index: usize = 0;
+    var recv_bytes: usize = 0;
+    var messages_sent: usize = 0;
+    while (true) {
+        if (messages_sent == conn.inbox.capacity) break;
+
+        var message = Message.new(kid.generate(), .publish);
+        message.setTopicName("a");
+        const bytes = message.serialize(&buf);
+
+        if (bytes > conn.recv_buffer[current_index..].len) break;
+        recv_bytes = current_index + bytes;
+
+        // copy the bytes to the recv buffer
+        @memcpy(conn.recv_buffer[current_index..recv_bytes], buf[0..bytes]);
+        conn.recv_bytes = recv_bytes;
+        current_index = recv_bytes;
+        messages_sent += 1;
+    }
 
     try testing.expectEqual(0, conn.metrics.messages_recv_total);
     try testing.expectEqual(0, conn.metrics.bytes_recv_total);
 
-    conn.processInboundMessages();
+    // loop over calling process inbound messages until all messages are parsed
+    while (conn.metrics.messages_recv_total < messages_sent) conn.processInboundMessages();
 
-    try testing.expectEqual(1, conn.metrics.messages_recv_total);
+    try testing.expectEqual(messages_sent, conn.metrics.messages_recv_total);
     try testing.expectEqual(recv_bytes, conn.metrics.bytes_recv_total);
+}
+
+test "processing outbound messages" {
+    const allocator = testing.allocator;
+    var kid = KID.init(0, .{});
+
+    var io = try IO.init(16, 0);
+    defer io.deinit();
+
+    const socket: posix.socket_t = undefined;
+
+    var memory_pool = try MemoryPool(Message).init(allocator, 1_000);
+    defer memory_pool.deinit();
+
+    const config = ConnectionConfig{ .inbound = .{} };
+
+    var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
+    defer conn.deinit();
+
+    // enqueue a bunch of messages in the outbox
+    var messages_count: usize = 0;
+    var packed_message_size: usize = 0;
+    while (messages_count < conn.outbox.capacity) : (messages_count += 1) {
+        const message = try memory_pool.create();
+        errdefer memory_pool.destroy(message);
+
+        message.* = Message.new(kid.generate(), .publish);
+        message.setTopicName("a");
+        message.ref();
+
+        packed_message_size = message.packedSize();
+
+        try conn.outbox.enqueue(message);
+    }
+
+    try testing.expectEqual(0, conn.metrics.messages_recv_total);
+    try testing.expectEqual(0, conn.metrics.bytes_recv_total);
+
+    // loop over calling process outbound messages until all messages are "sent"
+    while (conn.metrics.messages_send_total < messages_count) conn.processOutboundMessages();
+
+    try testing.expectEqual(messages_count, conn.metrics.messages_send_total);
+    try testing.expectEqual(packed_message_size * messages_count, conn.metrics.bytes_send_total);
 }
