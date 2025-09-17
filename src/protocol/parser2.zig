@@ -100,7 +100,7 @@ test "parser.parse" {
 
     // Create a message
     const body = [_]u8{97} ** constants.message_max_body_size;
-    var message = Message.new(.undefined);
+    var message = Message.new(0, .undefined);
     message.setBody(&body);
 
     const buf = try allocator.alloc(u8, message.packedSize());
@@ -123,7 +123,7 @@ test "parse parses multiple messages" {
 
     const allocator = testing.allocator;
 
-    var message = Message.new(.undefined);
+    var message = Message.new(0, .undefined);
     message.setBody(want_body);
 
     const buf = try allocator.alloc(u8, message.packedSize());

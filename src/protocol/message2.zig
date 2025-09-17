@@ -2,11 +2,11 @@ const std = @import("std");
 const assert = std.debug.assert;
 const testing = std.testing;
 const log = std.log.scoped(.Message);
+const atomic = std.atomic;
 
 const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 const hash = @import("../hash.zig");
-const KID = @import("kid").KID;
 
 pub const DeserializeResult = struct {
     message: Message,
@@ -21,27 +21,53 @@ pub const Message = struct {
     body_buffer: [constants.message_max_body_size]u8 = undefined,
     checksum: u64 = 0,
 
-    pub fn new(message_type: MessageType) Self {
+    // how many times this message is referenced
+    ref_count: atomic.Value(u32),
+
+    pub fn new(id: u64, message_type: MessageType) Self {
         return switch (message_type) {
             .undefined => Self{
                 .fixed_headers = .{ .message_type = message_type },
                 .extension_headers = .{ .undefined = {} },
                 .body_buffer = undefined,
                 .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
             },
             .publish => Self{
                 .fixed_headers = .{ .message_type = message_type },
-                .extension_headers = .{ .publish = PublishHeaders{} },
+                .extension_headers = .{ .publish = PublishHeaders{
+                    .message_id = id,
+                } },
                 .body_buffer = undefined,
                 .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
             },
             .subscribe => Self{
                 .fixed_headers = .{ .message_type = message_type },
-                .extension_headers = .{ .subscribe = SubscribeHeaders{} },
+                .extension_headers = .{ .subscribe = SubscribeHeaders{
+                    .message_id = id,
+                } },
                 .body_buffer = undefined,
                 .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
             },
         };
+    }
+
+    pub fn refs(self: *Self) u32 {
+        return self.ref_count.load(.seq_cst);
+    }
+
+    pub fn ref(self: *Self) void {
+        _ = self.ref_count.fetchAdd(1, .seq_cst);
+    }
+
+    pub fn deref(self: *Self) void {
+        // this is a logical guard as we should never be dereferencing messages more than we
+        // have previously referenced them
+        assert(self.refs() > 0);
+
+        _ = self.ref_count.fetchSub(1, .seq_cst);
     }
 
     pub fn body(self: *Self) []const u8 {
@@ -77,6 +103,12 @@ pub const Message = struct {
                 @memcpy(headers.topic_name[0..v.len], v);
                 headers.topic_name_length = @intCast(v.len);
             },
+            .subscribe => |*headers| {
+                if (v.len > constants.message_max_topic_name_size) unreachable;
+
+                @memcpy(headers.topic_name[0..v.len], v);
+                headers.topic_name_length = @intCast(v.len);
+            },
             else => unreachable,
         }
     }
@@ -85,6 +117,22 @@ pub const Message = struct {
         switch (self.extension_headers) {
             .publish => |headers| return headers.topic_name[0..headers.topic_name_length],
             .subscribe => |headers| return headers.topic_name[0..headers.topic_name_length],
+            else => unreachable,
+        }
+    }
+
+    pub fn setMessageId(self: *Self, v: u64) void {
+        switch (self.extension_headers) {
+            .publish => |*headers| headers.message_id = v,
+            .subscribe => |*headers| headers.message_id = v,
+            else => unreachable,
+        }
+    }
+
+    pub fn messageId(self: *Self) []const u8 {
+        switch (self.extension_headers) {
+            .publish => |headers| return headers.message_id,
+            .subscribe => |headers| return headers.message_id,
             else => unreachable,
         }
     }
@@ -175,6 +223,7 @@ pub const Message = struct {
                 .extension_headers = extension_headers,
                 .body_buffer = body_buffer,
                 .checksum = checksum,
+                .ref_count = atomic.Value(u32).init(0),
             },
             .bytes_consumed = read_offset,
         };
@@ -423,22 +472,22 @@ test "size of structs" {
     try testing.expectEqual(8, @sizeOf(FixedHeaders));
     try testing.expectEqual(6, FixedHeaders.packedSize());
 
-    const message = Message.new(.undefined);
-    try testing.expectEqual(16, message.size());
-    try testing.expectEqual(14, message.packedSize());
+    const undefined_message = Message.new(0, .undefined);
+    try testing.expectEqual(16, undefined_message.size());
+    try testing.expectEqual(14, undefined_message.packedSize());
+
+    const publish_message = Message.new(0, .publish);
+    try testing.expectEqual(64, publish_message.size());
+    try testing.expectEqual(23, publish_message.packedSize());
+
+    const subscribe_message = Message.new(0, .subscribe);
+    try testing.expectEqual(72, subscribe_message.size());
+    try testing.expectEqual(31, subscribe_message.packedSize());
 }
 
 test "message can comprise of variable size extensions" {
-    const publish_message = Message.new(.publish);
+    const publish_message = Message.new(0, .publish);
     try testing.expectEqual(publish_message.fixed_headers.message_type, .publish);
-}
-
-test "message size" {
-    var undefined_message = Message.new(.undefined);
-    try testing.expectEqual(@sizeOf(FixedHeaders) + 0 + @sizeOf(u64), undefined_message.size());
-
-    var publish_message = Message.new(.publish);
-    try testing.expectEqual(@sizeOf(FixedHeaders) + @sizeOf(PublishHeaders) + @sizeOf(u64), publish_message.size());
 }
 
 test "message serialization" {
@@ -451,16 +500,16 @@ test "message serialization" {
     var buf: [@sizeOf(Message)]u8 = undefined;
 
     for (message_types) |message_type| {
-        var message = Message.new(message_type);
+        var message = Message.new(111, message_type);
 
         const bytes = message.serialize(&buf);
 
         try testing.expect(bytes == message.packedSize());
 
         switch (message_type) {
-            .undefined => try testing.expectEqual(bytes, 14),
-            .publish => try testing.expectEqual(bytes, 23),
-            .subscribe => try testing.expectEqual(bytes, 31),
+            .undefined => try testing.expectEqual(bytes, message.packedSize()),
+            .publish => try testing.expectEqual(bytes, message.packedSize()),
+            .subscribe => try testing.expectEqual(bytes, message.packedSize()),
         }
     }
 }
@@ -475,7 +524,7 @@ test "message deserialization" {
     var buf: [@sizeOf(Message)]u8 = undefined;
 
     for (message_types) |message_type| {
-        var message = Message.new(message_type);
+        var message = Message.new(0, message_type);
 
         // serialize the message
         const bytes = message.serialize(&buf);
@@ -521,9 +570,4 @@ test "message deserialization" {
             else => {},
         }
     }
-}
-
-test "kid works" {
-    var kid = KID.init(0, .{});
-    _ = kid.generate();
 }
