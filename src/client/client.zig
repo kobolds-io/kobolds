@@ -43,6 +43,7 @@ pub const AuthenticationConfig = struct {
 };
 
 pub const TokenAuthConfig = struct {
+    id: []const u8,
     token: []const u8,
 };
 
@@ -547,39 +548,39 @@ pub const Client = struct {
         }
     }
 
-    fn handleAcceptMessage(self: *Self, conn: *Connection, message: *Message) !void {
-        defer {
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
-        }
+    // fn handleAcceptMessage(self: *Self, conn: *Connection, message: *Message) !void {
+    //     defer {
+    //         message.deref();
+    //         if (message.refs() == 0) self.memory_pool.destroy(message);
+    //     }
 
-        // ensure that this connection is fully connected
-        assert(conn.connection_state == .connected);
+    //     // ensure that this connection is fully connected
+    //     assert(conn.connection_state == .connected);
 
-        // ensure the client.connection is expecting this accept message
-        assert(conn.protocol_state == .accepting);
+    //     // ensure the client.connection is expecting this accept message
+    //     assert(conn.protocol_state == .accepting);
 
-        // assert(conn.connection_state != .connected);
-        // ensure that this connection_id is not set
-        assert(conn.connection_id == 0);
+    //     // assert(conn.connection_state != .connected);
+    //     // ensure that this connection_id is not set
+    //     assert(conn.connection_id == 0);
 
-        // An error here would be a protocol error
-        assert(conn.peer_id != message.headers.origin_id);
-        assert(conn.connection_id != message.headers.connection_id);
+    //     // An error here would be a protocol error
+    //     assert(conn.peer_id != message.headers.origin_id);
+    //     assert(conn.connection_id != message.headers.connection_id);
 
-        conn.connection_id = message.headers.connection_id;
-        conn.peer_id = message.headers.origin_id;
+    //     conn.connection_id = message.headers.connection_id;
+    //     conn.peer_id = message.headers.origin_id;
 
-        conn.connection_state = .connected;
-        conn.protocol_state = .authenticating;
+    //     conn.connection_state = .connected;
+    //     conn.protocol_state = .authenticating;
 
-        log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
-            conn.origin_id,
-            conn.connection_id,
-            conn.peer_id,
-            conn.config.outbound.peer_type,
-        });
-    }
+    //     log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
+    //         conn.origin_id,
+    //         conn.connection_id,
+    //         conn.peer_id,
+    //         conn.config.outbound.peer_type,
+    //     });
+    // }
 
     fn handleAuthChallengeMessage(self: *Self, conn: *Connection, message: *Message) !void {
         _ = self;
@@ -801,7 +802,7 @@ pub const Client = struct {
         errdefer conn.deinit();
 
         conn.connection_state = .connecting;
-        conn.protocol_state = .accepting;
+        conn.protocol_state = .authenticating;
 
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();

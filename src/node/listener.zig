@@ -233,10 +233,10 @@ pub const Listener = struct {
                     if (inbound_address_port > allowed_inbound_connection_config.port_max) continue;
                     if (allowed_inbound_connection_config.port != 0 and inbound_address_port != allowed_inbound_connection_config.port) continue;
 
-                    log.info("inbound connection from {any} is allowed by unspecified_address {f}", .{
-                        inbound_address,
-                        unspecified_address,
-                    });
+                    // log.info("inbound connection from {any} is allowed by unspecified_address {f}", .{
+                    //     inbound_address,
+                    //     unspecified_address,
+                    // });
                     allowed = true;
                     break;
                 }
@@ -246,7 +246,7 @@ pub const Listener = struct {
                     if (inbound_address_port > allowed_inbound_connection_config.port_max) continue;
                     if (allowed_inbound_connection_config.port != 0 and inbound_address_port != allowed_inbound_connection_config.port) continue;
 
-                    log.info("inbound connection from {any} is allowed", .{inbound_address});
+                    // log.info("inbound connection from {any} is allowed", .{inbound_address});
                     allowed = true;
                     break;
                 }

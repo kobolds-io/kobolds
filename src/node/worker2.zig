@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const log = std.log.scoped(.Worker);
 const posix = std.posix;
+const assert = std.debug.assert;
 
 const constants = @import("../constants.zig");
 const uuid = @import("uuid");
@@ -14,9 +15,19 @@ const IO = @import("../io.zig").IO;
 
 const Connection = @import("../protocol/connection2.zig").Connection;
 const InboundConnectionConfig = @import("../protocol/connection2.zig").InboundConnectionConfig;
-const Message = @import("../protocol/message2.zig").Message;
 const Envelope = @import("./envelope.zig").Envelope;
 const Node = @import("./node.zig").Node;
+
+const Message = @import("../protocol/message2.zig").Message;
+const ChallengeMethod = @import("../protocol/message2.zig").ChallengeMethod;
+const ChallengeAlgorithm = @import("../protocol/message2.zig").ChallengeAlgorithm;
+
+const Handshake = struct {
+    nonce: u128,
+    connection_id: u64,
+    challenge_method: ChallengeMethod,
+    algorithm: ChallengeAlgorithm,
+};
 
 const WorkerState = enum {
     running,
@@ -44,6 +55,7 @@ pub const Worker = struct {
     outbox: *RingBuffer(Envelope),
     state: WorkerState,
     conn_session_map: std.AutoHashMapUnmanaged(u64, u64),
+    handshakes: std.AutoHashMapUnmanaged(u64, Handshake),
     // uninitialized_connections: std.AutoHashMap(u64, *Connection),
 
     pub fn init(
@@ -84,6 +96,7 @@ pub const Worker = struct {
             .close_channel = close_channel,
             .connections_mutex = std.Thread.Mutex{},
             .connections = std.AutoHashMap(u64, *Connection).init(allocator),
+            .handshakes = .empty,
             .conn_session_map = .empty,
             .done_channel = done_channel,
             .id = id,
@@ -111,6 +124,7 @@ pub const Worker = struct {
         self.inbox.deinit();
         self.outbox.deinit();
         self.io.deinit();
+        self.handshakes.deinit(self.allocator);
 
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
@@ -196,11 +210,6 @@ pub const Worker = struct {
     }
 
     pub fn addInboundConnection(self: *Self, socket: posix.socket_t, config: InboundConnectionConfig) !void {
-        // log.err("not implemented", .{});
-        // _ = self;
-        // _ = socket;
-        // _ = config;
-
         // we are just gonna try to close this socket if anything blows up
         errdefer posix.close(socket);
 
@@ -228,7 +237,33 @@ pub const Worker = struct {
         try self.connections.put(conn_id, conn);
         errdefer _ = self.connections.remove(conn_id);
 
-        // conn.protocol_state = .accepting;
+        const auth_challenge = try self.node.memory_pool.create();
+        errdefer self.node.memory_pool.destroy(auth_challenge);
+
+        auth_challenge.* = Message.new(0, .auth_challenge);
+        auth_challenge.ref();
+        errdefer auth_challenge.deref();
+
+        auth_challenge.extension_headers.auth_challenge.challenge_method = .token;
+        auth_challenge.extension_headers.auth_challenge.nonce = uuid.v7.new();
+        auth_challenge.extension_headers.auth_challenge.connection_id = conn.connection_id;
+
+        conn.protocol_state = .authenticating;
+
+        assert(auth_challenge.validate() == null);
+
+        const handshake = Handshake{
+            .nonce = auth_challenge.extension_headers.auth_challenge.nonce,
+            .connection_id = conn.connection_id,
+            .challenge_method = auth_challenge.extension_headers.auth_challenge.challenge_method,
+            .algorithm = auth_challenge.extension_headers.auth_challenge.algorithm,
+        };
+        log.info("auth challenge {any}", .{handshake});
+
+        try self.handshakes.put(self.allocator, conn.connection_id, handshake);
+
+        // now we actually track this nonce and connection
+
         // const accept_message = try self.memory_pool.create();
         // errdefer self.node.memory_pool.destroy(accept_message);
 

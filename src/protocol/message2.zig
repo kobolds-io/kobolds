@@ -24,6 +24,7 @@ pub const ChallengeMethod = enum(u8) {
 };
 
 pub const ChallengeAlgorithm = enum(u8) {
+    unsupported,
     hmac,
 };
 
@@ -61,6 +62,13 @@ pub const Message = struct {
                 .extension_headers = .{ .subscribe = SubscribeHeaders{
                     .message_id = id,
                 } },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .auth_challenge => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .auth_challenge = AuthChallengeHeaders{} },
                 .body_buffer = undefined,
                 .checksum = 0,
                 .ref_count = atomic.Value(u32).init(0),
@@ -248,6 +256,7 @@ pub const Message = struct {
         switch (self.extension_headers) {
             .publish => |headers| if (headers.validate()) |e| return e,
             .subscribe => |headers| if (headers.validate()) |e| return e,
+            .auth_challenge => |headers| if (headers.validate()) |e| return e,
             else => return "invalid headers",
         }
 
@@ -307,6 +316,7 @@ pub const FixedHeaders = packed struct {
             0 => .undefined,
             1 => .publish,
             2 => .subscribe,
+            3 => .auth_challenge,
             else => return error.InvalidMessageType,
         };
         i += 1;
@@ -345,6 +355,7 @@ pub const MessageType = enum(u8) {
     undefined,
     publish,
     subscribe,
+    auth_challenge,
 };
 
 pub const ExtensionHeaders = union(MessageType) {
@@ -352,6 +363,7 @@ pub const ExtensionHeaders = union(MessageType) {
     undefined: void,
     publish: PublishHeaders,
     subscribe: SubscribeHeaders,
+    auth_challenge: AuthChallengeHeaders,
 
     pub fn packedSize(self: *const Self) usize {
         return switch (self.*) {
@@ -382,6 +394,10 @@ pub const ExtensionHeaders = union(MessageType) {
             .subscribe => blk: {
                 const headers = try SubscribeHeaders.fromBytes(data);
                 break :blk ExtensionHeaders{ .subscribe = headers };
+            },
+            .auth_challenge => blk: {
+                const headers = try AuthChallengeHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .auth_challenge = headers };
             },
         };
     }
@@ -422,8 +438,8 @@ pub const PublishHeaders = struct {
 
         if (data.len < Self.minimumSize()) return error.Truncated;
 
-        const message_id = std.mem.readInt(u64, data[0..8], .big);
-        i += 8;
+        const message_id = std.mem.readInt(u64, data[0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
 
         const topic_name_length = data[i];
         i += 1;
@@ -522,12 +538,14 @@ pub const SubscribeHeaders = struct {
     }
 };
 
-pub const AuthChallenge = struct {
+pub const AuthChallengeHeaders = struct {
     const Self = @This();
 
+    // challenge method and algorithm can be made smaller
     challenge_method: ChallengeMethod = .none,
     algorithm: ChallengeAlgorithm = .hmac,
-    nonce: u128,
+    connection_id: u64 = 0,
+    nonce: u128 = 0,
 
     pub fn packedSize(self: Self) usize {
         _ = self;
@@ -535,7 +553,7 @@ pub const AuthChallenge = struct {
     }
 
     fn minimumSize() usize {
-        return @sizeOf(ChallengeMethod) + @sizeOf(ChallengeAlgorithm) + @sizeOf(u128);
+        return @sizeOf(ChallengeMethod) + @sizeOf(ChallengeAlgorithm) + @sizeOf(u64) + @sizeOf(u128);
     }
 
     pub fn toBytes(self: Self, buf: []u8) usize {
@@ -548,8 +566,11 @@ pub const AuthChallenge = struct {
         buf[i] = @intFromEnum(self.algorithm);
         i += 1;
 
-        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.nonce, .big);
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.connection_id, .big);
         i += @sizeOf(u64);
+
+        std.mem.writeInt(u128, buf[i..][0..@sizeOf(u128)], self.nonce, .big);
+        i += @sizeOf(u128);
 
         return i;
     }
@@ -559,32 +580,37 @@ pub const AuthChallenge = struct {
 
         if (data.len < Self.minimumSize()) return error.Truncated;
 
-        const challenge_method = switch (data[i]) {
+        const challenge_method: ChallengeMethod = switch (data[i]) {
             0 => .none,
-            0 => .token,
-            else => unreachable,
+            1 => .token,
+            else => unreachable, // should probably fail more gracefully
         };
+        i += 1;
 
-        const algorithm = switch (data[i]) {
-            0 => .hmac,
-            else => unreachable,
+        const algorithm: ChallengeAlgorithm = switch (data[i]) {
+            0 => .unsupported,
+            1 => .hmac,
+            else => unreachable, // should probably fail more gracefully
         };
+        i += 1;
 
-        const nonce = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)], .big);
+        const connection_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
         i += @sizeOf(u64);
+
+        const nonce = std.mem.readInt(u128, data[i .. i + @sizeOf(u128)][0..@sizeOf(u128)], .big);
+        i += @sizeOf(u128);
 
         return Self{
             .challenge_method = challenge_method,
             .algorithm = algorithm,
+            .connection_id = connection_id,
             .nonce = nonce,
         };
     }
 
     pub fn validate(self: Self) ?[]const u8 {
-        if (self.message_id == 0) return "invalid message_id";
-        if (self.transaction_id == 0) return "invalid transaction_id";
-        if (self.topic_name_length == 0) return "invalid topic_name_length";
-        if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
+        if (self.connection_id == 0) return "invalid connection_id";
+        if (self.nonce == 0) return "invalid nonce";
 
         return null;
     }

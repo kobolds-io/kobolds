@@ -120,7 +120,6 @@ const ConnectionState = enum {
 
 const ProtocolState = enum {
     inactive,
-    accepting,
     authenticating,
     ready,
     terminating,

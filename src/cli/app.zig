@@ -22,15 +22,19 @@ const OutboundConnectionConfig = @import("../protocol/connection2.zig").Outbound
 const AllowedInboundConnectionConfig = @import("../node/listener.zig").AllowedInboundConnectionConfig;
 
 const AuthenticatorConfig = @import("../node/authenticator.zig").AuthenticatorConfig;
+const TokenEntry = @import("../node/authenticator.zig").TokenAuthStrategy.TokenEntry;
 const Signal = @import("stdx").Signal;
 
 var node_config = NodeConfig{
     .max_connections = 5,
     .authenticator_config = .{
-        .none = .{},
-        // .token = .{
-        //     .tokens = &[_][]const u8{"asdf"},
-        // },
+        .token = .{
+            .clients = &.{
+                .{ .id = "0", .token = "asdf" },
+                .{ .id = "1", .token = "asdf" },
+            },
+            .peers = &.{},
+        },
     },
 };
 
@@ -38,6 +42,7 @@ var client_config = ClientConfig{
     .max_connections = 100,
     .authentication_config = .{
         .token_config = .{
+            .id = "0",
             .token = "asdf",
         },
     },
@@ -89,16 +94,6 @@ pub fn run() !void {
         },
 
         .options = &.{
-            // .{
-            //     .long_name = "host",
-            //     .help = "host to listen on",
-            //     .value_ref = app_runner.mkRef(&node_config.host),
-            // },
-            // .{
-            //     .long_name = "port",
-            //     .help = "port to bind to",
-            //     .value_ref = app_runner.mkRef(&node_config.port),
-            // },
             .{
                 .long_name = "worker-threads",
                 .help = "worker threads to be spawned",
@@ -112,160 +107,21 @@ pub fn run() !void {
     const node_connect_command = cli.Command{
         .name = "connect",
         .description = cli.Description{
-            .one_line = "connect a node to another node",
-            .detailed = "connect a node to another node, this is purely for debugging",
+            .one_line = "connect to a node and disconnect",
+            .detailed = "connect to a node, this is purely for debugging",
         },
 
-        .options = &.{
-            // .{
-            //     .long_name = "host",
-            //     .help = "host to listen on",
-            //     .value_ref = app_runner.mkRef(&node_config.host),
-            // },
-            // .{
-            //     .long_name = "port",
-            //     .help = "port to bind to",
-            //     .value_ref = app_runner.mkRef(&node_config.port),
-            // },
-            .{
-                .long_name = "worker-threads",
-                .help = "worker threads to be spawned",
-                .value_ref = app_runner.mkRef(&node_config.worker_threads),
-            },
-        },
+        .options = &.{},
 
         .target = .{ .action = .{ .exec = nodeConnect } },
     };
-
-    // const node_ping_command = cli.Command{
-    //     .name = "ping",
-    //     .description = cli.Description{ .one_line = "ping a node" },
-    //     // .options = &.{
-    //     //     .{
-    //     //         .long_name = "host",
-    //     //         .help = "host to listen on",
-    //     //         .value_ref = app_runner.mkRef(&node_config2.host),
-    //     //     },
-    //     //     .{
-    //     //         .long_name = "port",
-    //     //         .help = "port to bind to",
-    //     //         .value_ref = app_runner.mkRef(&node_config2.port),
-    //     //     },
-    //     // },
-    //     .target = .{ .action = .{ .exec = nodePing } },
-    // };
-
-    // const node_subscribe_command = cli.Command{
-    //     .name = "subscribe",
-    //     .description = cli.Description{ .one_line = "subscribe to a topic" },
-    //     .options = &.{
-    //         // .{
-    //         //     .long_name = "host",
-    //         //     .help = "host to listen on",
-    //         //     .value_ref = app_runner.mkRef(&client_config.host),
-    //         // },
-    //         // .{
-    //         //     .long_name = "port",
-    //         //     .help = "port to bind to",
-    //         //     .value_ref = app_runner.mkRef(&client_config.port),
-    //         // },
-    //     },
-    //     .target = .{ .action = .{ .exec = nodeSubscribe } },
-    // };
-
-    // const node_publish_command = cli.Command{
-    //     .name = "publish",
-    //     .description = cli.Description{ .one_line = "publish to a topic" },
-    //     .options = &.{
-    //         // .{
-    //         //     .long_name = "host",
-    //         //     .help = "host to listen on",
-    //         //     .value_ref = app_runner.mkRef(&client_config.host),
-    //         // },
-    //         // .{
-    //         //     .long_name = "port",
-    //         //     .help = "port to bind to",
-    //         //     .value_ref = app_runner.mkRef(&client_config.port),
-    //         // },
-    //     },
-    //     .target = .{ .action = .{ .exec = nodePublish } },
-    // };
-
-    // const node_bench_command = cli.Command{
-    //     .name = "bench",
-    //     .description = cli.Description{ .one_line = "benchmark tx/rx to and from a node" },
-    //     .options = &.{
-    //         .{
-    //             .long_name = "host",
-    //             .help = "host to listen on",
-    //             .value_ref = app_runner.mkRef(&client_config.host),
-    //         },
-    //         .{
-    //             .long_name = "port",
-    //             .help = "port to bind to",
-    //             .value_ref = app_runner.mkRef(&client_config.port),
-    //         },
-    //         .{
-    //             .long_name = "max-connections",
-    //             .help = "maximum number of connections for the client",
-    //             .value_ref = app_runner.mkRef(&client_config.max_connections),
-    //         },
-    //     },
-
-    //     .target = .{ .action = .{ .exec = nodeBench } },
-    // };
-
-    // const node_request_command = cli.Command{
-    //     .name = "request",
-    //     .description = cli.Description{ .one_line = "send a request" },
-    //     .options = &.{
-    //         // .{
-    //         //     .long_name = "host",
-    //         //     .help = "host to listen on",
-    //         //     .value_ref = app_runner.mkRef(&client_config.host),
-    //         // },
-    //         // .{
-    //         //     .long_name = "port",
-    //         //     .help = "port to bind to",
-    //         //     .value_ref = app_runner.mkRef(&client_config.port),
-    //         // },
-    //         // TODO: Should capture input and add it as the body of the request
-    //     },
-    //     .target = .{ .action = .{ .exec = nodeRequest } },
-    // };
-
-    // const node_advertise_command = cli.Command{
-    //     .name = "advertise",
-    //     .description = cli.Description{ .one_line = "advertise a service" },
-    //     .options = &.{
-    //         // .{
-    //         //     .long_name = "host",
-    //         //     .help = "host to listen on",
-    //         //     .value_ref = app_runner.mkRef(&client_config.host),
-    //         // },
-    //         // .{
-    //         //     .long_name = "port",
-    //         //     .help = "port to bind to",
-    //         //     .value_ref = app_runner.mkRef(&client_config.port),
-    //         // },
-    //         // TODO: Should capture input and add it as the body of the request
-    //     },
-    //     .target = .{ .action = .{ .exec = nodeAdvertise } },
-    // };
-
     const node_root_command = cli.Command{
         .name = "node",
         .description = cli.Description{ .one_line = "commands to control nodes" },
         .target = .{
             .subcommands = &.{
                 node_listen_command,
-                // node_listen_1_command,
                 node_connect_command,
-                // node_ping_command,
-                // node_request_command,
-                // node_advertise_command,
-                // node_publish_command,
-                // node_subscribe_command,
             },
         },
     };
@@ -334,48 +190,6 @@ pub fn nodeListen() !void {
 
     const outbound_connection_configs = [_]OutboundConnectionConfig{outbound_node_connection_config};
     node_config.outbound_configs = &outbound_connection_configs;
-
-    var node = try Node.init(allocator, node_config);
-    defer node.deinit();
-
-    try node.start();
-    defer node.close();
-
-    registerSigintHandler();
-
-    while (!sigint_received) {
-        std.Thread.sleep(1 * std.time.ns_per_ms);
-    }
-}
-
-pub fn nodeListen1() !void {
-    // creating a client to communicate with the node
-    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
-
-    // This is just a test used to whitelist a certain inbound connection origins
-    const allowed_inbound_connection_config = AllowedInboundConnectionConfig{ .host = "0.0.0.0" };
-    const allowed_inbound_connection_configs = [_]AllowedInboundConnectionConfig{allowed_inbound_connection_config};
-
-    const client_listener_config = ListenerConfig{
-        .host = "127.0.0.1",
-        .port = 8005,
-        .transport = .tcp,
-        .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
-        .peer_type = .client,
-    };
-
-    const node_listener_config = ListenerConfig{
-        .host = "127.0.0.1",
-        .port = 8006,
-        .transport = .tcp,
-        .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
-        .peer_type = .node,
-    };
-
-    const listener_configs = [_]ListenerConfig{ client_listener_config, node_listener_config };
-    node_config.listener_configs = &listener_configs;
 
     var node = try Node.init(allocator, node_config);
     defer node.deinit();
