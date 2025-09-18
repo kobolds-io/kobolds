@@ -8,6 +8,8 @@ const uuid = @import("uuid");
 const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 
+const KID = @import("kid").KID;
+
 const IO = @import("../io.zig").IO;
 const Worker = @import("./worker2.zig").Worker;
 const Listener = @import("./listener.zig").Listener;
@@ -43,6 +45,7 @@ const AuthenticatorConfig = @import("./authenticator.zig").AuthenticatorConfig;
 pub const NodeConfig = struct {
     const Self = @This();
 
+    node_id: u11 = 0,
     worker_threads: usize = 3,
     max_connections: u16 = 1024,
     memory_pool_capacity: usize = 100_000,
@@ -91,22 +94,22 @@ pub const Node = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
+    authenticator: *Authenticator,
     close_channel: *UnbufferedChannel(bool),
     config: NodeConfig,
     connection_outboxes: std.AutoHashMap(u128, *RingBuffer(Envelope)),
     done_channel: *UnbufferedChannel(bool),
-    id: uuid.Uuid,
     inbox: *RingBuffer(Envelope),
     io: *IO,
+    kid: KID,
     listeners: *std.AutoHashMap(usize, *Listener),
     memory_pool: *MemoryPool(Message),
     metrics: NodeMetrics,
     mutex: std.Thread.Mutex,
+    services: std.StringHashMap(*Service),
     state: NodeState,
     topics: std.StringHashMap(*Topic),
-    services: std.StringHashMap(*Service),
     workers: *std.AutoHashMap(usize, *Worker),
-    authenticator: *Authenticator,
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
         if (config.validate()) |err_message| {
@@ -166,22 +169,22 @@ pub const Node = struct {
 
         return Self{
             .allocator = allocator,
+            .authenticator = authenticator,
             .close_channel = close_channel,
             .config = config,
             .connection_outboxes = std.AutoHashMap(u128, *RingBuffer(Envelope)).init(allocator),
             .done_channel = done_channel,
-            .id = uuid.v7.new(),
             .inbox = inbox,
             .io = io,
+            .kid = KID.init(config.node_id, .{}),
             .listeners = listeners,
             .memory_pool = memory_pool,
             .metrics = .{},
             .mutex = std.Thread.Mutex{},
+            .services = std.StringHashMap(*Service).init(allocator),
             .state = .closed,
             .topics = std.StringHashMap(*Topic).init(allocator),
-            .services = std.StringHashMap(*Service).init(allocator),
             .workers = workers,
-            .authenticator = authenticator,
         };
     }
 
@@ -281,12 +284,12 @@ pub const Node = struct {
     pub fn run(self: *Node, ready_channel: *UnbufferedChannel(bool)) void {
         self.state = .running;
         ready_channel.send(true);
-        log.info("node {d} running", .{self.id});
+        // log.info("node {d} running", .{self.id});
         while (true) {
             // check if the close channel has received a close command
             const close_channel_received = self.close_channel.tryReceive(0) catch false;
             if (close_channel_received) {
-                log.info("node {d} closing", .{self.id});
+                // log.info("node {d} closing", .{self.id});
                 self.state = .closing;
             }
 
@@ -298,7 +301,7 @@ pub const Node = struct {
                     // self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch unreachable;
                 },
                 .closing => {
-                    log.info("node {d}: closed", .{self.id});
+                    // log.info("node {d}: closed", .{self.id});
                     self.state = .closed;
                     self.done_channel.send(true);
                     return;
@@ -588,7 +591,7 @@ pub const Node = struct {
                     self.allocator.destroy(outbox);
                 }
 
-                log.info("node: {d} removed connection {d}", .{ self.id, conn_id });
+                // log.info("node: {d} removed connection {d}", .{ self.id, conn_id });
             }
 
             // remove all the dead connections from the list
@@ -953,7 +956,7 @@ pub const Node = struct {
         });
         // Since this is a `ping` we don't need to do any extra work to figure out how to respond
         message.headers.message_type = .pong;
-        message.headers.origin_id = self.id;
+        // message.headers.origin_id = self.id;
         message.setTransactionId(message.transactionId());
         message.setErrorCode(.ok);
 

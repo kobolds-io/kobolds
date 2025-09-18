@@ -4,6 +4,7 @@ const log = std.log.scoped(.Worker);
 const posix = std.posix;
 
 const constants = @import("../constants.zig");
+const uuid = @import("uuid");
 
 const KID = @import("kid").KID;
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
@@ -164,9 +165,7 @@ pub const Worker = struct {
     }
 
     pub fn tick(self: *Self) !void {
-        _ = self;
-
-        // try self.tickConnections();
+        try self.tickConnections();
         // try self.tickUninitializedConnections();
         // try self.processInboundConnectionMessages();
         // try self.processUninitializedConnectionMessages();
@@ -197,47 +196,45 @@ pub const Worker = struct {
     }
 
     pub fn addInboundConnection(self: *Self, socket: posix.socket_t, config: InboundConnectionConfig) !void {
-        log.err("not implemented", .{});
-        _ = self;
-        _ = socket;
-        _ = config;
+        // log.err("not implemented", .{});
+        // _ = self;
+        // _ = socket;
+        // _ = config;
 
-        //     // we are just gonna try to close this socket if anything blows up
-        //     errdefer posix.close(socket);
+        // we are just gonna try to close this socket if anything blows up
+        errdefer posix.close(socket);
 
-        //     // initialize the connection
-        //     const conn = try self.allocator.create(Connection);
-        //     errdefer self.allocator.destroy(conn);
+        // initialize the connection
+        const conn = try self.allocator.create(Connection);
+        errdefer self.allocator.destroy(conn);
 
-        //     const conn_id = uuid.v7.new();
-        //     conn.* = try Connection.init(
-        //         conn_id,
-        //         self.node_id,
-        //         self.io,
-        //         socket,
-        //         self.allocator,
-        //         self.memory_pool,
-        //         .{ .inbound = config },
-        //     );
-        //     errdefer conn.deinit();
+        const conn_id = self.node.kid.generate();
+        conn.* = try Connection.init(
+            conn_id,
+            self.io,
+            socket,
+            self.allocator,
+            self.node.memory_pool,
+            .{ .inbound = config },
+        );
+        errdefer conn.deinit();
 
-        //     // Since this is an inbound connection, we have already accepted the socket
-        //     conn.connection_state = .connected;
-        //     errdefer conn.protocol_state = .terminating;
+        conn.connection_state = .connected;
+        errdefer conn.protocol_state = .terminating;
 
-        //     self.connections_mutex.lock();
-        //     defer self.connections_mutex.unlock();
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
 
-        //     try self.connections.put(conn_id, conn);
-        //     errdefer _ = self.connections.remove(conn_id);
+        try self.connections.put(conn_id, conn);
+        errdefer _ = self.connections.remove(conn_id);
 
-        //     conn.protocol_state = .accepting;
-        //     const accept_message = try self.memory_pool.create();
-        //     errdefer self.memory_pool.destroy(accept_message);
+        // conn.protocol_state = .accepting;
+        // const accept_message = try self.memory_pool.create();
+        // errdefer self.node.memory_pool.destroy(accept_message);
 
-        //     accept_message.* = Message.new2(.accept);
-        //     accept_message.ref();
-        //     errdefer accept_message.deref();
+        // accept_message.* = Message.new(.accept);
+        // accept_message.ref();
+        // errdefer accept_message.deref();
 
         //     var accept_headers: *Accept = accept_message.headers.into(.accept).?;
         //     accept_headers.connection_id = conn_id;

@@ -154,7 +154,7 @@ pub const Connection = struct {
     close_submitted: bool,
     config: ConnectionConfig,
     connect_completion: *IO.Completion,
-    connection_id: uuid.Uuid,
+    connection_id: u64,
     connection_state: ConnectionState,
     connect_submitted: bool,
     inbox: *RingBuffer(*Message),
@@ -179,7 +179,7 @@ pub const Connection = struct {
     tmp_serialization_buffer: []u8,
 
     pub fn init(
-        id: uuid.Uuid,
+        id: u64,
         io: *IO,
         socket: posix.socket_t,
         allocator: std.mem.Allocator,

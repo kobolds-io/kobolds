@@ -18,6 +18,15 @@ pub const DeserializeResult = struct {
     bytes_consumed: usize,
 };
 
+pub const ChallengeMethod = enum(u8) {
+    none,
+    token,
+};
+
+pub const ChallengeAlgorithm = enum(u8) {
+    hmac,
+};
+
 pub const Message = struct {
     const Self = @This();
 
@@ -500,6 +509,74 @@ pub const SubscribeHeaders = struct {
             .transaction_id = transaction_id,
             .topic_name_length = topic_name_length,
             .topic_name = topic_name,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.message_id == 0) return "invalid message_id";
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+        if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
+
+        return null;
+    }
+};
+
+pub const AuthChallenge = struct {
+    const Self = @This();
+
+    challenge_method: ChallengeMethod = .none,
+    algorithm: ChallengeAlgorithm = .hmac,
+    nonce: u128,
+
+    pub fn packedSize(self: Self) usize {
+        _ = self;
+        return Self.minimumSize();
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(ChallengeMethod) + @sizeOf(ChallengeAlgorithm) + @sizeOf(u128);
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        assert(buf.len >= self.packedSize());
+
+        var i: usize = 0;
+        buf[i] = @intFromEnum(self.challenge_method);
+        i += 1;
+
+        buf[i] = @intFromEnum(self.algorithm);
+        i += 1;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.nonce, .big);
+        i += @sizeOf(u64);
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const challenge_method = switch (data[i]) {
+            0 => .none,
+            0 => .token,
+            else => unreachable,
+        };
+
+        const algorithm = switch (data[i]) {
+            0 => .hmac,
+            else => unreachable,
+        };
+
+        const nonce = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        return Self{
+            .challenge_method = challenge_method,
+            .algorithm = algorithm,
+            .nonce = nonce,
         };
     }
 

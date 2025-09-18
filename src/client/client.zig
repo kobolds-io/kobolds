@@ -287,27 +287,12 @@ pub const Client = struct {
                 conn.protocol_state,
             });
 
-            // FIX: fix this so that we gracefully exit the connect function when we have a bad error
-
-            // switch (conn.connection_state) {
-            //     .disconnected, .connecting => continue,
-            //     .err, .closed, .closing => return error.ConnectionFailed,
-            //     .connected => {},
-            // }
-
-            // switch (conn.protocol_state) {
-            //     .ready => return conn,
-            //     .terminating, .terminated => return error.ConnectionTerminated,
-            //     else => {},
-            // }
-
             if (conn.connection_state == .connected and conn.protocol_state == .ready) return conn;
 
             // // FIX: this is some baaaaad code. There should instead be a signal or channel that this thread could
             // // wait on instead. Since this call happens on a foreground thread, an unbuffered channel seems the most
             // // appropriate.
             std.Thread.sleep(constants.io_tick_us * std.time.ns_per_us);
-            // std.Thread.sleep(constants.io_tick_ms * std.time.ns_per_ms);
         } else {
             return error.DeadlineExceeded;
         }
@@ -331,8 +316,8 @@ pub const Client = struct {
 
     fn tick(self: *Self) !void {
         try self.tickConnections();
-        // try self.tickUninitializedConnections();
-        // try self.processInboundConnectionMessages();
+        try self.tickUninitializedConnections();
+        try self.processInboundConnectionMessages();
         // try self.processUninitializedConnectionMessages();
         // try self.processClientMessages();
         // try self.aggregateOutboundMessages();
@@ -413,18 +398,18 @@ pub const Client = struct {
                 // or deinitialized correctly.
                 assert(message.refs() == 1);
 
-                switch (message.headers.message_type) {
-                    .pong => try self.handlePongMessage(conn, message),
-                    else => {
-                        self.inbox_mutex.lock();
-                        defer self.inbox_mutex.unlock();
+                //     switch (message.headers.message_type) {
+                //         .pong => try self.handlePongMessage(conn, message),
+                //         else => {
+                //             self.inbox_mutex.lock();
+                //             defer self.inbox_mutex.unlock();
 
-                        self.inbox.enqueue(message) catch |err| {
-                            log.err("could not enqueue message {any}", .{err});
-                            try conn.inbox.prepend(message);
-                        };
-                    },
-                }
+                //             self.inbox.enqueue(message) catch |err| {
+                //                 log.err("could not enqueue message {any}", .{err});
+                //                 try conn.inbox.prepend(message);
+                //             };
+                //         },
+                //     }
             }
         }
     }
@@ -821,8 +806,11 @@ pub const Client = struct {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
-        try self.uninitialized_connections.put(tmp_conn_id, conn);
-        errdefer _ = self.uninitialized_connections.remove(tmp_conn_id);
+        try self.connections.put(tmp_conn_id, conn);
+        errdefer self.connections.remove(tmp_conn_id);
+
+        // try self.uninitialized_connections.put(tmp_conn_id, conn);
+        // errdefer _ = self.uninitialized_connections.remove(tmp_conn_id);
 
         self.io.connect(
             *Connection,
