@@ -2,15 +2,16 @@ const std = @import("std");
 const assert = std.debug.assert;
 const posix = std.posix;
 const net = std.net;
+const testing = std.testing;
 const log = std.log.scoped(.Listener);
 
-const testing = std.testing;
-
 const constants = @import("../constants.zig");
+
 const IO = @import("../io.zig").IO;
+
+const PeerType = @import("../protocol/connection2.zig").PeerType;
+const Transport = @import("../protocol/connection2.zig").Transport;
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
-const Transport = @import("../protocol/connection.zig").Transport;
-const PeerType = @import("../protocol/connection.zig").PeerType;
 
 const State = enum {
     running,

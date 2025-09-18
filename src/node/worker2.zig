@@ -1,0 +1,307 @@
+const std = @import("std");
+const testing = std.testing;
+const log = std.log.scoped(.Worker);
+const posix = std.posix;
+
+const constants = @import("../constants.zig");
+
+const KID = @import("kid").KID;
+const UnbufferedChannel = @import("stdx").UnbufferedChannel;
+const RingBuffer = @import("stdx").RingBuffer;
+
+const IO = @import("../io.zig").IO;
+
+const Connection = @import("../protocol/connection2.zig").Connection;
+const InboundConnectionConfig = @import("../protocol/connection2.zig").InboundConnectionConfig;
+const Message = @import("../protocol/message2.zig").Message;
+const Envelope = @import("./envelope.zig").Envelope;
+const Node = @import("./node.zig").Node;
+
+const WorkerState = enum {
+    running,
+    closing,
+    closed,
+};
+
+pub const Worker = struct {
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
+    close_channel: *UnbufferedChannel(bool),
+    connections_mutex: std.Thread.Mutex,
+    connections: std.AutoHashMap(u64, *Connection),
+    // dead_connections_mutex: std.Thread.Mutex,
+    // dead_connections: std.array_list.Managed(u128),
+    done_channel: *UnbufferedChannel(bool),
+    id: usize,
+    inbox_mutex: std.Thread.Mutex,
+    inbox: *RingBuffer(Envelope),
+    io: *IO,
+    // node_id: u128,
+    node: *Node,
+    outbox_mutex: std.Thread.Mutex,
+    outbox: *RingBuffer(Envelope),
+    state: WorkerState,
+    conn_session_map: std.AutoHashMapUnmanaged(u64, u64),
+    // uninitialized_connections: std.AutoHashMap(u64, *Connection),
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        node: *Node,
+        id: usize,
+    ) !Self {
+        const close_channel = try allocator.create(UnbufferedChannel(bool));
+        errdefer allocator.destroy(close_channel);
+
+        close_channel.* = UnbufferedChannel(bool).new();
+
+        const done_channel = try allocator.create(UnbufferedChannel(bool));
+        errdefer allocator.destroy(done_channel);
+
+        done_channel.* = UnbufferedChannel(bool).new();
+
+        const inbox = try allocator.create(RingBuffer(Envelope));
+        errdefer allocator.destroy(inbox);
+
+        inbox.* = try RingBuffer(Envelope).init(allocator, 1_000);
+        errdefer inbox.deinit();
+
+        const outbox = try allocator.create(RingBuffer(Envelope));
+        errdefer allocator.destroy(outbox);
+
+        outbox.* = try RingBuffer(Envelope).init(allocator, 1_000);
+        errdefer outbox.deinit();
+
+        const io = try allocator.create(IO);
+        errdefer allocator.destroy(io);
+
+        io.* = try IO.init(constants.io_uring_entries, 0);
+        errdefer io.deinit();
+
+        return Self{
+            .allocator = allocator,
+            .close_channel = close_channel,
+            .connections_mutex = std.Thread.Mutex{},
+            .connections = std.AutoHashMap(u64, *Connection).init(allocator),
+            .conn_session_map = .empty,
+            .done_channel = done_channel,
+            .id = id,
+            .inbox = inbox,
+            .inbox_mutex = .{},
+            .node = node,
+            .io = io,
+            .outbox_mutex = .{},
+            .outbox = outbox,
+            .state = .closed,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        while (self.inbox.dequeue()) |envelope| {
+            envelope.message.deref();
+            if (envelope.message.refs() == 0) self.node.memory_pool.destroy(envelope.message);
+        }
+
+        while (self.outbox.dequeue()) |envelope| {
+            envelope.message.deref();
+            if (envelope.message.refs() == 0) self.node.memory_pool.destroy(envelope.message);
+        }
+
+        self.inbox.deinit();
+        self.outbox.deinit();
+        self.io.deinit();
+
+        self.allocator.destroy(self.close_channel);
+        self.allocator.destroy(self.done_channel);
+        self.allocator.destroy(self.inbox);
+        self.allocator.destroy(self.io);
+        self.allocator.destroy(self.outbox);
+    }
+
+    pub fn run(self: *Self, ready_channel: *UnbufferedChannel(bool)) void {
+        // Notify the calling thread that the run loop is ready
+        ready_channel.send(true);
+        self.state = .running;
+        log.info("worker {d}: running", .{self.id});
+        while (true) {
+            // check if the close channel has received a close command
+            const close_channel_received = self.close_channel.tryReceive(0) catch false;
+            if (close_channel_received) {
+                log.info("worker {d} closing", .{self.id});
+                self.state = .closing;
+            }
+
+            switch (self.state) {
+                .running => {
+                    self.tick() catch unreachable;
+                    self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch unreachable;
+                },
+                .closing => {
+                    log.info("worker {d}: closed", .{self.id});
+                    self.state = .closed;
+                    self.done_channel.send(true);
+                    return;
+                },
+                else => {
+                    @panic("unable to tick closed worker");
+                },
+            }
+        }
+    }
+
+    pub fn close(self: *Self) void {
+        switch (self.state) {
+            .closed, .closing => return,
+            else => {
+                // while (!self.closeAllConnections()) {}
+                // block until this is received by the background thread
+                self.close_channel.send(true);
+            },
+        }
+
+        // block until the worker fully exits
+        _ = self.done_channel.receive();
+    }
+
+    pub fn tick(self: *Self) !void {
+        _ = self;
+
+        // try self.tickConnections();
+        // try self.tickUninitializedConnections();
+        // try self.processInboundConnectionMessages();
+        // try self.processUninitializedConnectionMessages();
+        // try self.processOutboundConnectionMessages();
+
+    }
+
+    pub fn tickConnections(self: *Self) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        // loop over all connections and gather their messages
+        var connections_iter = self.connections.iterator();
+        while (connections_iter.next()) |entry| {
+            const conn = entry.value_ptr.*;
+
+            // check if this connection was closed for whatever reason
+            if (conn.connection_state == .closed) {
+                try self.cleanupConnection(conn);
+                continue;
+            }
+
+            conn.tick() catch |err| {
+                log.err("could not tick connection error: {any}", .{err});
+                continue;
+            };
+        }
+    }
+
+    pub fn addInboundConnection(self: *Self, socket: posix.socket_t, config: InboundConnectionConfig) !void {
+        log.err("not implemented", .{});
+        _ = self;
+        _ = socket;
+        _ = config;
+
+        //     // we are just gonna try to close this socket if anything blows up
+        //     errdefer posix.close(socket);
+
+        //     // initialize the connection
+        //     const conn = try self.allocator.create(Connection);
+        //     errdefer self.allocator.destroy(conn);
+
+        //     const conn_id = uuid.v7.new();
+        //     conn.* = try Connection.init(
+        //         conn_id,
+        //         self.node_id,
+        //         self.io,
+        //         socket,
+        //         self.allocator,
+        //         self.memory_pool,
+        //         .{ .inbound = config },
+        //     );
+        //     errdefer conn.deinit();
+
+        //     // Since this is an inbound connection, we have already accepted the socket
+        //     conn.connection_state = .connected;
+        //     errdefer conn.protocol_state = .terminating;
+
+        //     self.connections_mutex.lock();
+        //     defer self.connections_mutex.unlock();
+
+        //     try self.connections.put(conn_id, conn);
+        //     errdefer _ = self.connections.remove(conn_id);
+
+        //     conn.protocol_state = .accepting;
+        //     const accept_message = try self.memory_pool.create();
+        //     errdefer self.memory_pool.destroy(accept_message);
+
+        //     accept_message.* = Message.new2(.accept);
+        //     accept_message.ref();
+        //     errdefer accept_message.deref();
+
+        //     var accept_headers: *Accept = accept_message.headers.into(.accept).?;
+        //     accept_headers.connection_id = conn_id;
+        //     accept_headers.origin_id = self.node_id;
+
+        //     assert(accept_message.validate() == null);
+
+        //     try conn.outbox.enqueue(accept_message);
+
+        //     conn.protocol_state = .authenticating;
+        //     const challenge_method = self.authenticator.getChallengeMethod();
+        //     const challenge_payload = self.authenticator.getChallengePayload();
+
+        //     const auth_challenge_message = try self.memory_pool.create();
+        //     errdefer self.memory_pool.destroy(auth_challenge_message);
+
+        //     auth_challenge_message.* = Message.new2(.auth_challenge);
+        //     auth_challenge_message.setTransactionId(uuid.v7.new());
+        //     auth_challenge_message.setChallengeMethod(challenge_method);
+        //     auth_challenge_message.setBody(challenge_payload);
+        //     auth_challenge_message.ref();
+        //     errdefer auth_challenge_message.deref();
+
+        //     assert(auth_challenge_message.validate() == null);
+
+        //     try conn.outbox.enqueue(auth_challenge_message);
+
+        //     log.info("worker: {d} added inbound connection {d}", .{ self.id, conn_id });
+    }
+
+    fn cleanupConnection(self: *Self, conn: *Connection) !void {
+        // self.dead_connections_mutex.lock();
+        // defer self.dead_connections_mutex.unlock();
+
+        // try self.dead_connections.append(conn.connection_id);
+
+        self.removeConnection(conn);
+    }
+
+    fn removeConnection(self: *Self, conn: *Connection) void {
+        _ = self.connections.remove(conn.connection_id);
+
+        log.info("worker: {} removed connection {}", .{ self.id, conn.connection_id });
+        conn.deinit();
+        self.allocator.destroy(conn);
+    }
+};
+
+test "init/deinit" {
+    const allocator = testing.allocator;
+
+    var node = try Node.init(allocator, .{});
+    defer node.deinit();
+
+    var worker = try Worker.init(allocator, &node, 0);
+    defer worker.deinit();
+}
+
+test "ticking the connection" {
+    const allocator = testing.allocator;
+
+    var node = try Node.init(allocator, .{});
+    defer node.deinit();
+
+    var worker = try Worker.init(allocator, &node, 0);
+    defer worker.deinit();
+}

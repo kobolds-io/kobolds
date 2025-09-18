@@ -8,7 +8,6 @@ const uuid = @import("uuid");
 const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 
-const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 const IO = @import("../io.zig").IO;
 
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
@@ -18,10 +17,11 @@ const Signal = @import("stdx").Signal;
 const MemoryPool = @import("stdx").MemoryPool;
 const RingBuffer = @import("stdx").RingBuffer;
 
-const Message = @import("../protocol/message.zig").Message;
-const Accept = @import("../protocol/message.zig").Accept;
-const AuthChallenge = @import("../protocol/message.zig").AuthChallenge;
-const Connection = @import("../protocol/connection.zig").Connection;
+// const Accept = @import("../protocol/message.zig").Accept;
+// const AuthChallenge = @import("../protocol/message2.zig").AuthChallenge;
+const Message = @import("../protocol/message2.zig").Message;
+const Connection = @import("../protocol/connection2.zig").Connection;
+const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
 
 const Topic = @import("../pubsub/topic.zig").Topic;
 const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
@@ -331,11 +331,11 @@ pub const Client = struct {
 
     fn tick(self: *Self) !void {
         try self.tickConnections();
-        try self.tickUninitializedConnections();
-        try self.processInboundConnectionMessages();
-        try self.processUninitializedConnectionMessages();
-        try self.processClientMessages();
-        try self.aggregateOutboundMessages();
+        // try self.tickUninitializedConnections();
+        // try self.processInboundConnectionMessages();
+        // try self.processUninitializedConnectionMessages();
+        // try self.processClientMessages();
+        // try self.aggregateOutboundMessages();
     }
 
     fn tickConnections(self: *Self) !void {
@@ -597,127 +597,133 @@ pub const Client = struct {
     }
 
     fn handleAuthChallengeMessage(self: *Self, conn: *Connection, message: *Message) !void {
-        defer {
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
-        }
+        _ = self;
+        _ = conn;
+        _ = message;
+        //     defer {
+        //         message.deref();
+        //         if (message.refs() == 0) self.memory_pool.destroy(message);
+        //     }
 
-        // ensure that this connection is fully connected
-        assert(conn.connection_state == .connected);
+        //     // ensure that this connection is fully connected
+        //     assert(conn.connection_state == .connected);
 
-        // ensure the client.connection is expecting this challenge message
-        assert(conn.protocol_state == .authenticating);
+        //     // ensure the client.connection is expecting this challenge message
+        //     assert(conn.protocol_state == .authenticating);
 
-        const auth_challenge_message: *const AuthChallenge = message.headers.intoConst(.auth_challenge).?;
+        //     const auth_challenge_message: *const AuthChallenge = message.headers.intoConst(.auth_challenge).?;
 
-        const auth_response_message = try self.memory_pool.create();
-        errdefer self.memory_pool.destroy(auth_response_message);
+        //     const auth_response_message = try self.memory_pool.create();
+        //     errdefer self.memory_pool.destroy(auth_response_message);
 
-        auth_response_message.* = Message.new2(.auth_response);
-        auth_response_message.setTransactionId(message.transactionId());
-        auth_response_message.setChallengeMethod(auth_challenge_message.challenge_method);
-        auth_response_message.ref();
-        errdefer auth_response_message.deref();
+        //     auth_response_message.* = Message.new2(.auth_response);
+        //     auth_response_message.setTransactionId(message.transactionId());
+        //     auth_response_message.setChallengeMethod(auth_challenge_message.challenge_method);
+        //     auth_response_message.ref();
+        //     errdefer auth_response_message.deref();
 
-        switch (auth_challenge_message.challenge_method) {
-            .none => auth_response_message.setBody(""),
-            .token => {
-                if (self.config.authentication_config) |auth_config| {
-                    if (auth_config.token_config) |token_config| {
-                        auth_response_message.setBody(token_config.token);
-                    }
-                }
-            },
-        }
+        //     switch (auth_challenge_message.challenge_method) {
+        //         .none => auth_response_message.setBody(""),
+        //         .token => {
+        //             if (self.config.authentication_config) |auth_config| {
+        //                 if (auth_config.token_config) |token_config| {
+        //                     auth_response_message.setBody(token_config.token);
+        //                 }
+        //             }
+        //         },
+        //     }
 
-        assert(auth_response_message.validate() == null);
+        //     assert(auth_response_message.validate() == null);
 
-        try conn.outbox.enqueue(auth_response_message);
+        //     try conn.outbox.enqueue(auth_response_message);
 
-        log.debug("sending auth_response", .{});
-    }
+        //     log.debug("sending auth_response", .{});
+        // }
 
-    // FIX: this doesn't actually fulfill a transaction or enforce that THIS connection is the one authenticating
-    //   There should be a mechanism where we lookup and clear a transaction
-    pub fn handleAuthResultMessage(self: *Self, conn: *Connection, message: *Message) !void {
-        defer {
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
-        }
+        // // FIX: this doesn't actually fulfill a transaction or enforce that THIS connection is the one authenticating
+        // //   There should be a mechanism where we lookup and clear a transaction
+        // pub fn handleAuthResultMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        //     defer {
+        //         message.deref();
+        //         if (message.refs() == 0) self.memory_pool.destroy(message);
+        //     }
 
-        assert(conn.connection_state == .connected);
-        assert(conn.protocol_state == .authenticating);
+        //     assert(conn.connection_state == .connected);
+        //     assert(conn.protocol_state == .authenticating);
 
-        if (message.errorCode() != .ok) {
-            log.err("connection did not successfully authenticate. {any}", .{message.errorCode()});
-            conn.protocol_state = .terminating;
-            return;
-        }
+        //     if (message.errorCode() != .ok) {
+        //         log.err("connection did not successfully authenticate. {any}", .{message.errorCode()});
+        //         conn.protocol_state = .terminating;
+        //         return;
+        //     }
 
-        log.info("connection successfully authenticated", .{});
+        //     log.info("connection successfully authenticated", .{});
 
-        conn.protocol_state = .ready;
+        //     conn.protocol_state = .ready;
     }
 
     fn handlePongMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        _ = self;
         _ = conn;
-        defer {
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
-        }
+        _ = message;
+        // _ = conn;
+        // defer {
+        //     message.deref();
+        //     if (message.refs() == 0) self.memory_pool.destroy(message);
+        // }
 
-        self.transactions_mutex.lock();
-        defer self.transactions_mutex.unlock();
+        // self.transactions_mutex.lock();
+        // defer self.transactions_mutex.unlock();
 
-        // check if this pong message is part of transaction
-        if (self.transactions.get(message.transactionId())) |signal| {
-            message.ref();
-            signal.send(message);
-            _ = self.transactions.remove(message.transactionId());
-        }
+        // // check if this pong message is part of transaction
+        // if (self.transactions.get(message.transactionId())) |signal| {
+        //     message.ref();
+        //     signal.send(message);
+        //     _ = self.transactions.remove(message.transactionId());
+        // }
     }
 
-    fn handleRequestMessage(self: *Self, message: *Message) !void {
-        defer {
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
-        }
+    // fn handleRequestMessage(self: *Self, message: *Message) !void {
+    //     defer {
+    //         message.deref();
+    //         if (message.refs() == 0) self.memory_pool.destroy(message);
+    //     }
 
-        self.services_mutex.lock();
-        defer self.services_mutex.unlock();
+    //     self.services_mutex.lock();
+    //     defer self.services_mutex.unlock();
 
-        if (self.services.get(message.topicName())) |service| {
-            message.ref();
-            service.requests_queue.enqueue(message) catch message.deref();
-        } else unreachable;
-    }
+    //     if (self.services.get(message.topicName())) |service| {
+    //         message.ref();
+    //         service.requests_queue.enqueue(message) catch message.deref();
+    //     } else unreachable;
+    // }
 
-    fn handleReplyMessage(self: *Self, message: *Message) !void {
-        self.transactions_mutex.lock();
-        defer self.transactions_mutex.unlock();
+    // fn handleReplyMessage(self: *Self, message: *Message) !void {
+    //     self.transactions_mutex.lock();
+    //     defer self.transactions_mutex.unlock();
 
-        // check if this pong message is part of transaction
-        if (self.transactions.get(message.transactionId())) |signal| {
-            message.ref();
-            signal.send(message);
-            _ = self.transactions.remove(message.transactionId());
-        }
-    }
+    //     // check if this pong message is part of transaction
+    //     if (self.transactions.get(message.transactionId())) |signal| {
+    //         message.ref();
+    //         signal.send(message);
+    //         _ = self.transactions.remove(message.transactionId());
+    //     }
+    // }
 
-    fn handlePublishMessage(self: *Self, message: *Message) !void {
-        defer {
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
-        }
+    // // fn handlePublishMessage(self: *Self, message: *Message) !void {
+    //     defer {
+    //         message.deref();
+    //         if (message.refs() == 0) self.memory_pool.destroy(message);
+    //     }
 
-        self.topics_mutex.lock();
-        defer self.topics_mutex.unlock();
+    //     self.topics_mutex.lock();
+    //     defer self.topics_mutex.unlock();
 
-        if (self.topics.get(message.topicName())) |topic| {
-            message.ref();
-            topic.queue.enqueue(message) catch message.deref();
-        } else unreachable;
-    }
+    //     if (self.topics.get(message.topicName())) |topic| {
+    //         message.ref();
+    //         topic.queue.enqueue(message) catch message.deref();
+    //     } else unreachable;
+    // }
 
     fn cleanupUninitializedConnection(self: *Self, tmp_id: uuid.Uuid, conn: *Connection) !void {
         log.debug("remove uninitialized connection called", .{});
@@ -801,7 +807,6 @@ pub const Client = struct {
         const tmp_conn_id = uuid.v7.new();
         conn.* = try Connection.init(
             0,
-            self.id,
             self.io,
             socket,
             self.allocator,
@@ -832,263 +837,263 @@ pub const Client = struct {
         return conn;
     }
 
-    pub fn ping(self: *Self, conn: *Connection, signal: *Signal(*Message), options: PingOptions) !void {
-        _ = options;
-        // FIX: this will just crash and that is bad
-        assert(conn.connection_state == .connected);
+    // pub fn ping(self: *Self, conn: *Connection, signal: *Signal(*Message), options: PingOptions) !void {
+    //     _ = options;
+    //     // FIX: this will just crash and that is bad
+    //     assert(conn.connection_state == .connected);
 
-        const ping_message = try self.memory_pool.create();
-        errdefer self.memory_pool.destroy(ping_message);
+    //     const ping_message = try self.memory_pool.create();
+    //     errdefer self.memory_pool.destroy(ping_message);
 
-        ping_message.* = Message.new();
-        ping_message.headers.message_type = .ping;
-        ping_message.setTransactionId(uuid.v7.new());
-        ping_message.ref();
-        errdefer ping_message.deref();
+    //     ping_message.* = Message.new();
+    //     ping_message.headers.message_type = .ping;
+    //     ping_message.setTransactionId(uuid.v7.new());
+    //     ping_message.ref();
+    //     errdefer ping_message.deref();
 
-        {
-            self.connection_messages_mutex.lock();
-            defer self.connection_messages_mutex.unlock();
+    //     {
+    //         self.connection_messages_mutex.lock();
+    //         defer self.connection_messages_mutex.unlock();
 
-            try self.connection_messages.append(conn.connection_id, ping_message);
-        }
+    //         try self.connection_messages.append(conn.connection_id, ping_message);
+    //     }
 
-        {
-            self.transactions_mutex.lock();
-            defer self.transactions_mutex.unlock();
+    //     {
+    //         self.transactions_mutex.lock();
+    //         defer self.transactions_mutex.unlock();
 
-            try self.transactions.put(ping_message.transactionId(), signal);
-        }
-    }
+    //         try self.transactions.put(ping_message.transactionId(), signal);
+    //     }
+    // }
 
-    pub fn publish(
-        self: *Self,
-        conn: *Connection,
-        topic_name: []const u8,
-        body: []const u8,
-        options: PublishOptions,
-    ) !void {
-        _ = options;
-        assert(conn.connection_state == .connected);
+    // pub fn publish(
+    //     self: *Self,
+    //     conn: *Connection,
+    //     topic_name: []const u8,
+    //     body: []const u8,
+    //     options: PublishOptions,
+    // ) !void {
+    //     _ = options;
+    //     assert(conn.connection_state == .connected);
 
-        const message = try self.memory_pool.create();
-        errdefer self.memory_pool.destroy(message);
+    //     const message = try self.memory_pool.create();
+    //     errdefer self.memory_pool.destroy(message);
 
-        message.* = Message.new();
-        message.headers.message_type = .publish;
-        message.setTopicName(topic_name);
-        message.setBody(body);
-        message.ref();
+    //     message.* = Message.new();
+    //     message.headers.message_type = .publish;
+    //     message.setTopicName(topic_name);
+    //     message.setBody(body);
+    //     message.ref();
 
-        self.connection_messages_mutex.lock();
-        defer self.connection_messages_mutex.unlock();
+    //     self.connection_messages_mutex.lock();
+    //     defer self.connection_messages_mutex.unlock();
 
-        try self.connection_messages.append(conn.connection_id, message);
-    }
+    //     try self.connection_messages.append(conn.connection_id, message);
+    // }
 
-    pub fn subscribe(
-        self: *Self,
-        conn: *Connection,
-        signal: *Signal(*Message),
-        topic_name: []const u8,
-        callback: SubscriberCallback,
-        options: SubscribeOptions,
-    ) !void {
-        assert(conn.connection_state == .connected);
+    // pub fn subscribe(
+    //     self: *Self,
+    //     conn: *Connection,
+    //     signal: *Signal(*Message),
+    //     topic_name: []const u8,
+    //     callback: SubscriberCallback,
+    //     options: SubscribeOptions,
+    // ) !void {
+    //     assert(conn.connection_state == .connected);
 
-        self.topics_mutex.lock();
-        defer self.topics_mutex.unlock();
+    //     self.topics_mutex.lock();
+    //     defer self.topics_mutex.unlock();
 
-        var topic: *Topic = undefined;
-        if (self.topics.get(topic_name)) |t| {
-            topic = t;
-        } else {
-            topic = try self.allocator.create(Topic);
-            errdefer self.allocator.destroy(topic);
+    //     var topic: *Topic = undefined;
+    //     if (self.topics.get(topic_name)) |t| {
+    //         topic = t;
+    //     } else {
+    //         topic = try self.allocator.create(Topic);
+    //         errdefer self.allocator.destroy(topic);
 
-            topic.* = try Topic.init(self.allocator, self.memory_pool, topic_name, .{});
-            errdefer topic.deinit();
+    //         topic.* = try Topic.init(self.allocator, self.memory_pool, topic_name, .{});
+    //         errdefer topic.deinit();
 
-            try self.topics.put(topic_name, topic);
-        }
+    //         try self.topics.put(topic_name, topic);
+    //     }
 
-        const subscriber_key = utils.generateKey(topic_name, conn.connection_id);
+    //     const subscriber_key = utils.generateKey(topic_name, conn.connection_id);
 
-        try topic.addSubscriber(subscriber_key, conn.connection_id);
-        errdefer _ = topic.removeSubscriber(subscriber_key);
+    //     try topic.addSubscriber(subscriber_key, conn.connection_id);
+    //     errdefer _ = topic.removeSubscriber(subscriber_key);
 
-        // Add the subscriber_callback which is tied to this THIS subscriber
-        try self.subscriber_callbacks.put(subscriber_key, callback);
-        errdefer _ = self.subscriber_callbacks.remove(subscriber_key);
+    //     // Add the subscriber_callback which is tied to this THIS subscriber
+    //     try self.subscriber_callbacks.put(subscriber_key, callback);
+    //     errdefer _ = self.subscriber_callbacks.remove(subscriber_key);
 
-        // try topic.subscribers.put(subscriber_key, callback);
-        // errdefer _ = topic.subscribers.remove(subscriber_key);
+    //     // try topic.subscribers.put(subscriber_key, callback);
+    //     // errdefer _ = topic.subscribers.remove(subscriber_key);
 
-        const subscribe_message = try self.memory_pool.create();
-        errdefer self.memory_pool.destroy(subscribe_message);
+    //     const subscribe_message = try self.memory_pool.create();
+    //     errdefer self.memory_pool.destroy(subscribe_message);
 
-        subscribe_message.* = Message.new();
-        subscribe_message.headers.message_type = .subscribe;
-        subscribe_message.setTransactionId(uuid.v7.new());
-        subscribe_message.setTopicName(topic_name);
-        subscribe_message.ref();
-        errdefer subscribe_message.deref();
+    //     subscribe_message.* = Message.new();
+    //     subscribe_message.headers.message_type = .subscribe;
+    //     subscribe_message.setTransactionId(uuid.v7.new());
+    //     subscribe_message.setTopicName(topic_name);
+    //     subscribe_message.ref();
+    //     errdefer subscribe_message.deref();
 
-        {
-            self.connection_messages_mutex.lock();
-            defer self.connection_messages_mutex.unlock();
+    //     {
+    //         self.connection_messages_mutex.lock();
+    //         defer self.connection_messages_mutex.unlock();
 
-            try self.connection_messages.append(conn.connection_id, subscribe_message);
-        }
+    //         try self.connection_messages.append(conn.connection_id, subscribe_message);
+    //     }
 
-        {
-            self.transactions_mutex.lock();
-            defer self.transactions_mutex.unlock();
+    //     {
+    //         self.transactions_mutex.lock();
+    //         defer self.transactions_mutex.unlock();
 
-            try self.transactions.put(subscribe_message.transactionId(), signal);
-        }
+    //         try self.transactions.put(subscribe_message.transactionId(), signal);
+    //     }
 
-        // register the callback to be executed when we receive a new message on the matching topic
-        _ = options;
-    }
+    //     // register the callback to be executed when we receive a new message on the matching topic
+    //     _ = options;
+    // }
 
-    pub fn unsubscribe(
-        self: *Self,
-        conn: *Connection,
-        signal: *Signal(*Message),
-        topic_name: []const u8,
-        // callback: Topic.SubscriptionCallback,
-    ) !void {
-        // _ = callback;
-        if (self.topics.get(topic_name)) |topic| {
-            const subscriber_key = utils.generateKey(topic_name, conn.connection_id);
-            _ = topic.subscribers.remove(subscriber_key);
-        } else {
-            return error.NotSubscribed;
-        }
+    // pub fn unsubscribe(
+    //     self: *Self,
+    //     conn: *Connection,
+    //     signal: *Signal(*Message),
+    //     topic_name: []const u8,
+    //     // callback: Topic.SubscriptionCallback,
+    // ) !void {
+    //     // _ = callback;
+    //     if (self.topics.get(topic_name)) |topic| {
+    //         const subscriber_key = utils.generateKey(topic_name, conn.connection_id);
+    //         _ = topic.subscribers.remove(subscriber_key);
+    //     } else {
+    //         return error.NotSubscribed;
+    //     }
 
-        const unsubscribe_message = try self.memory_pool.create();
-        errdefer self.memory_pool.destroy(unsubscribe_message);
+    //     const unsubscribe_message = try self.memory_pool.create();
+    //     errdefer self.memory_pool.destroy(unsubscribe_message);
 
-        unsubscribe_message.* = Message.new();
-        unsubscribe_message.headers.message_type = .unsubscribe;
-        unsubscribe_message.setTransactionId(uuid.v7.new());
-        unsubscribe_message.setTopicName(topic_name);
-        unsubscribe_message.ref();
-        errdefer unsubscribe_message.deref();
+    //     unsubscribe_message.* = Message.new();
+    //     unsubscribe_message.headers.message_type = .unsubscribe;
+    //     unsubscribe_message.setTransactionId(uuid.v7.new());
+    //     unsubscribe_message.setTopicName(topic_name);
+    //     unsubscribe_message.ref();
+    //     errdefer unsubscribe_message.deref();
 
-        {
-            self.connection_messages_mutex.lock();
-            defer self.connection_messages_mutex.unlock();
+    //     {
+    //         self.connection_messages_mutex.lock();
+    //         defer self.connection_messages_mutex.unlock();
 
-            try self.connection_messages.append(conn.connection_id, unsubscribe_message);
-        }
+    //         try self.connection_messages.append(conn.connection_id, unsubscribe_message);
+    //     }
 
-        {
-            self.transactions_mutex.lock();
-            defer self.transactions_mutex.unlock();
+    //     {
+    //         self.transactions_mutex.lock();
+    //         defer self.transactions_mutex.unlock();
 
-            try self.transactions.put(unsubscribe_message.transactionId(), signal);
-        }
-    }
+    //         try self.transactions.put(unsubscribe_message.transactionId(), signal);
+    //     }
+    // }
 
-    pub fn request(
-        self: *Self,
-        conn: *Connection,
-        signal: *Signal(*Message),
-        topic_name: []const u8,
-        body: []const u8,
-        options: RequestOptions,
-    ) !void {
-        _ = options;
-        const req = try self.memory_pool.create();
-        errdefer self.memory_pool.destroy(req);
+    // pub fn request(
+    //     self: *Self,
+    //     conn: *Connection,
+    //     signal: *Signal(*Message),
+    //     topic_name: []const u8,
+    //     body: []const u8,
+    //     options: RequestOptions,
+    // ) !void {
+    //     _ = options;
+    //     const req = try self.memory_pool.create();
+    //     errdefer self.memory_pool.destroy(req);
 
-        req.* = Message.new();
-        req.headers.message_type = .request;
-        req.setTransactionId(uuid.v7.new());
-        req.setTopicName(topic_name);
-        req.setBody(body);
-        req.ref();
-        errdefer req.deref();
+    //     req.* = Message.new();
+    //     req.headers.message_type = .request;
+    //     req.setTransactionId(uuid.v7.new());
+    //     req.setTopicName(topic_name);
+    //     req.setBody(body);
+    //     req.ref();
+    //     errdefer req.deref();
 
-        {
-            self.connection_messages_mutex.lock();
-            defer self.connection_messages_mutex.unlock();
+    //     {
+    //         self.connection_messages_mutex.lock();
+    //         defer self.connection_messages_mutex.unlock();
 
-            try self.connection_messages.append(conn.connection_id, req);
-        }
+    //         try self.connection_messages.append(conn.connection_id, req);
+    //     }
 
-        {
-            self.transactions_mutex.lock();
-            defer self.transactions_mutex.unlock();
+    //     {
+    //         self.transactions_mutex.lock();
+    //         defer self.transactions_mutex.unlock();
 
-            try self.transactions.put(req.transactionId(), signal);
-        }
-    }
+    //         try self.transactions.put(req.transactionId(), signal);
+    //     }
+    // }
 
-    pub fn advertise(
-        self: *Self,
-        conn: *Connection,
-        signal: *Signal(*Message),
-        topic_name: []const u8,
-        callback: AdvertiserCallback,
-        options: AdvertiseOptions,
-    ) !void {
-        assert(conn.connection_state == .connected);
+    // pub fn advertise(
+    //     self: *Self,
+    //     conn: *Connection,
+    //     signal: *Signal(*Message),
+    //     topic_name: []const u8,
+    //     callback: AdvertiserCallback,
+    //     options: AdvertiseOptions,
+    // ) !void {
+    //     assert(conn.connection_state == .connected);
 
-        self.services_mutex.lock();
-        defer self.services_mutex.unlock();
+    //     self.services_mutex.lock();
+    //     defer self.services_mutex.unlock();
 
-        var service: *Service = undefined;
-        if (self.services.get(topic_name)) |s| {
-            service = s;
-        } else {
-            service = try self.allocator.create(Service);
-            errdefer self.allocator.destroy(service);
+    //     var service: *Service = undefined;
+    //     if (self.services.get(topic_name)) |s| {
+    //         service = s;
+    //     } else {
+    //         service = try self.allocator.create(Service);
+    //         errdefer self.allocator.destroy(service);
 
-            service.* = try Service.init(self.allocator, self.memory_pool, topic_name, .{});
-            errdefer service.deinit();
+    //         service.* = try Service.init(self.allocator, self.memory_pool, topic_name, .{});
+    //         errdefer service.deinit();
 
-            try self.services.put(topic_name, service);
-        }
+    //         try self.services.put(topic_name, service);
+    //     }
 
-        const advertiser_key = utils.generateKey(topic_name, conn.connection_id);
+    //     const advertiser_key = utils.generateKey(topic_name, conn.connection_id);
 
-        try service.addAdvertiser(advertiser_key, conn.connection_id);
-        errdefer _ = service.removeAdvertiser(advertiser_key);
+    //     try service.addAdvertiser(advertiser_key, conn.connection_id);
+    //     errdefer _ = service.removeAdvertiser(advertiser_key);
 
-        // Add the advertiser_callback which is tied to this THIS advertiser
-        try self.advertiser_callbacks.put(advertiser_key, callback);
-        errdefer _ = self.advertiser_callbacks.remove(advertiser_key);
+    //     // Add the advertiser_callback which is tied to this THIS advertiser
+    //     try self.advertiser_callbacks.put(advertiser_key, callback);
+    //     errdefer _ = self.advertiser_callbacks.remove(advertiser_key);
 
-        const advertise_message = try self.memory_pool.create();
-        errdefer self.memory_pool.destroy(advertise_message);
+    //     const advertise_message = try self.memory_pool.create();
+    //     errdefer self.memory_pool.destroy(advertise_message);
 
-        advertise_message.* = Message.new();
-        advertise_message.headers.message_type = .advertise;
-        advertise_message.setTransactionId(uuid.v7.new());
-        advertise_message.setTopicName(topic_name);
-        advertise_message.ref();
-        errdefer advertise_message.deref();
+    //     advertise_message.* = Message.new();
+    //     advertise_message.headers.message_type = .advertise;
+    //     advertise_message.setTransactionId(uuid.v7.new());
+    //     advertise_message.setTopicName(topic_name);
+    //     advertise_message.ref();
+    //     errdefer advertise_message.deref();
 
-        {
-            self.connection_messages_mutex.lock();
-            defer self.connection_messages_mutex.unlock();
+    //     {
+    //         self.connection_messages_mutex.lock();
+    //         defer self.connection_messages_mutex.unlock();
 
-            try self.connection_messages.append(conn.connection_id, advertise_message);
-        }
+    //         try self.connection_messages.append(conn.connection_id, advertise_message);
+    //     }
 
-        {
-            self.transactions_mutex.lock();
-            defer self.transactions_mutex.unlock();
+    //     {
+    //         self.transactions_mutex.lock();
+    //         defer self.transactions_mutex.unlock();
 
-            try self.transactions.put(advertise_message.transactionId(), signal);
-        }
+    //         try self.transactions.put(advertise_message.transactionId(), signal);
+    //     }
 
-        // register the callback to be executed when we receive a new message on the matching topic
-        _ = options;
-    }
+    //     // register the callback to be executed when we receive a new message on the matching topic
+    //     _ = options;
+    // }
 };
 
 test "init/deinit" {

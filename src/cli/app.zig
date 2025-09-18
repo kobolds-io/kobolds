@@ -5,7 +5,7 @@ const cli = @import("cli");
 const log = std.log.scoped(.CLI);
 
 const constants = @import("../constants.zig");
-const Connection = @import("../protocol/connection.zig").Connection;
+const Connection = @import("../protocol/connection2.zig").Connection;
 const Message = @import("../protocol/message.zig").Message;
 
 const IO = @import("../io.zig").IO;
@@ -18,7 +18,7 @@ const AuthenticationConfig = @import("../client/client.zig").AuthenticationConfi
 const ClientConfig = @import("../client/client.zig").ClientConfig;
 
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
-const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
+const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
 const AllowedInboundConnectionConfig = @import("../node/listener.zig").AllowedInboundConnectionConfig;
 
 const AuthenticatorConfig = @import("../node/authenticator.zig").AuthenticatorConfig;
@@ -81,8 +81,8 @@ pub fn run() !void {
         .target = cli.CommandTarget{ .action = cli.CommandAction{ .exec = version } },
     };
 
-    const node_listen_0_command = cli.Command{
-        .name = "listen0",
+    const node_listen_command = cli.Command{
+        .name = "listen",
         .description = cli.Description{
             .one_line = "listen for incomming connections",
             .detailed = "start a node and listen for incomming connections",
@@ -106,35 +106,7 @@ pub fn run() !void {
             },
         },
 
-        .target = .{ .action = .{ .exec = nodeListen0 } },
-    };
-
-    const node_listen_1_command = cli.Command{
-        .name = "listen1",
-        .description = cli.Description{
-            .one_line = "listen for incomming connections",
-            .detailed = "start a node and listen for incomming connections",
-        },
-
-        .options = &.{
-            // .{
-            //     .long_name = "host",
-            //     .help = "host to listen on",
-            //     .value_ref = app_runner.mkRef(&node_config.host),
-            // },
-            // .{
-            //     .long_name = "port",
-            //     .help = "port to bind to",
-            //     .value_ref = app_runner.mkRef(&node_config.port),
-            // },
-            .{
-                .long_name = "worker-threads",
-                .help = "worker threads to be spawned",
-                .value_ref = app_runner.mkRef(&node_config.worker_threads),
-            },
-        },
-
-        .target = .{ .action = .{ .exec = nodeListen1 } },
+        .target = .{ .action = .{ .exec = nodeListen } },
     };
 
     const node_connect_command = cli.Command{
@@ -165,59 +137,59 @@ pub fn run() !void {
         .target = .{ .action = .{ .exec = nodeConnect } },
     };
 
-    const node_ping_command = cli.Command{
-        .name = "ping",
-        .description = cli.Description{ .one_line = "ping a node" },
-        // .options = &.{
-        //     .{
-        //         .long_name = "host",
-        //         .help = "host to listen on",
-        //         .value_ref = app_runner.mkRef(&node_config2.host),
-        //     },
-        //     .{
-        //         .long_name = "port",
-        //         .help = "port to bind to",
-        //         .value_ref = app_runner.mkRef(&node_config2.port),
-        //     },
-        // },
-        .target = .{ .action = .{ .exec = nodePing } },
-    };
+    // const node_ping_command = cli.Command{
+    //     .name = "ping",
+    //     .description = cli.Description{ .one_line = "ping a node" },
+    //     // .options = &.{
+    //     //     .{
+    //     //         .long_name = "host",
+    //     //         .help = "host to listen on",
+    //     //         .value_ref = app_runner.mkRef(&node_config2.host),
+    //     //     },
+    //     //     .{
+    //     //         .long_name = "port",
+    //     //         .help = "port to bind to",
+    //     //         .value_ref = app_runner.mkRef(&node_config2.port),
+    //     //     },
+    //     // },
+    //     .target = .{ .action = .{ .exec = nodePing } },
+    // };
 
-    const node_subscribe_command = cli.Command{
-        .name = "subscribe",
-        .description = cli.Description{ .one_line = "subscribe to a topic" },
-        .options = &.{
-            // .{
-            //     .long_name = "host",
-            //     .help = "host to listen on",
-            //     .value_ref = app_runner.mkRef(&client_config.host),
-            // },
-            // .{
-            //     .long_name = "port",
-            //     .help = "port to bind to",
-            //     .value_ref = app_runner.mkRef(&client_config.port),
-            // },
-        },
-        .target = .{ .action = .{ .exec = nodeSubscribe } },
-    };
+    // const node_subscribe_command = cli.Command{
+    //     .name = "subscribe",
+    //     .description = cli.Description{ .one_line = "subscribe to a topic" },
+    //     .options = &.{
+    //         // .{
+    //         //     .long_name = "host",
+    //         //     .help = "host to listen on",
+    //         //     .value_ref = app_runner.mkRef(&client_config.host),
+    //         // },
+    //         // .{
+    //         //     .long_name = "port",
+    //         //     .help = "port to bind to",
+    //         //     .value_ref = app_runner.mkRef(&client_config.port),
+    //         // },
+    //     },
+    //     .target = .{ .action = .{ .exec = nodeSubscribe } },
+    // };
 
-    const node_publish_command = cli.Command{
-        .name = "publish",
-        .description = cli.Description{ .one_line = "publish to a topic" },
-        .options = &.{
-            // .{
-            //     .long_name = "host",
-            //     .help = "host to listen on",
-            //     .value_ref = app_runner.mkRef(&client_config.host),
-            // },
-            // .{
-            //     .long_name = "port",
-            //     .help = "port to bind to",
-            //     .value_ref = app_runner.mkRef(&client_config.port),
-            // },
-        },
-        .target = .{ .action = .{ .exec = nodePublish } },
-    };
+    // const node_publish_command = cli.Command{
+    //     .name = "publish",
+    //     .description = cli.Description{ .one_line = "publish to a topic" },
+    //     .options = &.{
+    //         // .{
+    //         //     .long_name = "host",
+    //         //     .help = "host to listen on",
+    //         //     .value_ref = app_runner.mkRef(&client_config.host),
+    //         // },
+    //         // .{
+    //         //     .long_name = "port",
+    //         //     .help = "port to bind to",
+    //         //     .value_ref = app_runner.mkRef(&client_config.port),
+    //         // },
+    //     },
+    //     .target = .{ .action = .{ .exec = nodePublish } },
+    // };
 
     // const node_bench_command = cli.Command{
     //     .name = "bench",
@@ -243,57 +215,57 @@ pub fn run() !void {
     //     .target = .{ .action = .{ .exec = nodeBench } },
     // };
 
-    const node_request_command = cli.Command{
-        .name = "request",
-        .description = cli.Description{ .one_line = "send a request" },
-        .options = &.{
-            // .{
-            //     .long_name = "host",
-            //     .help = "host to listen on",
-            //     .value_ref = app_runner.mkRef(&client_config.host),
-            // },
-            // .{
-            //     .long_name = "port",
-            //     .help = "port to bind to",
-            //     .value_ref = app_runner.mkRef(&client_config.port),
-            // },
-            // TODO: Should capture input and add it as the body of the request
-        },
-        .target = .{ .action = .{ .exec = nodeRequest } },
-    };
+    // const node_request_command = cli.Command{
+    //     .name = "request",
+    //     .description = cli.Description{ .one_line = "send a request" },
+    //     .options = &.{
+    //         // .{
+    //         //     .long_name = "host",
+    //         //     .help = "host to listen on",
+    //         //     .value_ref = app_runner.mkRef(&client_config.host),
+    //         // },
+    //         // .{
+    //         //     .long_name = "port",
+    //         //     .help = "port to bind to",
+    //         //     .value_ref = app_runner.mkRef(&client_config.port),
+    //         // },
+    //         // TODO: Should capture input and add it as the body of the request
+    //     },
+    //     .target = .{ .action = .{ .exec = nodeRequest } },
+    // };
 
-    const node_advertise_command = cli.Command{
-        .name = "advertise",
-        .description = cli.Description{ .one_line = "advertise a service" },
-        .options = &.{
-            // .{
-            //     .long_name = "host",
-            //     .help = "host to listen on",
-            //     .value_ref = app_runner.mkRef(&client_config.host),
-            // },
-            // .{
-            //     .long_name = "port",
-            //     .help = "port to bind to",
-            //     .value_ref = app_runner.mkRef(&client_config.port),
-            // },
-            // TODO: Should capture input and add it as the body of the request
-        },
-        .target = .{ .action = .{ .exec = nodeAdvertise } },
-    };
+    // const node_advertise_command = cli.Command{
+    //     .name = "advertise",
+    //     .description = cli.Description{ .one_line = "advertise a service" },
+    //     .options = &.{
+    //         // .{
+    //         //     .long_name = "host",
+    //         //     .help = "host to listen on",
+    //         //     .value_ref = app_runner.mkRef(&client_config.host),
+    //         // },
+    //         // .{
+    //         //     .long_name = "port",
+    //         //     .help = "port to bind to",
+    //         //     .value_ref = app_runner.mkRef(&client_config.port),
+    //         // },
+    //         // TODO: Should capture input and add it as the body of the request
+    //     },
+    //     .target = .{ .action = .{ .exec = nodeAdvertise } },
+    // };
 
     const node_root_command = cli.Command{
         .name = "node",
         .description = cli.Description{ .one_line = "commands to control nodes" },
         .target = .{
             .subcommands = &.{
-                node_listen_0_command,
-                node_listen_1_command,
+                node_listen_command,
+                // node_listen_1_command,
                 node_connect_command,
-                node_ping_command,
-                node_request_command,
-                node_advertise_command,
-                node_publish_command,
-                node_subscribe_command,
+                // node_ping_command,
+                // node_request_command,
+                // node_advertise_command,
+                // node_publish_command,
+                // node_subscribe_command,
             },
         },
     };
@@ -319,7 +291,7 @@ pub fn run() !void {
     return app_runner.run(&app);
 }
 
-pub fn nodeListen0() !void {
+pub fn nodeListen() !void {
     // creating a client to communicate with the node
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();

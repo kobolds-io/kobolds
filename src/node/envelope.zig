@@ -1,0 +1,7 @@
+const Message = @import("../protocol/message2.zig").Message;
+
+pub const Envelope = struct {
+    message: *Message,
+    conn_id: u64,
+    session_id: u64,
+};

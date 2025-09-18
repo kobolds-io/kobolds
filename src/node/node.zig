@@ -9,20 +9,19 @@ const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 
 const IO = @import("../io.zig").IO;
-const Worker = @import("./worker.zig").Worker;
+const Worker = @import("./worker2.zig").Worker;
 const Listener = @import("./listener.zig").Listener;
 const ListenerConfig = @import("./listener.zig").ListenerConfig;
-const InboundConnectionConfig = @import("../protocol/connection.zig").InboundConnectionConfig;
-const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
+const InboundConnectionConfig = @import("../protocol/connection2.zig").InboundConnectionConfig;
+const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
 const NodeMetrics = @import("./metrics.zig").NodeMetrics;
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const MemoryPool = @import("stdx").MemoryPool;
 const RingBuffer = @import("stdx").RingBuffer;
 
-const Message = @import("../protocol/message.zig").Message;
-const Accept = @import("../protocol/message.zig").Accept;
-const Connection = @import("../protocol/connection.zig").Connection;
+const Message = @import("../protocol/message2.zig").Message;
+const Connection = @import("../protocol/connection2.zig").Connection;
 
 const Publisher = @import("../pubsub/publisher.zig").Publisher;
 const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
@@ -35,7 +34,8 @@ const Advertiser = @import("../services/advertiser.zig").Advertiser;
 const Requestor = @import("../services/requestor.zig").Requestor;
 
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
-const Envelope = @import("../data_structures/envelope.zig").Envelope;
+// const Envelope = @import("../data_structures/envelope.zig").Envelope;
+const Envelope = @import("./envelope.zig").Envelope;
 
 const Authenticator = @import("./authenticator.zig").Authenticator;
 const AuthenticatorConfig = @import("./authenticator.zig").AuthenticatorConfig;
@@ -96,7 +96,7 @@ pub const Node = struct {
     connection_outboxes: std.AutoHashMap(u128, *RingBuffer(Envelope)),
     done_channel: *UnbufferedChannel(bool),
     id: uuid.Uuid,
-    inbox: *RingBuffer(*Message),
+    inbox: *RingBuffer(Envelope),
     io: *IO,
     listeners: *std.AutoHashMap(usize, *Listener),
     memory_pool: *MemoryPool(Message),
@@ -146,10 +146,10 @@ pub const Node = struct {
         memory_pool.* = try MemoryPool(Message).init(allocator, config.memory_pool_capacity);
         errdefer memory_pool.deinit();
 
-        const inbox = try allocator.create(RingBuffer(*Message));
+        const inbox = try allocator.create(RingBuffer(Envelope));
         errdefer allocator.destroy(inbox);
 
-        inbox.* = try RingBuffer(*Message).init(allocator, config.memory_pool_capacity);
+        inbox.* = try RingBuffer(Envelope).init(allocator, config.memory_pool_capacity);
         errdefer inbox.deinit();
 
         const listeners = try allocator.create(std.AutoHashMap(usize, *Listener));
@@ -214,9 +214,9 @@ pub const Node = struct {
             self.allocator.destroy(service);
         }
 
-        while (self.inbox.dequeue()) |message| {
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
+        while (self.inbox.dequeue()) |envelope| {
+            envelope.message.deref();
+            if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
         }
 
         var connection_outboxes_iter = self.connection_outboxes.valueIterator();
@@ -342,7 +342,7 @@ pub const Node = struct {
     fn tick(self: *Self) !void {
         self.handlePrintingIntervalMetrics();
 
-        try self.pruneDeadConnections();
+        // try self.pruneDeadConnections();
         try self.maybeAddInboundConnections();
         try self.gatherMessages();
         try self.processMessages();
@@ -391,117 +391,119 @@ pub const Node = struct {
     }
 
     fn processMessages(self: *Self) !void {
-        // There should only be `n` messages processed every tick
-        const max_messages_processed_per_tick: usize = 50_000;
-        var i: usize = 0;
-        while (i < max_messages_processed_per_tick) : (i += 1) {
-            if (self.inbox.dequeue()) |message| {
-                assert(message.refs() == 1);
-                defer {
-                    _ = self.metrics.messages_processed.fetchAdd(1, .seq_cst);
-                    self.metrics.bytes_processed += @intCast(message.size());
-                    message.deref();
-                    if (message.refs() == 0) self.memory_pool.destroy(message);
-                }
+        _ = self;
+        // // There should only be `n` messages processed every tick
+        // const max_messages_processed_per_tick: usize = 50_000;
+        // var i: usize = 0;
+        // while (i < max_messages_processed_per_tick) : (i += 1) {
+        //     if (self.inbox.dequeue()) |message| {
+        //         assert(message.refs() == 1);
+        //         defer {
+        //             _ = self.metrics.messages_processed.fetchAdd(1, .seq_cst);
+        //             self.metrics.bytes_processed += @intCast(message.size());
+        //             message.deref();
+        //             if (message.refs() == 0) self.memory_pool.destroy(message);
+        //         }
 
-                switch (message.headers.message_type) {
-                    .publish => try self.handlePublish(message),
-                    .subscribe => try self.handleSubscribe(message),
-                    .advertise => try self.handleAdvertise(message),
-                    .unadvertise => try self.handleUnadvertise(message),
-                    .request => try self.handleRequest(message),
-                    .reply => try self.handleReply(message),
-                    .ping => try self.handlePing(message),
-                    .pong => try self.handlePong(message),
-                    else => |t| {
-                        log.err("received unhandled message type {any}", .{t});
-                        @panic("unhandled message!");
-                    },
-                }
-            } else break;
-        }
+        //         switch (message.headers.message_type) {
+        //             .publish => try self.handlePublish(message),
+        //             .subscribe => try self.handleSubscribe(message),
+        //             .advertise => try self.handleAdvertise(message),
+        //             .unadvertise => try self.handleUnadvertise(message),
+        //             .request => try self.handleRequest(message),
+        //             .reply => try self.handleReply(message),
+        //             .ping => try self.handlePing(message),
+        //             .pong => try self.handlePong(message),
+        //             else => |t| {
+        //                 log.err("received unhandled message type {any}", .{t});
+        //                 @panic("unhandled message!");
+        //             },
+        //         }
+        //     } else break;
+        // }
 
-        var topics_iter = self.topics.valueIterator();
-        while (topics_iter.next()) |topic_entry| {
-            const topic = topic_entry.*;
-            try topic.tick();
-        }
+        // var topics_iter = self.topics.valueIterator();
+        // while (topics_iter.next()) |topic_entry| {
+        //     const topic = topic_entry.*;
+        //     try topic.tick();
+        // }
 
-        var services_iter = self.services.valueIterator();
-        while (services_iter.next()) |service_entry| {
-            const service = service_entry.*;
-            try service.tick();
-        }
+        // var services_iter = self.services.valueIterator();
+        // while (services_iter.next()) |service_entry| {
+        //     const service = service_entry.*;
+        //     try service.tick();
+        // }
     }
 
     fn aggregateMessages(self: *Self) !void {
-        var topics_iter = self.topics.valueIterator();
-        while (topics_iter.next()) |topic_entry| {
-            const topic: *Topic = topic_entry.*;
-            if (topic.subscribers.count() == 0) continue;
+        _ = self;
+        // var topics_iter = self.topics.valueIterator();
+        // while (topics_iter.next()) |topic_entry| {
+        //     const topic: *Topic = topic_entry.*;
+        //     if (topic.subscribers.count() == 0) continue;
 
-            var subscribers_iter = topic.subscribers.valueIterator();
-            while (subscribers_iter.next()) |subscriber_entry| {
-                const subscriber: *Subscriber = subscriber_entry.*;
-                const connection_outbox = try self.findOrCreateConnectionOutbox(subscriber.conn_id);
+        //     var subscribers_iter = topic.subscribers.valueIterator();
+        //     while (subscribers_iter.next()) |subscriber_entry| {
+        //         const subscriber: *Subscriber = subscriber_entry.*;
+        //         const connection_outbox = try self.findOrCreateConnectionOutbox(subscriber.conn_id);
 
-                // We are going to create envelopes here
-                while (connection_outbox.available() > 0 and !subscriber.queue.isEmpty()) {
-                    if (subscriber.queue.dequeue()) |message| {
-                        const envelope = Envelope{
-                            .connection_id = subscriber.conn_id,
-                            .message = message,
-                        };
+        //         // We are going to create envelopes here
+        //         while (connection_outbox.available() > 0 and !subscriber.queue.isEmpty()) {
+        //             if (subscriber.queue.dequeue()) |message| {
+        //                 const envelope = Envelope{
+        //                     .connection_id = subscriber.conn_id,
+        //                     .message = message,
+        //                 };
 
-                        // we are checking this loop that adding the envelope will be successful
-                        connection_outbox.enqueue(envelope) catch unreachable;
-                    }
-                }
-            }
-        }
+        //                 // we are checking this loop that adding the envelope will be successful
+        //                 connection_outbox.enqueue(envelope) catch unreachable;
+        //             }
+        //         }
+        //     }
+        // }
 
-        var services_iter = self.services.valueIterator();
-        while (services_iter.next()) |service_entry| {
-            const service: *Service = service_entry.*;
+        // var services_iter = self.services.valueIterator();
+        // while (services_iter.next()) |service_entry| {
+        //     const service: *Service = service_entry.*;
 
-            var advertisers_iter = service.advertisers.valueIterator();
-            while (advertisers_iter.next()) |advertiser_entry| {
-                const advertiser: *Advertiser = advertiser_entry.*;
-                const connection_outbox = try self.findOrCreateConnectionOutbox(advertiser.conn_id);
+        //     var advertisers_iter = service.advertisers.valueIterator();
+        //     while (advertisers_iter.next()) |advertiser_entry| {
+        //         const advertiser: *Advertiser = advertiser_entry.*;
+        //         const connection_outbox = try self.findOrCreateConnectionOutbox(advertiser.conn_id);
 
-                // We are going to create envelopes here
-                while (connection_outbox.available() > 0 and !advertiser.queue.isEmpty()) {
-                    if (advertiser.queue.dequeue()) |message| {
-                        const envelope = Envelope{
-                            .connection_id = advertiser.conn_id,
-                            .message = message,
-                        };
+        //         // We are going to create envelopes here
+        //         while (connection_outbox.available() > 0 and !advertiser.queue.isEmpty()) {
+        //             if (advertiser.queue.dequeue()) |message| {
+        //                 const envelope = Envelope{
+        //                     .connection_id = advertiser.conn_id,
+        //                     .message = message,
+        //                 };
 
-                        // we are checking this loop that adding the envelope will be successful
-                        connection_outbox.enqueue(envelope) catch unreachable;
-                    }
-                }
-            }
+        //                 // we are checking this loop that adding the envelope will be successful
+        //                 connection_outbox.enqueue(envelope) catch unreachable;
+        //             }
+        //         }
+        //     }
 
-            var requestors_iter = service.requestors.valueIterator();
-            while (requestors_iter.next()) |requestor_entry| {
-                const requestor: *Requestor = requestor_entry.*;
-                const connection_outbox = try self.findOrCreateConnectionOutbox(requestor.conn_id);
+        //     var requestors_iter = service.requestors.valueIterator();
+        //     while (requestors_iter.next()) |requestor_entry| {
+        //         const requestor: *Requestor = requestor_entry.*;
+        //         const connection_outbox = try self.findOrCreateConnectionOutbox(requestor.conn_id);
 
-                // We are going to create envelopes here
-                while (connection_outbox.available() > 0 and !requestor.queue.isEmpty()) {
-                    if (requestor.queue.dequeue()) |message| {
-                        const envelope = Envelope{
-                            .connection_id = requestor.conn_id,
-                            .message = message,
-                        };
+        //         // We are going to create envelopes here
+        //         while (connection_outbox.available() > 0 and !requestor.queue.isEmpty()) {
+        //             if (requestor.queue.dequeue()) |message| {
+        //                 const envelope = Envelope{
+        //                     .connection_id = requestor.conn_id,
+        //                     .message = message,
+        //                 };
 
-                        // we are checking this loop that adding the envelope will be successful
-                        connection_outbox.enqueue(envelope) catch unreachable;
-                    }
-                }
-            }
-        }
+        //                 // we are checking this loop that adding the envelope will be successful
+        //                 connection_outbox.enqueue(envelope) catch unreachable;
+        //             }
+        //         }
+        //     }
+        // }
     }
 
     fn distributeMessages(self: *Self) !void {
@@ -619,7 +621,7 @@ pub const Node = struct {
             const worker = try self.allocator.create(Worker);
             errdefer self.allocator.destroy(worker);
 
-            worker.* = try Worker.init(self.allocator, id, self);
+            worker.* = try Worker.init(self.allocator, self, id);
             errdefer worker.deinit();
 
             try self.workers.put(id, worker);
@@ -686,15 +688,16 @@ pub const Node = struct {
     }
 
     fn initializeOutboundConnections(self: *Self) !void {
-        if (self.config.outbound_configs) |outbound_configs| {
-            for (outbound_configs) |outbound_config| {
-                switch (outbound_config.transport) {
-                    .tcp => {
-                        try self.addOutboundConnectionToNextWorker(outbound_config);
-                    },
-                }
-            }
-        }
+        _ = self;
+        // if (self.config.outbound_configs) |outbound_configs| {
+        //     for (outbound_configs) |outbound_config| {
+        //         switch (outbound_config.transport) {
+        //             .tcp => {
+        //                 try self.addOutboundConnectionToNextWorker(outbound_config);
+        //             },
+        //         }
+        //     }
+        // }
     }
 
     fn maybeAddInboundConnections(self: *Self) !void {
