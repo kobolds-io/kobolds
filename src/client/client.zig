@@ -283,10 +283,10 @@ pub const Client = struct {
 
         const deadline = std.time.nanoTimestamp() + timeout_ns;
         while (deadline > std.time.nanoTimestamp()) {
-            log.debug("conn.connection_state {any}, conn.protocol_state {any}", .{
-                conn.connection_state,
-                conn.protocol_state,
-            });
+            // log.debug("conn.connection_state {any}, conn.protocol_state {any}", .{
+            //     conn.connection_state,
+            //     conn.protocol_state,
+            // });
 
             if (conn.connection_state == .connected and conn.protocol_state == .ready) return conn;
 
@@ -317,7 +317,7 @@ pub const Client = struct {
 
     fn tick(self: *Self) !void {
         try self.tickConnections();
-        try self.tickUninitializedConnections();
+        // try self.tickUninitializedConnections();
         try self.processInboundConnectionMessages();
         // try self.processUninitializedConnectionMessages();
         // try self.processClientMessages();
@@ -395,22 +395,24 @@ pub const Client = struct {
 
             if (conn.inbox.count == 0) continue;
             while (conn.inbox.dequeue()) |message| {
+                log.info("got message!", .{});
                 // if this message has more than a single ref, something has not been initialized
                 // or deinitialized correctly.
                 assert(message.refs() == 1);
 
-                //     switch (message.headers.message_type) {
-                //         .pong => try self.handlePongMessage(conn, message),
-                //         else => {
-                //             self.inbox_mutex.lock();
-                //             defer self.inbox_mutex.unlock();
+                switch (message.fixed_headers.message_type) {
+                    .auth_challenge => try self.handleAuthChallengeMessage(conn, message),
+                    else => {
+                        unreachable;
+                        // self.inbox_mutex.lock();
+                        // defer self.inbox_mutex.unlock();
 
-                //             self.inbox.enqueue(message) catch |err| {
-                //                 log.err("could not enqueue message {any}", .{err});
-                //                 try conn.inbox.prepend(message);
-                //             };
-                //         },
-                //     }
+                        // self.inbox.enqueue(message) catch |err| {
+                        //     log.err("could not enqueue message {any}", .{err});
+                        //     try conn.inbox.prepend(message);
+                        // };
+                    },
+                }
             }
         }
     }
@@ -583,13 +585,13 @@ pub const Client = struct {
     // }
 
     fn handleAuthChallengeMessage(self: *Self, conn: *Connection, message: *Message) !void {
-        _ = self;
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
         _ = conn;
-        _ = message;
-        //     defer {
-        //         message.deref();
-        //         if (message.refs() == 0) self.memory_pool.destroy(message);
-        //     }
+        log.info("message! {any}", .{message});
 
         //     // ensure that this connection is fully connected
         //     assert(conn.connection_state == .connected);
@@ -809,9 +811,6 @@ pub const Client = struct {
 
         try self.connections.put(tmp_conn_id, conn);
         errdefer self.connections.remove(tmp_conn_id);
-
-        // try self.uninitialized_connections.put(tmp_conn_id, conn);
-        // errdefer _ = self.uninitialized_connections.remove(tmp_conn_id);
 
         self.io.connect(
             *Connection,

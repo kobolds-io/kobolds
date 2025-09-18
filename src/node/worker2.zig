@@ -261,6 +261,9 @@ pub const Worker = struct {
         log.info("auth challenge {any}", .{handshake});
 
         try self.handshakes.put(self.allocator, conn.connection_id, handshake);
+        errdefer _ = self.handshakes.remove(conn.connection_id);
+
+        try conn.outbox.enqueue(auth_challenge);
 
         // now we actually track this nonce and connection
 
