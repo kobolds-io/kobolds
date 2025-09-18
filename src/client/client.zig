@@ -50,7 +50,7 @@ pub const TokenAuthConfig = struct {
 pub const ClientConfig = struct {
     max_connections: u16 = 100,
     memory_pool_capacity: usize = 10_000,
-    authentication_config: ?AuthenticationConfig = .{},
+    authentication_config: AuthenticationConfig = .{},
 };
 
 const ClientState = enum {
@@ -63,6 +63,7 @@ pub const Client = struct {
     const Self = @This();
 
     id: uuid.Uuid,
+    session_id: u64 = 0,
     allocator: std.mem.Allocator,
     config: ClientConfig,
     close_channel: *UnbufferedChannel(bool),
@@ -585,69 +586,74 @@ pub const Client = struct {
     // }
 
     fn handleAuthChallengeMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        // we should totally crash because this is a sequencing issue
+        assert(conn.protocol_state == .authenticating);
+
         defer {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
-        _ = conn;
-        log.info("message! {any}", .{message});
+        const tmp_conn_id = conn.connection_id;
+        // we need to swap the ID of this connection
+        defer _ = self.connections.remove(tmp_conn_id);
 
-        //     // ensure that this connection is fully connected
-        //     assert(conn.connection_state == .connected);
+        // we immediately assign this connection the id it receives from the node
+        conn.connection_id = message.extension_headers.auth_challenge.connection_id;
 
-        //     // ensure the client.connection is expecting this challenge message
-        //     assert(conn.protocol_state == .authenticating);
+        try self.connections.put(conn.connection_id, conn);
+        errdefer _ = self.connections.remove(conn.connection_id);
 
-        //     const auth_challenge_message: *const AuthChallenge = message.headers.intoConst(.auth_challenge).?;
+        const session_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(session_message);
 
-        //     const auth_response_message = try self.memory_pool.create();
-        //     errdefer self.memory_pool.destroy(auth_response_message);
+        // TODO: if we already have an open session then we should try to join that session
+        if (self.session_id > 0) {
+            @panic("unsupport session join");
+            // session_message.* = Message.new(0, .session_join);
+        } else {
+            session_message.* = Message.new(0, .session_init);
+            session_message.extension_headers.session_init.peer_id = conn.connection_id;
+            session_message.extension_headers.session_init.peer_type = .client;
 
-        //     auth_response_message.* = Message.new2(.auth_response);
-        //     auth_response_message.setTransactionId(message.transactionId());
-        //     auth_response_message.setChallengeMethod(auth_challenge_message.challenge_method);
-        //     auth_response_message.ref();
-        //     errdefer auth_response_message.deref();
+            switch (message.extension_headers.auth_challenge.challenge_method) {
+                .token => {
+                    if (self.config.authentication_config.token_config) |token_config| {
+                        switch (message.extension_headers.auth_challenge.algorithm) {
+                            .hmac256 => {
+                                const HMAC = std.crypto.auth.hmac.sha2.HmacSha256;
+                                var out: [HMAC.mac_length]u8 = undefined;
+                                var nonce_slice: [@sizeOf(u128)]u8 = undefined;
 
-        //     switch (auth_challenge_message.challenge_method) {
-        //         .none => auth_response_message.setBody(""),
-        //         .token => {
-        //             if (self.config.authentication_config) |auth_config| {
-        //                 if (auth_config.token_config) |token_config| {
-        //                     auth_response_message.setBody(token_config.token);
-        //                 }
-        //             }
-        //         },
-        //     }
+                                std.mem.writeInt(u128, &nonce_slice, message.extension_headers.auth_challenge.nonce, .big);
 
-        //     assert(auth_response_message.validate() == null);
+                                // convert the nonce to a slice
+                                var hmac = HMAC.init(token_config.token);
+                                hmac.update(&nonce_slice);
+                                hmac.final(&out);
 
-        //     try conn.outbox.enqueue(auth_response_message);
+                                log.info("out.len {} out {any}", .{ out.len, out });
 
-        //     log.debug("sending auth_response", .{});
-        // }
+                                session_message.setBody(&out);
+                            },
+                            else => @panic("unimplemented algorithm"),
+                        }
+                    } else {
+                        return error.TokenConfigMissing;
+                    }
+                },
+                else => @panic("unsupported challenge_method"),
+            }
+        }
 
-        // // FIX: this doesn't actually fulfill a transaction or enforce that THIS connection is the one authenticating
-        // //   There should be a mechanism where we lookup and clear a transaction
-        // pub fn handleAuthResultMessage(self: *Self, conn: *Connection, message: *Message) !void {
-        //     defer {
-        //         message.deref();
-        //         if (message.refs() == 0) self.memory_pool.destroy(message);
-        //     }
+        assert(session_message.validate() == null);
 
-        //     assert(conn.connection_state == .connected);
-        //     assert(conn.protocol_state == .authenticating);
+        session_message.ref();
+        errdefer session_message.deref();
 
-        //     if (message.errorCode() != .ok) {
-        //         log.err("connection did not successfully authenticate. {any}", .{message.errorCode()});
-        //         conn.protocol_state = .terminating;
-        //         return;
-        //     }
+        log.info("message! {any}", .{message.extension_headers.auth_challenge});
 
-        //     log.info("connection successfully authenticated", .{});
-
-        //     conn.protocol_state = .ready;
+        try conn.outbox.enqueue(session_message);
     }
 
     fn handlePongMessage(self: *Self, conn: *Connection, message: *Message) !void {

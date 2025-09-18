@@ -181,7 +181,7 @@ pub const Worker = struct {
     pub fn tick(self: *Self) !void {
         try self.tickConnections();
         // try self.tickUninitializedConnections();
-        // try self.processInboundConnectionMessages();
+        try self.processInboundConnectionMessages();
         // try self.processUninitializedConnectionMessages();
         // try self.processOutboundConnectionMessages();
 
@@ -206,6 +206,26 @@ pub const Worker = struct {
                 log.err("could not tick connection error: {any}", .{err});
                 continue;
             };
+        }
+    }
+
+    pub fn processInboundConnectionMessages(self: *Self) !void {
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        // loop over all connections and gather their messages
+        var connections_iter = self.connections.iterator();
+        while (connections_iter.next()) |entry| {
+            const conn = entry.value_ptr.*;
+
+            while (conn.inbox.dequeue()) |message| {
+                switch (message.fixed_headers.message_type) {
+                    .session_init => {
+                        log.info("received session init {any}", .{message});
+                    },
+                    else => unreachable,
+                }
+            }
         }
     }
 
@@ -246,7 +266,7 @@ pub const Worker = struct {
 
         auth_challenge.extension_headers.auth_challenge.challenge_method = .token;
         auth_challenge.extension_headers.auth_challenge.nonce = uuid.v7.new();
-        auth_challenge.extension_headers.auth_challenge.connection_id = conn.connection_id;
+        auth_challenge.extension_headers.auth_challenge.connection_id = conn_id;
 
         conn.protocol_state = .authenticating;
 
@@ -254,53 +274,17 @@ pub const Worker = struct {
 
         const handshake = Handshake{
             .nonce = auth_challenge.extension_headers.auth_challenge.nonce,
-            .connection_id = conn.connection_id,
+            .connection_id = conn_id,
             .challenge_method = auth_challenge.extension_headers.auth_challenge.challenge_method,
             .algorithm = auth_challenge.extension_headers.auth_challenge.algorithm,
         };
-        log.info("auth challenge {any}", .{handshake});
 
         try self.handshakes.put(self.allocator, conn.connection_id, handshake);
         errdefer _ = self.handshakes.remove(conn.connection_id);
 
         try conn.outbox.enqueue(auth_challenge);
 
-        // now we actually track this nonce and connection
-
-        // const accept_message = try self.memory_pool.create();
-        // errdefer self.node.memory_pool.destroy(accept_message);
-
-        // accept_message.* = Message.new(.accept);
-        // accept_message.ref();
-        // errdefer accept_message.deref();
-
-        //     var accept_headers: *Accept = accept_message.headers.into(.accept).?;
-        //     accept_headers.connection_id = conn_id;
-        //     accept_headers.origin_id = self.node_id;
-
-        //     assert(accept_message.validate() == null);
-
-        //     try conn.outbox.enqueue(accept_message);
-
-        //     conn.protocol_state = .authenticating;
-        //     const challenge_method = self.authenticator.getChallengeMethod();
-        //     const challenge_payload = self.authenticator.getChallengePayload();
-
-        //     const auth_challenge_message = try self.memory_pool.create();
-        //     errdefer self.memory_pool.destroy(auth_challenge_message);
-
-        //     auth_challenge_message.* = Message.new2(.auth_challenge);
-        //     auth_challenge_message.setTransactionId(uuid.v7.new());
-        //     auth_challenge_message.setChallengeMethod(challenge_method);
-        //     auth_challenge_message.setBody(challenge_payload);
-        //     auth_challenge_message.ref();
-        //     errdefer auth_challenge_message.deref();
-
-        //     assert(auth_challenge_message.validate() == null);
-
-        //     try conn.outbox.enqueue(auth_challenge_message);
-
-        //     log.info("worker: {d} added inbound connection {d}", .{ self.id, conn_id });
+        log.info("worker: {d} added inbound connection {d}", .{ self.id, conn_id });
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {

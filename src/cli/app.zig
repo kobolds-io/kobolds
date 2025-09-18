@@ -33,7 +33,7 @@ var node_config = NodeConfig{
                 .{ .id = "0", .token = "asdf" },
                 .{ .id = "1", .token = "asdf" },
             },
-            .peers = &.{},
+            .nodes = &.{},
         },
     },
 };

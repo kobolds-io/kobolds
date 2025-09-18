@@ -25,7 +25,21 @@ pub const ChallengeMethod = enum(u8) {
 
 pub const ChallengeAlgorithm = enum(u8) {
     unsupported,
-    hmac,
+    hmac256,
+};
+
+pub const PeerType = enum(u8) {
+    client,
+    node,
+};
+
+pub const MessageType = enum(u8) {
+    undefined,
+    publish,
+    subscribe,
+    auth_challenge,
+    session_init,
+    session_join,
 };
 
 pub const Message = struct {
@@ -69,6 +83,20 @@ pub const Message = struct {
             .auth_challenge => Self{
                 .fixed_headers = .{ .message_type = message_type },
                 .extension_headers = .{ .auth_challenge = AuthChallengeHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .session_init => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .session_init = SessionInitHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .session_join => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .session_join = SessionJoinHeaders{} },
                 .body_buffer = undefined,
                 .checksum = 0,
                 .ref_count = atomic.Value(u32).init(0),
@@ -165,6 +193,9 @@ pub const Message = struct {
             .undefined => 0,
             .publish => @sizeOf(PublishHeaders),
             .subscribe => @sizeOf(SubscribeHeaders),
+            .auth_challenge => @sizeOf(AuthChallengeHeaders),
+            .session_init => @sizeOf(SessionInitHeaders),
+            .session_join => @sizeOf(SessionJoinHeaders),
         };
 
         return @sizeOf(FixedHeaders) + extension_size + self.fixed_headers.body_length + @sizeOf(u64);
@@ -257,6 +288,8 @@ pub const Message = struct {
             .publish => |headers| if (headers.validate()) |e| return e,
             .subscribe => |headers| if (headers.validate()) |e| return e,
             .auth_challenge => |headers| if (headers.validate()) |e| return e,
+            .session_init => |headers| if (headers.validate()) |e| return e,
+            .session_join => |headers| if (headers.validate()) |e| return e,
             else => return "invalid headers",
         }
 
@@ -317,6 +350,8 @@ pub const FixedHeaders = packed struct {
             1 => .publish,
             2 => .subscribe,
             3 => .auth_challenge,
+            4 => .session_init,
+            5 => .session_join,
             else => return error.InvalidMessageType,
         };
         i += 1;
@@ -351,19 +386,14 @@ pub const FixedHeaders = packed struct {
     }
 };
 
-pub const MessageType = enum(u8) {
-    undefined,
-    publish,
-    subscribe,
-    auth_challenge,
-};
-
 pub const ExtensionHeaders = union(MessageType) {
     const Self = @This();
     undefined: void,
     publish: PublishHeaders,
     subscribe: SubscribeHeaders,
     auth_challenge: AuthChallengeHeaders,
+    session_init: SessionInitHeaders,
+    session_join: SessionJoinHeaders,
 
     pub fn packedSize(self: *const Self) usize {
         return switch (self.*) {
@@ -398,6 +428,14 @@ pub const ExtensionHeaders = union(MessageType) {
             .auth_challenge => blk: {
                 const headers = try AuthChallengeHeaders.fromBytes(data);
                 break :blk ExtensionHeaders{ .auth_challenge = headers };
+            },
+            .session_init => blk: {
+                const headers = try SessionInitHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .session_init = headers };
+            },
+            .session_join => blk: {
+                const headers = try SessionJoinHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .session_join = headers };
             },
         };
     }
@@ -543,7 +581,7 @@ pub const AuthChallengeHeaders = struct {
 
     // challenge method and algorithm can be made smaller
     challenge_method: ChallengeMethod = .none,
-    algorithm: ChallengeAlgorithm = .hmac,
+    algorithm: ChallengeAlgorithm = .hmac256,
     connection_id: u64 = 0,
     nonce: u128 = 0,
 
@@ -589,7 +627,7 @@ pub const AuthChallengeHeaders = struct {
 
         const algorithm: ChallengeAlgorithm = switch (data[i]) {
             0 => .unsupported,
-            1 => .hmac,
+            1 => .hmac256,
             else => unreachable, // should probably fail more gracefully
         };
         i += 1;
@@ -611,6 +649,113 @@ pub const AuthChallengeHeaders = struct {
     pub fn validate(self: Self) ?[]const u8 {
         if (self.connection_id == 0) return "invalid connection_id";
         if (self.nonce == 0) return "invalid nonce";
+
+        return null;
+    }
+};
+
+pub const SessionInitHeaders = struct {
+    const Self = @This();
+
+    peer_id: u64 = 0,
+    peer_type: PeerType = .client,
+
+    pub fn packedSize(_: Self) usize {
+        return Self.minimumSize();
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(PeerType) + @sizeOf(u64);
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        assert(buf.len >= self.packedSize());
+        var i: usize = 0;
+
+        buf[i] = @intFromEnum(self.peer_type);
+        i += 1;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.peer_id, .big);
+        i += @sizeOf(u64);
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const peer_type: PeerType = switch (data[i]) {
+            0 => .client,
+            1 => .node,
+            else => unreachable,
+        };
+        i += 1;
+
+        const peer_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        return Self{
+            .peer_id = peer_id,
+            .peer_type = peer_type,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.peer_id == 0) return "invalid peer_id";
+
+        return null;
+    }
+};
+
+pub const SessionJoinHeaders = struct {
+    const Self = @This();
+
+    peer_id: u64 = 0,
+    session_id: u64 = 0,
+
+    pub fn packedSize(_: Self) usize {
+        return Self.minimumSize();
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(u64);
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        assert(buf.len >= self.packedSize());
+        var i: usize = 0;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.peer_id, .big);
+        i += @sizeOf(u64);
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.session_id, .big);
+        i += @sizeOf(u64);
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const peer_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const session_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        return Self{
+            .peer_id = peer_id,
+            .session_id = session_id,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.peer_id == 0) return "invalid peer_id";
+        if (self.session_id == 0) return "invalid session_id";
 
         return null;
     }
@@ -643,6 +788,8 @@ test "message serialization" {
         .undefined,
         .publish,
         .subscribe,
+        .session_init,
+        .session_join,
     };
 
     var buf: [@sizeOf(Message)]u8 = undefined;
@@ -652,13 +799,7 @@ test "message serialization" {
 
         const bytes = message.serialize(&buf);
 
-        try testing.expect(bytes == message.packedSize());
-
-        switch (message_type) {
-            .undefined => try testing.expectEqual(bytes, message.packedSize()),
-            .publish => try testing.expectEqual(bytes, message.packedSize()),
-            .subscribe => try testing.expectEqual(bytes, message.packedSize()),
-        }
+        try testing.expectEqual(bytes, message.packedSize());
     }
 }
 
@@ -667,6 +808,8 @@ test "message deserialization" {
         .undefined,
         .publish,
         .subscribe,
+        .session_init,
+        .session_join,
     };
 
     var buf: [@sizeOf(Message)]u8 = undefined;
@@ -689,6 +832,9 @@ test "message deserialization" {
         try testing.expect(std.mem.eql(u8, message.body(), deserialized_message.body()));
 
         switch (message_type) {
+            .undefined => {
+                try testing.expectEqual(message.size(), deserialized_message.size());
+            },
             .publish => {
                 try testing.expectEqual(
                     message.extension_headers.publish.message_id,
@@ -715,8 +861,43 @@ test "message deserialization" {
                 );
                 try testing.expect(std.mem.eql(u8, message.topicName(), deserialized_message.topicName()));
             },
-            .undefined => {
-                try testing.expectEqual(message.size(), deserialized_message.size());
+            .auth_challenge => {
+                try testing.expectEqual(
+                    message.extension_headers.auth_challenge.challenge_method,
+                    deserialized_message.extension_headers.auth_challenge.challenge_method,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.auth_challenge.algorithm,
+                    deserialized_message.extension_headers.auth_challenge.algorithm,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.auth_challenge.nonce,
+                    deserialized_message.extension_headers.auth_challenge.nonce,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.auth_challenge.connection_id,
+                    deserialized_message.extension_headers.auth_challenge.connection_id,
+                );
+            },
+            .session_init => {
+                try testing.expectEqual(
+                    message.extension_headers.session_init.peer_id,
+                    deserialized_message.extension_headers.session_init.peer_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.session_init.peer_type,
+                    deserialized_message.extension_headers.session_init.peer_type,
+                );
+            },
+            .session_join => {
+                try testing.expectEqual(
+                    message.extension_headers.session_join.peer_id,
+                    deserialized_message.extension_headers.session_join.peer_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.session_join.session_id,
+                    deserialized_message.extension_headers.session_join.session_id,
+                );
             },
         }
     }

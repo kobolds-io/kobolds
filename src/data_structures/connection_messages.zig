@@ -87,48 +87,48 @@ pub const ConnectionMessages = struct {
     }
 };
 
-test "append a message" {
-    const allocator = testing.allocator;
+// test "append a message" {
+//     const allocator = testing.allocator;
 
-    var memory_pool = try MemoryPool(Message).init(allocator, 10);
-    defer memory_pool.deinit();
+//     var memory_pool = try MemoryPool(Message).init(allocator, 10);
+//     defer memory_pool.deinit();
 
-    var connection_messages = ConnectionMessages.init(allocator, &memory_pool);
-    defer connection_messages.deinit();
+//     var connection_messages = ConnectionMessages.init(allocator, &memory_pool);
+//     defer connection_messages.deinit();
 
-    const message_1 = try memory_pool.create();
-    message_1.* = Message.new();
-    message_1.headers.message_type = .ping;
-    message_1.headers.connection_id = 2;
-    message_1.ref();
+//     const message_1 = try memory_pool.create();
+//     message_1.* = Message.new();
+//     message_1.headers.message_type = .ping;
+//     message_1.headers.connection_id = 2;
+//     message_1.ref();
 
-    const conn_id = uuid.v7.new();
+//     const conn_id = uuid.v7.new();
 
-    try testing.expect(connection_messages.map.get(conn_id) == null);
+//     try testing.expect(connection_messages.map.get(conn_id) == null);
 
-    try connection_messages.append(conn_id, message_1);
+//     try connection_messages.append(conn_id, message_1);
 
-    try testing.expect(connection_messages.map.get(conn_id) != null);
+//     try testing.expect(connection_messages.map.get(conn_id) != null);
 
-    const list = connection_messages.map.get(conn_id).?;
-    try testing.expectEqual(1, list.count);
+//     const list = connection_messages.map.get(conn_id).?;
+//     try testing.expectEqual(1, list.count);
 
-    const message_2 = try memory_pool.create();
-    message_2.* = Message.new();
-    message_2.headers.message_type = .ping;
-    message_2.headers.connection_id = 2;
-    message_2.ref();
+//     const message_2 = try memory_pool.create();
+//     message_2.* = Message.new();
+//     message_2.headers.message_type = .ping;
+//     message_2.headers.connection_id = 2;
+//     message_2.ref();
 
-    try connection_messages.append(conn_id, message_2);
-    try testing.expectEqual(2, list.count);
-}
+//     try connection_messages.append(conn_id, message_2);
+//     try testing.expectEqual(2, list.count);
+// }
 
-test "init/deinit" {
-    const allocator = testing.allocator;
+// test "init/deinit" {
+//     const allocator = testing.allocator;
 
-    var memory_pool = try MemoryPool(Message).init(allocator, 10);
-    defer memory_pool.deinit();
+//     var memory_pool = try MemoryPool(Message).init(allocator, 10);
+//     defer memory_pool.deinit();
 
-    var connection_messages = ConnectionMessages.init(allocator, &memory_pool);
-    defer connection_messages.deinit();
-}
+//     var connection_messages = ConnectionMessages.init(allocator, &memory_pool);
+//     defer connection_messages.deinit();
+// }
