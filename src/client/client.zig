@@ -288,6 +288,10 @@ pub const Client = struct {
         const conn = try self.addOutboundConnection(config);
         errdefer self.disconnect(conn);
 
+        var timer = try std.time.Timer.start();
+        defer timer.reset();
+        const timer_start = timer.read();
+
         const deadline = std.time.nanoTimestamp() + timeout_ns;
         while (deadline > std.time.nanoTimestamp()) {
             // log.debug("conn.connection_state {any}, conn.protocol_state {any}", .{
@@ -295,7 +299,7 @@ pub const Client = struct {
             //     conn.protocol_state,
             // });
 
-            if (conn.connection_state == .connected and conn.protocol_state == .ready) return conn;
+            if (conn.connection_state == .connected and conn.protocol_state == .ready) break;
 
             // // FIX: this is some baaaaad code. There should instead be a signal or channel that this thread could
             // // wait on instead. Since this call happens on a foreground thread, an unbuffered channel seems the most
@@ -304,6 +308,11 @@ pub const Client = struct {
         } else {
             return error.DeadlineExceeded;
         }
+
+        const timer_end = timer.read();
+        log.info("connected and ready in {}us", .{(timer_end - timer_start) / std.time.ns_per_us});
+
+        return conn;
     }
 
     pub fn disconnect(self: *Self, conn: *Connection) void {
@@ -574,10 +583,11 @@ pub const Client = struct {
 
         conn.protocol_state = .ready;
 
-        log.info("successfully authenticated peer_id: {}, conn_id: {}, session_id: {}", .{
+        log.info("successfully authenticated peer_id: {}, conn_id: {}, session_id: {}, session_token: {any}", .{
             peer_id,
             conn.connection_id,
             session_id,
+            message.body(),
         });
     }
 
