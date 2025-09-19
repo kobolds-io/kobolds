@@ -122,9 +122,18 @@ pub const Worker = struct {
             if (envelope.message.refs() == 0) self.node.memory_pool.destroy(envelope.message);
         }
 
+        var connections_iter = self.connections.valueIterator();
+        while (connections_iter.next()) |entry| {
+            const conn = entry.*;
+
+            conn.deinit();
+            self.allocator.destroy(conn);
+        }
+
         self.inbox.deinit();
         self.outbox.deinit();
         self.io.deinit();
+        self.connections.deinit();
         self.handshakes.deinit(self.allocator);
         self.conn_session_map.deinit(self.allocator);
 
@@ -170,7 +179,7 @@ pub const Worker = struct {
         switch (self.state) {
             .closed, .closing => return,
             else => {
-                // while (!self.closeAllConnections()) {}
+                while (!self.closeAllConnections()) {}
                 // block until this is received by the background thread
                 self.close_channel.send(true);
             },
@@ -178,6 +187,28 @@ pub const Worker = struct {
 
         // block until the worker fully exits
         _ = self.done_channel.receive();
+    }
+
+    fn closeAllConnections(self: *Self) bool {
+        var all_connections_closed = true;
+
+        var connections_iter = self.connections.valueIterator();
+        while (connections_iter.next()) |entry| {
+            var conn = entry.*;
+            switch (conn.connection_state) {
+                .closed => continue,
+                .closing => {
+                    all_connections_closed = false;
+                },
+                else => {
+                    conn.connection_state = .closing;
+                    conn.protocol_state = .terminating;
+                    all_connections_closed = false;
+                },
+            }
+        }
+
+        return all_connections_closed;
     }
 
     pub fn tick(self: *Self) !void {
@@ -290,23 +321,17 @@ pub const Worker = struct {
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {
-        // self.dead_connections_mutex.lock();
-        // defer self.dead_connections_mutex.unlock();
+        const conn_id = conn.connection_id;
+        defer log.info("worker: {} removed connection {}", .{ self.id, conn_id });
 
-        // try self.dead_connections.append(conn.connection_id);
+        if (self.conn_session_map.fetchRemove(conn.connection_id)) |kv_entry| {
+            const session_id = kv_entry.value;
 
-        // remove this connection from the session if there is one
-        if (self.conn_session_map.get(conn.connection_id)) |session_id| {
-            _ = self.node.removeConnectionFromSession(session_id, conn.connection_id);
+            _ = self.node.removeConnectionFromSession(session_id, conn_id);
         }
 
-        self.removeConnection(conn);
-    }
-
-    fn removeConnection(self: *Self, conn: *Connection) void {
         _ = self.connections.remove(conn.connection_id);
 
-        log.info("worker: {} removed connection {}", .{ self.id, conn.connection_id });
         conn.deinit();
         self.allocator.destroy(conn);
     }
@@ -335,9 +360,8 @@ pub const Worker = struct {
                     const session = try self.node.createSession(session_init.peer_id, session_init.peer_type);
                     errdefer self.node.removeSession(session.session_id);
 
-                    log.info("created session {any}", .{session});
-
-                    try session.addConnection(self.allocator, conn.connection_id);
+                    try self.node.addConnectionToSession(session.session_id, conn.connection_id);
+                    errdefer _ = self.node.removeConnectionFromSession(session.session_id, conn.connection_id);
 
                     reply.* = Message.new(0, .auth_success);
                     reply.ref();
