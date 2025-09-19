@@ -90,9 +90,11 @@ pub const TokenAuthStrategy = struct {
     }
 
     pub fn authenticate(self: *Self, context: *const Context) bool {
-        for (self.tokens.items) |token| {
-            if (std.mem.eql(u8, token, context.token)) return true;
-        }
+        _ = self;
+        _ = context;
+        // for (self.tokens.items) |token| {
+        //     if (std.mem.eql(u8, token, context.token)) return true;
+        // }
 
         return false;
     }
