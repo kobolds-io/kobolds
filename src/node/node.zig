@@ -16,6 +16,7 @@ const Listener = @import("./listener.zig").Listener;
 const ListenerConfig = @import("./listener.zig").ListenerConfig;
 const InboundConnectionConfig = @import("../protocol/connection2.zig").InboundConnectionConfig;
 const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
+const PeerType = @import("../protocol/connection2.zig").PeerType;
 const NodeMetrics = @import("./metrics.zig").NodeMetrics;
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
@@ -1023,6 +1024,17 @@ pub const Node = struct {
             try self.services.put(topic_name, service);
             return service;
         }
+    }
+
+    pub fn createSession(self: *Self, session_id: u64, peer_id: u64, peer_type: PeerType) !Session {
+        const session = try self.allocator.create(Session);
+        errdefer self.allocator.destroy(session);
+
+        session.* = try Session.init(self.allocator, session_id, peer_id, peer_type, .round_robin);
+        errdefer session.deinit();
+
+        // TODO: FINISH THIS FUNCTION!!!
+
     }
 };
 
