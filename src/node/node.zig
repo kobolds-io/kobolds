@@ -571,6 +571,8 @@ pub const Node = struct {
                 self.allocator.destroy(session);
 
                 assert(self.sessions.remove(session_id));
+                log.info("successfully pruned session!", .{});
+                break;
             }
         }
     }
