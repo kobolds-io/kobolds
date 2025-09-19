@@ -297,6 +297,7 @@ pub const Connection = struct {
                 }
 
                 self.connection_state = .closed;
+                self.protocol_state = .terminated;
                 posix.close(self.socket);
                 // break out of the tick
                 return;

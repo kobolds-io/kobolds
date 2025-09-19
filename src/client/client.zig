@@ -74,7 +74,7 @@ pub const Client = struct {
     memory_pool: *MemoryPool(Message),
     mutex: std.Thread.Mutex,
     connections_mutex: std.Thread.Mutex,
-    connections: std.AutoHashMap(uuid.Uuid, *Connection),
+    connections: std.AutoHashMap(u64, *Connection),
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
     transactions: std.AutoHashMap(uuid.Uuid, *Signal(*Message)),
     transactions_mutex: std.Thread.Mutex,
@@ -132,7 +132,7 @@ pub const Client = struct {
             .state = .closed,
             .mutex = std.Thread.Mutex{},
             .connections_mutex = std.Thread.Mutex{},
-            .connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
+            .connections = std.AutoHashMap(u64, *Connection).init(allocator),
             .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
             .transactions = std.AutoHashMap(uuid.Uuid, *Signal(*Message)).init(allocator),
             .transactions_mutex = std.Thread.Mutex{},
@@ -262,13 +262,11 @@ pub const Client = struct {
         }
     }
 
+    // FIX: this is broken somehow, where the loop isn't killing the connections
     pub fn close(self: *Self) void {
         switch (self.state) {
             .closed, .closing => return,
             else => {
-                self.connections_mutex.lock();
-                defer self.connections_mutex.unlock();
-
                 while (!self.closeAllConnections()) {}
 
                 self.close_channel.send(true);
@@ -355,48 +353,50 @@ pub const Client = struct {
         }
     }
 
-    fn tickUninitializedConnections(self: *Self) !void {
-        self.connections_mutex.lock();
-        defer self.connections_mutex.unlock();
+    // fn tickUninitializedConnections(self: *Self) !void {
+    //     self.connections_mutex.lock();
+    //     defer self.connections_mutex.unlock();
 
-        var uninitialized_connections_iter = self.uninitialized_connections.iterator();
-        while (uninitialized_connections_iter.next()) |entry| {
-            const tmp_id = entry.key_ptr.*;
-            const conn = entry.value_ptr.*;
+    //     var uninitialized_connections_iter = self.uninitialized_connections.iterator();
+    //     while (uninitialized_connections_iter.next()) |entry| {
+    //         const tmp_id = entry.key_ptr.*;
+    //         const conn = entry.value_ptr.*;
 
-            switch (conn.protocol_state) {
-                .terminating => {
-                    log.debug("need to clean up any thing related to this connection", .{});
-                    conn.protocol_state = .terminated;
-                    conn.connection_state = .closing;
-                },
-                else => {},
-            }
+    //         switch (conn.protocol_state) {
+    //             .terminating => {
+    //                 log.debug("need to clean up any thing related to this connection", .{});
+    //                 conn.protocol_state = .terminated;
+    //                 conn.connection_state = .closing;
+    //             },
+    //             else => {},
+    //         }
 
-            // check if this connection was closed for whatever reason
-            if (conn.connection_state == .closed) {
-                try self.cleanupUninitializedConnection(tmp_id, conn);
-                break;
-            }
+    //         // check if this connection was closed for whatever reason
+    //         if (conn.connection_state == .closed) {
+    //             try self.cleanupUninitializedConnection(tmp_id, conn);
+    //             break;
+    //         }
 
-            conn.tick() catch |err| {
-                log.err("could not tick uninitialized_connection error: {any}", .{err});
-                break;
-            };
+    //         conn.tick() catch |err| {
+    //             log.err("could not tick uninitialized_connection error: {any}", .{err});
+    //             break;
+    //         };
 
-            if (conn.connection_state == .connected and conn.protocol_state == .ready) {
-                // the connection is now valid and ready for events
-                // move the connection to the regular connections map
-                try self.connections.put(conn.connection_id, conn);
-                // remove the connection from the uninitialized_connections map
-                assert(self.uninitialized_connections.remove(tmp_id));
-            }
-        }
-    }
+    //         if (conn.connection_state == .connected and conn.protocol_state == .ready) {
+    //             // the connection is now valid and ready for events
+    //             // move the connection to the regular connections map
+    //             try self.connections.put(conn.connection_id, conn);
+    //             // remove the connection from the uninitialized_connections map
+    //             assert(self.uninitialized_connections.remove(tmp_id));
+    //         }
+    //     }
+    // }
 
     fn processInboundConnectionMessages(self: *Self) !void {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
+
+        log.info("connectsion count {}", .{self.connections.count()});
 
         var connections_iter = self.connections.valueIterator();
         while (connections_iter.next()) |connection_entry| {
@@ -404,7 +404,6 @@ pub const Client = struct {
 
             if (conn.inbox.count == 0) continue;
             while (conn.inbox.dequeue()) |message| {
-                log.info("got message!", .{});
                 // if this message has more than a single ref, something has not been initialized
                 // or deinitialized correctly.
                 assert(message.refs() == 1);
@@ -412,16 +411,7 @@ pub const Client = struct {
                 switch (message.fixed_headers.message_type) {
                     .auth_challenge => try self.handleAuthChallengeMessage(conn, message),
                     .auth_success => try self.handleAuthSuccessMessage(conn, message),
-                    else => {
-                        unreachable;
-                        // self.inbox_mutex.lock();
-                        // defer self.inbox_mutex.unlock();
-
-                        // self.inbox.enqueue(message) catch |err| {
-                        //     log.err("could not enqueue message {any}", .{err});
-                        //     try conn.inbox.prepend(message);
-                        // };
-                    },
+                    else => unreachable,
                 }
             }
         }
@@ -697,14 +687,10 @@ pub const Client = struct {
                 },
                 else => {
                     conn.connection_state = .closing;
+                    conn.protocol_state = .terminating;
                     all_connections_closed = false;
                 },
             }
-
-            conn.tick() catch |err| {
-                log.err("client uninitialized_connection tick err {any}", .{err});
-                unreachable;
-            };
         }
 
         var connections_iter = self.connections.valueIterator();
@@ -717,14 +703,10 @@ pub const Client = struct {
                 },
                 else => {
                     conn.connection_state = .closing;
+                    conn.protocol_state = .terminating;
                     all_connections_closed = false;
                 },
             }
-
-            conn.tick() catch |err| {
-                log.err("client connection tick err {any}", .{err});
-                unreachable;
-            };
         }
 
         return all_connections_closed;
@@ -744,9 +726,9 @@ pub const Client = struct {
 
         // create a temporary id that will be used to identify this connection until it receives a proper
         // connection_id from the remote node
-        const tmp_conn_id = uuid.v7.new();
+        const tmp_conn_id = 1;
         conn.* = try Connection.init(
-            0,
+            tmp_conn_id,
             self.io,
             socket,
             self.allocator,
