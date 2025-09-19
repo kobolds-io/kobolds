@@ -43,7 +43,7 @@ pub const AuthenticationConfig = struct {
 };
 
 pub const TokenAuthConfig = struct {
-    id: []const u8,
+    id: u64,
     token: []const u8,
 };
 
@@ -613,12 +613,14 @@ pub const Client = struct {
             // session_message.* = Message.new(0, .session_join);
         } else {
             session_message.* = Message.new(0, .session_init);
-            session_message.extension_headers.session_init.peer_id = conn.connection_id;
             session_message.extension_headers.session_init.peer_type = .client;
 
             switch (message.extension_headers.auth_challenge.challenge_method) {
                 .token => {
                     if (self.config.authentication_config.token_config) |token_config| {
+                        // Set the peer id
+                        session_message.extension_headers.session_init.peer_id = token_config.id;
+
                         switch (message.extension_headers.auth_challenge.algorithm) {
                             .hmac256 => {
                                 const HMAC = std.crypto.auth.hmac.sha2.HmacSha256;

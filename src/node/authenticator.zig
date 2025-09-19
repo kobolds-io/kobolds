@@ -42,7 +42,7 @@ pub const TokenAuthStrategy = struct {
     };
 
     pub const TokenEntry = struct {
-        id: []const u8,
+        id: u64,
         token: []const u8,
     };
 

@@ -21,6 +21,7 @@ const Node = @import("./node.zig").Node;
 const Message = @import("../protocol/message2.zig").Message;
 const ChallengeMethod = @import("../protocol/message2.zig").ChallengeMethod;
 const ChallengeAlgorithm = @import("../protocol/message2.zig").ChallengeAlgorithm;
+const TokenEntry = @import("./authenticator.zig").TokenAuthStrategy.TokenEntry;
 
 const Handshake = struct {
     nonce: u128,
@@ -220,9 +221,7 @@ pub const Worker = struct {
 
             while (conn.inbox.dequeue()) |message| {
                 switch (message.fixed_headers.message_type) {
-                    .session_init => {
-                        log.info("received session init {any}", .{message});
-                    },
+                    .session_init => try self.handleSessionInit(conn, message),
                     else => unreachable,
                 }
             }
@@ -302,6 +301,69 @@ pub const Worker = struct {
         log.info("worker: {} removed connection {}", .{ self.id, conn.connection_id });
         conn.deinit();
         self.allocator.destroy(conn);
+    }
+
+    fn handleSessionInit(self: *Self, conn: *Connection, message: *Message) !void {
+        // Ensure only one handshake per connection
+        const entry = self.handshakes.fetchRemove(conn.connection_id) orelse return error.HandshakeMissing;
+
+        const handshake = entry.value;
+        log.info("handshake {any}", .{handshake});
+
+        switch (handshake.challenge_method) {
+            .token => {
+                if (self.authenticate(handshake, message)) {
+                    log.info("successfully authenticated", .{});
+                }
+            },
+            else => @panic("unsupported challenge_method"),
+        }
+    }
+
+    fn authenticate(self: *Self, handshake: Handshake, message: *Message) bool {
+        const auth_token_config = self.node.config.authenticator_config.token;
+
+        const session_init = message.extension_headers.session_init;
+        switch (session_init.peer_type) {
+            .client => {
+                if (auth_token_config.clients) |client_token_entries| {
+                    if (self.findClientToken(client_token_entries, session_init.peer_id)) |token_entry| {
+                        return switch (handshake.algorithm) {
+                            .hmac256 => self.verifyHMAC256(token_entry.token, handshake.nonce, message.body()),
+                            else => @panic("unsupported algorithm"),
+                        };
+                    } else {
+                        log.err("could not authenticate", .{});
+                        return false;
+                    }
+                }
+            },
+            .node => @panic("unsupported peer type"),
+        }
+
+        return false;
+    }
+
+    fn findClientToken(_: *Self, clients: []const TokenEntry, peer_id: u64) ?TokenEntry {
+        for (clients) |token_entry| if (token_entry.id == peer_id) return token_entry;
+        return null;
+    }
+
+    fn verifyHMAC256(_: *Self, token: []const u8, nonce: u128, challenge_payload: []const u8) bool {
+        const HMAC = std.crypto.auth.hmac.sha2.HmacSha256;
+        var out: [HMAC.mac_length]u8 = undefined;
+        var nonce_buf: [@sizeOf(u128)]u8 = undefined;
+
+        std.mem.writeInt(u128, &nonce_buf, nonce, .big);
+
+        var hmac = HMAC.init(token);
+        hmac.update(&nonce_buf);
+        hmac.final(&out);
+
+        log.info("message_body {any}", .{challenge_payload});
+        log.info("expected HMAC {any}", .{out});
+
+        return std.mem.eql(u8, challenge_payload, &out);
     }
 };
 

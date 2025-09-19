@@ -30,8 +30,8 @@ var node_config = NodeConfig{
     .authenticator_config = .{
         .token = .{
             .clients = &.{
-                .{ .id = "0", .token = "asdf" },
-                .{ .id = "1", .token = "asdf" },
+                .{ .id = 10, .token = "asdf" },
+                .{ .id = 11, .token = "asdf" },
             },
             .nodes = &.{},
         },
@@ -42,7 +42,7 @@ var client_config = ClientConfig{
     .max_connections = 100,
     .authentication_config = .{
         .token_config = .{
-            .id = "0",
+            .id = 10,
             .token = "asdf",
         },
     },
