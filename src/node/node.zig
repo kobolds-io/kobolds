@@ -258,6 +258,7 @@ pub const Node = struct {
         self.inbox.deinit();
         self.connection_outboxes.deinit();
         self.authenticator.deinit();
+        self.sessions.deinit(self.allocator);
 
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
@@ -566,13 +567,11 @@ pub const Node = struct {
 
             if (session.connections.count() == 0) {
                 log.info("pruning empty session {}", .{session_id});
-                // we are going to remove this session
                 session.deinit(self.allocator);
                 self.allocator.destroy(session);
 
                 assert(self.sessions.remove(session_id));
                 log.info("successfully pruned session!", .{});
-                break;
             }
         }
     }
