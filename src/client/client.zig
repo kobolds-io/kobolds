@@ -32,6 +32,8 @@ const Advertiser = @import("../services/advertiser.zig").Advertiser;
 const Requestor = @import("../services/requestor.zig").Requestor;
 const AdvertiserCallback = *const fn (request: *Message, reply: *Message) void;
 
+const Session = @import("../node/session.zig").Session;
+
 const PingOptions = struct {};
 const PublishOptions = struct {};
 const SubscribeOptions = struct {};
@@ -63,7 +65,6 @@ pub const Client = struct {
     const Self = @This();
 
     id: uuid.Uuid,
-    session_id: u64 = 0,
     allocator: std.mem.Allocator,
     config: ClientConfig,
     close_channel: *UnbufferedChannel(bool),
@@ -87,6 +88,7 @@ pub const Client = struct {
     advertiser_callbacks: std.AutoHashMap(u128, AdvertiserCallback),
     inbox: *RingBuffer(*Message),
     inbox_mutex: std.Thread.Mutex,
+    session: ?*Session = null,
 
     pub fn init(allocator: std.mem.Allocator, config: ClientConfig) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -144,6 +146,7 @@ pub const Client = struct {
             .advertiser_callbacks = std.AutoHashMap(u128, AdvertiserCallback).init(allocator),
             .inbox = inbox,
             .inbox_mutex = std.Thread.Mutex{},
+            .session = null,
         };
     }
 
@@ -189,6 +192,11 @@ pub const Client = struct {
         while (self.inbox.dequeue()) |message| {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        if (self.session) |session| {
+            session.deinit(self.allocator);
+            self.allocator.destroy(session);
         }
 
         self.io.deinit();
@@ -403,6 +411,7 @@ pub const Client = struct {
 
                 switch (message.fixed_headers.message_type) {
                     .auth_challenge => try self.handleAuthChallengeMessage(conn, message),
+                    .auth_success => try self.handleAuthSuccessMessage(conn, message),
                     else => {
                         unreachable;
                         // self.inbox_mutex.lock();
@@ -551,39 +560,38 @@ pub const Client = struct {
         }
     }
 
-    // fn handleAcceptMessage(self: *Self, conn: *Connection, message: *Message) !void {
-    //     defer {
-    //         message.deref();
-    //         if (message.refs() == 0) self.memory_pool.destroy(message);
-    //     }
+    fn handleAuthSuccessMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        assert(self.session == null);
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
 
-    //     // ensure that this connection is fully connected
-    //     assert(conn.connection_state == .connected);
+        const session = try self.allocator.create(Session);
+        errdefer self.allocator.destroy(session);
 
-    //     // ensure the client.connection is expecting this accept message
-    //     assert(conn.protocol_state == .accepting);
+        const peer_id = message.extension_headers.auth_success.peer_id;
+        const session_id = message.extension_headers.auth_success.session_id;
 
-    //     // assert(conn.connection_state != .connected);
-    //     // ensure that this connection_id is not set
-    //     assert(conn.connection_id == 0);
+        session.* = try Session.init(self.allocator, session_id, peer_id, .node, .round_robin);
+        errdefer session.deinit(self.allocator);
 
-    //     // An error here would be a protocol error
-    //     assert(conn.peer_id != message.headers.origin_id);
-    //     assert(conn.connection_id != message.headers.connection_id);
+        assert(session.session_token.len == message.fixed_headers.body_length);
+        @memcpy(session.session_token, message.body());
 
-    //     conn.connection_id = message.headers.connection_id;
-    //     conn.peer_id = message.headers.origin_id;
+        try session.addConnection(self.allocator, conn.connection_id);
+        errdefer session.removeConnection(conn.connection_id);
 
-    //     conn.connection_state = .connected;
-    //     conn.protocol_state = .authenticating;
+        self.session = session;
 
-    //     log.info("outbound_connection - origin_id: {}, connection_id: {}, remote_id: {}, peer_type: {any}", .{
-    //         conn.origin_id,
-    //         conn.connection_id,
-    //         conn.peer_id,
-    //         conn.config.outbound.peer_type,
-    //     });
-    // }
+        conn.protocol_state = .ready;
+
+        log.info("successfully authenticated peer_id: {}, conn_id: {}, session_id: {}", .{
+            peer_id,
+            conn.connection_id,
+            session_id,
+        });
+    }
 
     fn handleAuthChallengeMessage(self: *Self, conn: *Connection, message: *Message) !void {
         // we should totally crash because this is a sequencing issue
@@ -607,14 +615,13 @@ pub const Client = struct {
         const session_message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(session_message);
 
-        // TODO: if we already have an open session then we should try to join that session
-        if (self.session_id > 0) {
-            @panic("unsupport session join");
-            // session_message.* = Message.new(0, .session_join);
-        } else {
-            session_message.* = Message.new(0, .session_init);
-            session_message.extension_headers.session_init.peer_type = .client;
+        session_message.* = Message.new(0, .session_init);
+        session_message.extension_headers.session_init.peer_type = .client;
 
+        if (self.session) |session| {
+            _ = session;
+            log.info("session already exists!!!!! can't join yet", .{});
+        } else {
             switch (message.extension_headers.auth_challenge.challenge_method) {
                 .token => {
                     if (self.config.authentication_config.token_config) |token_config| {
@@ -658,77 +665,14 @@ pub const Client = struct {
         try conn.outbox.enqueue(session_message);
     }
 
-    fn handlePongMessage(self: *Self, conn: *Connection, message: *Message) !void {
-        _ = self;
-        _ = conn;
-        _ = message;
-        // _ = conn;
-        // defer {
-        //     message.deref();
-        //     if (message.refs() == 0) self.memory_pool.destroy(message);
-        // }
-
-        // self.transactions_mutex.lock();
-        // defer self.transactions_mutex.unlock();
-
-        // // check if this pong message is part of transaction
-        // if (self.transactions.get(message.transactionId())) |signal| {
-        //     message.ref();
-        //     signal.send(message);
-        //     _ = self.transactions.remove(message.transactionId());
-        // }
-    }
-
-    // fn handleRequestMessage(self: *Self, message: *Message) !void {
-    //     defer {
-    //         message.deref();
-    //         if (message.refs() == 0) self.memory_pool.destroy(message);
-    //     }
-
-    //     self.services_mutex.lock();
-    //     defer self.services_mutex.unlock();
-
-    //     if (self.services.get(message.topicName())) |service| {
-    //         message.ref();
-    //         service.requests_queue.enqueue(message) catch message.deref();
-    //     } else unreachable;
-    // }
-
-    // fn handleReplyMessage(self: *Self, message: *Message) !void {
-    //     self.transactions_mutex.lock();
-    //     defer self.transactions_mutex.unlock();
-
-    //     // check if this pong message is part of transaction
-    //     if (self.transactions.get(message.transactionId())) |signal| {
-    //         message.ref();
-    //         signal.send(message);
-    //         _ = self.transactions.remove(message.transactionId());
-    //     }
-    // }
-
-    // // fn handlePublishMessage(self: *Self, message: *Message) !void {
-    //     defer {
-    //         message.deref();
-    //         if (message.refs() == 0) self.memory_pool.destroy(message);
-    //     }
-
-    //     self.topics_mutex.lock();
-    //     defer self.topics_mutex.unlock();
-
-    //     if (self.topics.get(message.topicName())) |topic| {
-    //         message.ref();
-    //         topic.queue.enqueue(message) catch message.deref();
-    //     } else unreachable;
-    // }
-
     fn cleanupUninitializedConnection(self: *Self, tmp_id: uuid.Uuid, conn: *Connection) !void {
         log.debug("remove uninitialized connection called", .{});
 
         _ = self.uninitialized_connections.remove(tmp_id);
         log.info("client: {} removed uninitialized_connection {}", .{ self.id, conn.connection_id });
 
-        // conn.deinit();
-        // self.allocator.destroy(conn);
+        conn.deinit();
+        self.allocator.destroy(conn);
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {
@@ -736,8 +680,8 @@ pub const Client = struct {
 
         log.info("client: {} removed connection {}", .{ self.id, conn.connection_id });
 
-        // conn.deinit();
-        // self.allocator.destroy(conn);
+        conn.deinit();
+        self.allocator.destroy(conn);
     }
 
     fn closeAllConnections(self: *Self) bool {
@@ -832,264 +776,6 @@ pub const Client = struct {
 
         return conn;
     }
-
-    // pub fn ping(self: *Self, conn: *Connection, signal: *Signal(*Message), options: PingOptions) !void {
-    //     _ = options;
-    //     // FIX: this will just crash and that is bad
-    //     assert(conn.connection_state == .connected);
-
-    //     const ping_message = try self.memory_pool.create();
-    //     errdefer self.memory_pool.destroy(ping_message);
-
-    //     ping_message.* = Message.new();
-    //     ping_message.headers.message_type = .ping;
-    //     ping_message.setTransactionId(uuid.v7.new());
-    //     ping_message.ref();
-    //     errdefer ping_message.deref();
-
-    //     {
-    //         self.connection_messages_mutex.lock();
-    //         defer self.connection_messages_mutex.unlock();
-
-    //         try self.connection_messages.append(conn.connection_id, ping_message);
-    //     }
-
-    //     {
-    //         self.transactions_mutex.lock();
-    //         defer self.transactions_mutex.unlock();
-
-    //         try self.transactions.put(ping_message.transactionId(), signal);
-    //     }
-    // }
-
-    // pub fn publish(
-    //     self: *Self,
-    //     conn: *Connection,
-    //     topic_name: []const u8,
-    //     body: []const u8,
-    //     options: PublishOptions,
-    // ) !void {
-    //     _ = options;
-    //     assert(conn.connection_state == .connected);
-
-    //     const message = try self.memory_pool.create();
-    //     errdefer self.memory_pool.destroy(message);
-
-    //     message.* = Message.new();
-    //     message.headers.message_type = .publish;
-    //     message.setTopicName(topic_name);
-    //     message.setBody(body);
-    //     message.ref();
-
-    //     self.connection_messages_mutex.lock();
-    //     defer self.connection_messages_mutex.unlock();
-
-    //     try self.connection_messages.append(conn.connection_id, message);
-    // }
-
-    // pub fn subscribe(
-    //     self: *Self,
-    //     conn: *Connection,
-    //     signal: *Signal(*Message),
-    //     topic_name: []const u8,
-    //     callback: SubscriberCallback,
-    //     options: SubscribeOptions,
-    // ) !void {
-    //     assert(conn.connection_state == .connected);
-
-    //     self.topics_mutex.lock();
-    //     defer self.topics_mutex.unlock();
-
-    //     var topic: *Topic = undefined;
-    //     if (self.topics.get(topic_name)) |t| {
-    //         topic = t;
-    //     } else {
-    //         topic = try self.allocator.create(Topic);
-    //         errdefer self.allocator.destroy(topic);
-
-    //         topic.* = try Topic.init(self.allocator, self.memory_pool, topic_name, .{});
-    //         errdefer topic.deinit();
-
-    //         try self.topics.put(topic_name, topic);
-    //     }
-
-    //     const subscriber_key = utils.generateKey(topic_name, conn.connection_id);
-
-    //     try topic.addSubscriber(subscriber_key, conn.connection_id);
-    //     errdefer _ = topic.removeSubscriber(subscriber_key);
-
-    //     // Add the subscriber_callback which is tied to this THIS subscriber
-    //     try self.subscriber_callbacks.put(subscriber_key, callback);
-    //     errdefer _ = self.subscriber_callbacks.remove(subscriber_key);
-
-    //     // try topic.subscribers.put(subscriber_key, callback);
-    //     // errdefer _ = topic.subscribers.remove(subscriber_key);
-
-    //     const subscribe_message = try self.memory_pool.create();
-    //     errdefer self.memory_pool.destroy(subscribe_message);
-
-    //     subscribe_message.* = Message.new();
-    //     subscribe_message.headers.message_type = .subscribe;
-    //     subscribe_message.setTransactionId(uuid.v7.new());
-    //     subscribe_message.setTopicName(topic_name);
-    //     subscribe_message.ref();
-    //     errdefer subscribe_message.deref();
-
-    //     {
-    //         self.connection_messages_mutex.lock();
-    //         defer self.connection_messages_mutex.unlock();
-
-    //         try self.connection_messages.append(conn.connection_id, subscribe_message);
-    //     }
-
-    //     {
-    //         self.transactions_mutex.lock();
-    //         defer self.transactions_mutex.unlock();
-
-    //         try self.transactions.put(subscribe_message.transactionId(), signal);
-    //     }
-
-    //     // register the callback to be executed when we receive a new message on the matching topic
-    //     _ = options;
-    // }
-
-    // pub fn unsubscribe(
-    //     self: *Self,
-    //     conn: *Connection,
-    //     signal: *Signal(*Message),
-    //     topic_name: []const u8,
-    //     // callback: Topic.SubscriptionCallback,
-    // ) !void {
-    //     // _ = callback;
-    //     if (self.topics.get(topic_name)) |topic| {
-    //         const subscriber_key = utils.generateKey(topic_name, conn.connection_id);
-    //         _ = topic.subscribers.remove(subscriber_key);
-    //     } else {
-    //         return error.NotSubscribed;
-    //     }
-
-    //     const unsubscribe_message = try self.memory_pool.create();
-    //     errdefer self.memory_pool.destroy(unsubscribe_message);
-
-    //     unsubscribe_message.* = Message.new();
-    //     unsubscribe_message.headers.message_type = .unsubscribe;
-    //     unsubscribe_message.setTransactionId(uuid.v7.new());
-    //     unsubscribe_message.setTopicName(topic_name);
-    //     unsubscribe_message.ref();
-    //     errdefer unsubscribe_message.deref();
-
-    //     {
-    //         self.connection_messages_mutex.lock();
-    //         defer self.connection_messages_mutex.unlock();
-
-    //         try self.connection_messages.append(conn.connection_id, unsubscribe_message);
-    //     }
-
-    //     {
-    //         self.transactions_mutex.lock();
-    //         defer self.transactions_mutex.unlock();
-
-    //         try self.transactions.put(unsubscribe_message.transactionId(), signal);
-    //     }
-    // }
-
-    // pub fn request(
-    //     self: *Self,
-    //     conn: *Connection,
-    //     signal: *Signal(*Message),
-    //     topic_name: []const u8,
-    //     body: []const u8,
-    //     options: RequestOptions,
-    // ) !void {
-    //     _ = options;
-    //     const req = try self.memory_pool.create();
-    //     errdefer self.memory_pool.destroy(req);
-
-    //     req.* = Message.new();
-    //     req.headers.message_type = .request;
-    //     req.setTransactionId(uuid.v7.new());
-    //     req.setTopicName(topic_name);
-    //     req.setBody(body);
-    //     req.ref();
-    //     errdefer req.deref();
-
-    //     {
-    //         self.connection_messages_mutex.lock();
-    //         defer self.connection_messages_mutex.unlock();
-
-    //         try self.connection_messages.append(conn.connection_id, req);
-    //     }
-
-    //     {
-    //         self.transactions_mutex.lock();
-    //         defer self.transactions_mutex.unlock();
-
-    //         try self.transactions.put(req.transactionId(), signal);
-    //     }
-    // }
-
-    // pub fn advertise(
-    //     self: *Self,
-    //     conn: *Connection,
-    //     signal: *Signal(*Message),
-    //     topic_name: []const u8,
-    //     callback: AdvertiserCallback,
-    //     options: AdvertiseOptions,
-    // ) !void {
-    //     assert(conn.connection_state == .connected);
-
-    //     self.services_mutex.lock();
-    //     defer self.services_mutex.unlock();
-
-    //     var service: *Service = undefined;
-    //     if (self.services.get(topic_name)) |s| {
-    //         service = s;
-    //     } else {
-    //         service = try self.allocator.create(Service);
-    //         errdefer self.allocator.destroy(service);
-
-    //         service.* = try Service.init(self.allocator, self.memory_pool, topic_name, .{});
-    //         errdefer service.deinit();
-
-    //         try self.services.put(topic_name, service);
-    //     }
-
-    //     const advertiser_key = utils.generateKey(topic_name, conn.connection_id);
-
-    //     try service.addAdvertiser(advertiser_key, conn.connection_id);
-    //     errdefer _ = service.removeAdvertiser(advertiser_key);
-
-    //     // Add the advertiser_callback which is tied to this THIS advertiser
-    //     try self.advertiser_callbacks.put(advertiser_key, callback);
-    //     errdefer _ = self.advertiser_callbacks.remove(advertiser_key);
-
-    //     const advertise_message = try self.memory_pool.create();
-    //     errdefer self.memory_pool.destroy(advertise_message);
-
-    //     advertise_message.* = Message.new();
-    //     advertise_message.headers.message_type = .advertise;
-    //     advertise_message.setTransactionId(uuid.v7.new());
-    //     advertise_message.setTopicName(topic_name);
-    //     advertise_message.ref();
-    //     errdefer advertise_message.deref();
-
-    //     {
-    //         self.connection_messages_mutex.lock();
-    //         defer self.connection_messages_mutex.unlock();
-
-    //         try self.connection_messages.append(conn.connection_id, advertise_message);
-    //     }
-
-    //     {
-    //         self.transactions_mutex.lock();
-    //         defer self.transactions_mutex.unlock();
-
-    //         try self.transactions.put(advertise_message.transactionId(), signal);
-    //     }
-
-    //     // register the callback to be executed when we receive a new message on the matching topic
-    //     _ = options;
-    // }
 };
 
 test "init/deinit" {

@@ -113,6 +113,7 @@ pub const Node = struct {
     state: NodeState,
     topics: std.StringHashMap(*Topic),
     workers: *std.AutoHashMap(usize, *Worker),
+    sessions: std.AutoHashMapUnmanaged(u64, *Session),
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
         if (config.validate()) |err_message| {
@@ -188,6 +189,7 @@ pub const Node = struct {
             .state = .closed,
             .topics = std.StringHashMap(*Topic).init(allocator),
             .workers = workers,
+            .sessions = .empty,
         };
     }
 
@@ -218,6 +220,13 @@ pub const Node = struct {
             const service = entry.*;
             service.deinit();
             self.allocator.destroy(service);
+        }
+
+        var sessions_iter = self.sessions.valueIterator();
+        while (sessions_iter.next()) |entry| {
+            const session = entry.*;
+            session.deinit(self.allocator);
+            self.allocator.destroy(session);
         }
 
         while (self.inbox.dequeue()) |envelope| {
@@ -1026,15 +1035,24 @@ pub const Node = struct {
         }
     }
 
-    pub fn createSession(self: *Self, session_id: u64, peer_id: u64, peer_type: PeerType) !Session {
+    pub fn createSession(self: *Self, peer_id: u64, peer_type: PeerType) !*Session {
         const session = try self.allocator.create(Session);
         errdefer self.allocator.destroy(session);
 
+        const session_id = self.kid.generate();
         session.* = try Session.init(self.allocator, session_id, peer_id, peer_type, .round_robin);
-        errdefer session.deinit();
+        errdefer session.deinit(self.allocator);
 
-        // TODO: FINISH THIS FUNCTION!!!
+        try self.sessions.put(self.allocator, session_id, session);
 
+        return session;
+    }
+
+    pub fn removeSession(self: *Self, session_id: u64) void {
+        if (self.sessions.get(session_id)) |session| {
+            session.deinit(self.allocator);
+            _ = self.sessions.remove(session_id);
+        }
     }
 };
 

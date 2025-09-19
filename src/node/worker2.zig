@@ -304,6 +304,10 @@ pub const Worker = struct {
     }
 
     fn handleSessionInit(self: *Self, conn: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+        }
         // Ensure only one handshake per connection
         const entry = self.handshakes.fetchRemove(conn.connection_id) orelse return error.HandshakeMissing;
 
@@ -318,13 +322,31 @@ pub const Worker = struct {
                 if (self.authenticate(handshake, message)) {
                     log.info("successfully authenticated", .{});
 
-                    // create a session
-                    // const session = try self.node.createSession(peer_id);
+                    const session_init = message.extension_headers.session_init;
 
-                    // reply.* = Message.new(0, .auth_success);
-                    // reply.ref();
-                    // errdefer reply.deref();
+                    const session = try self.node.createSession(session_init.peer_id, session_init.peer_type);
+                    errdefer self.node.removeSession(session.session_id);
 
+                    log.info("created session {any}", .{session});
+
+                    try session.addConnection(self.allocator, conn.connection_id);
+
+                    reply.* = Message.new(0, .auth_success);
+                    reply.ref();
+                    errdefer reply.deref();
+
+                    reply.extension_headers.auth_success.peer_id = session.peer_id;
+                    reply.extension_headers.auth_success.session_id = session.session_id;
+                    reply.setBody(session.session_token);
+
+                    try conn.outbox.enqueue(reply);
+                } else {
+                    reply.* = Message.new(0, .auth_failure);
+                    reply.ref();
+                    errdefer reply.deref();
+
+                    reply.extension_headers.auth_failure.error_code = .unauthorized;
+                    try conn.outbox.enqueue(reply);
                 }
             },
             else => @panic("unsupported challenge_method"),
