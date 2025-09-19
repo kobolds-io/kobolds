@@ -114,6 +114,7 @@ pub const Node = struct {
     topics: std.StringHashMap(*Topic),
     workers: *std.AutoHashMap(usize, *Worker),
     sessions: std.AutoHashMapUnmanaged(u64, *Session),
+    sessions_mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, config: NodeConfig) !Self {
         if (config.validate()) |err_message| {
@@ -190,6 +191,7 @@ pub const Node = struct {
             .topics = std.StringHashMap(*Topic).init(allocator),
             .workers = workers,
             .sessions = .empty,
+            .sessions_mutex = std.Thread.Mutex{},
         };
     }
 
@@ -357,6 +359,7 @@ pub const Node = struct {
     fn tick(self: *Self) !void {
         self.handlePrintingIntervalMetrics();
 
+        self.pruneEmptySessions();
         // try self.pruneDeadConnections();
         try self.maybeAddInboundConnections();
         try self.gatherMessages();
@@ -548,6 +551,26 @@ pub const Node = struct {
                     const connection_outbox = try self.findOrCreateConnectionOutbox(conn_id);
                     worker.outbox.concatenateAvailable(connection_outbox);
                 }
+            }
+        }
+    }
+
+    fn pruneEmptySessions(self: *Self) void {
+        self.sessions_mutex.lock();
+        defer self.sessions_mutex.unlock();
+
+        var sessions_iter = self.sessions.iterator();
+        while (sessions_iter.next()) |entry| {
+            const session_id = entry.key_ptr.*;
+            const session = entry.value_ptr.*;
+
+            if (session.connections.count() == 0) {
+                log.info("pruning empty session {}", .{session_id});
+                // we are going to remove this session
+                session.deinit(self.allocator);
+                self.allocator.destroy(session);
+
+                assert(self.sessions.remove(session_id));
             }
         }
     }
@@ -1036,6 +1059,9 @@ pub const Node = struct {
     }
 
     pub fn createSession(self: *Self, peer_id: u64, peer_type: PeerType) !*Session {
+        self.sessions_mutex.lock();
+        defer self.sessions_mutex.unlock();
+
         const session = try self.allocator.create(Session);
         errdefer self.allocator.destroy(session);
 
@@ -1049,10 +1075,34 @@ pub const Node = struct {
     }
 
     pub fn removeSession(self: *Self, session_id: u64) void {
+        self.sessions_mutex.lock();
+        defer self.sessions_mutex.unlock();
+
         if (self.sessions.get(session_id)) |session| {
             session.deinit(self.allocator);
             _ = self.sessions.remove(session_id);
         }
+    }
+
+    pub fn addConnectionToSession(self: *Self, session_id: u64, conn_id: u64) !void {
+        self.sessions_mutex.lock();
+        defer self.sessions_mutex.unlock();
+
+        if (self.sessions.get(session_id)) |session| {
+            try session.addConnection(self.allocator, conn_id);
+        } else {
+            return error.SessionNotFound;
+        }
+    }
+
+    pub fn removeConnectionFromSession(self: *Self, session_id: u64, conn_id: u64) bool {
+        self.sessions_mutex.lock();
+        defer self.sessions_mutex.unlock();
+
+        if (self.sessions.get(session_id)) |session| {
+            return session.removeConnection(conn_id);
+        }
+        return false;
     }
 };
 

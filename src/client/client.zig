@@ -396,8 +396,6 @@ pub const Client = struct {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
-        log.info("connectsion count {}", .{self.connections.count()});
-
         var connections_iter = self.connections.valueIterator();
         while (connections_iter.next()) |connection_entry| {
             const conn = connection_entry.*;

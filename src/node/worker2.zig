@@ -126,6 +126,7 @@ pub const Worker = struct {
         self.outbox.deinit();
         self.io.deinit();
         self.handshakes.deinit(self.allocator);
+        self.conn_session_map.deinit(self.allocator);
 
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
@@ -292,6 +293,11 @@ pub const Worker = struct {
 
         // try self.dead_connections.append(conn.connection_id);
 
+        // remove this connection from the session if there is one
+        if (self.conn_session_map.get(conn.connection_id)) |session_id| {
+            _ = self.node.removeConnectionFromSession(session_id, conn.connection_id);
+        }
+
         self.removeConnection(conn);
     }
 
@@ -338,6 +344,11 @@ pub const Worker = struct {
                     reply.extension_headers.auth_success.peer_id = session.peer_id;
                     reply.extension_headers.auth_success.session_id = session.session_id;
                     reply.setBody(session.session_token);
+
+                    try self.conn_session_map.put(self.allocator, conn.connection_id, session.session_id);
+                    errdefer _ = self.conn_session_map.remove(conn.connection_id);
+
+                    log.info("session created", .{});
 
                     try conn.outbox.enqueue(reply);
                 } else {
