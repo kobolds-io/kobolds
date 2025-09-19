@@ -59,7 +59,7 @@ pub const Session = struct {
 
         std.mem.writeInt(u64, salt[0..@sizeOf(u64)], peer_id, .big);
         i += @sizeOf(u64);
-        std.mem.writeInt(u64, salt[0..@sizeOf(u64)], session_id, .big);
+        std.mem.writeInt(u64, salt[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], session_id, .big);
         i += @sizeOf(u64);
 
         const token = Session.generateSessionToken256(&salt);
@@ -85,12 +85,13 @@ pub const Session = struct {
     }
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        self.connections.deinit(allocator);
         allocator.free(self.session_token);
 
         switch (self.load_balancer) {
             .round_robin => |*lb| lb.deinit(allocator),
         }
+
+        self.connections.deinit(allocator);
     }
 
     pub fn addConnection(self: *Self, allocator: std.mem.Allocator, conn_id: u64) !void {
