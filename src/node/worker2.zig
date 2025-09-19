@@ -223,6 +223,8 @@ pub const Worker = struct {
             while (conn.inbox.dequeue()) |message| {
                 switch (message.fixed_headers.message_type) {
                     .session_init => try self.handleSessionInit(conn, message),
+                    // TODO: .session_join
+
                     else => unreachable,
                 }
             }
