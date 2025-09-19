@@ -8,6 +8,7 @@ comptime {
     _ = @import("./node/authenticator.zig");
     _ = @import("./node/listener.zig");
     _ = @import("./node/node.zig");
+    _ = @import("./node/session.zig");
     _ = @import("./node/worker2.zig");
     _ = @import("./node/worker.zig");
     _ = @import("./protocol/connection2.zig");

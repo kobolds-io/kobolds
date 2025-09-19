@@ -39,6 +39,8 @@ const ConnectionMessages = @import("../data_structures/connection_messages.zig")
 // const Envelope = @import("../data_structures/envelope.zig").Envelope;
 const Envelope = @import("./envelope.zig").Envelope;
 
+const Session = @import("./session.zig").Session;
+
 const Authenticator = @import("./authenticator.zig").Authenticator;
 const AuthenticatorConfig = @import("./authenticator.zig").AuthenticatorConfig;
 

@@ -13,8 +13,15 @@ const Message = @import("../protocol/message.zig").Message;
 const Advertiser = @import("./advertiser.zig").Advertiser;
 const Requestor = @import("./requestor.zig").Requestor;
 const Transaction = @import("./transaction.zig").Transaction;
-const ServiceLoadBalancer = @import("./load_balancers.zig").ServiceLoadBalancer;
 const RoundRobinLoadBalancer = @import("./load_balancers.zig").RoundRobinLoadBalancer;
+
+pub const ServiceLoadBalancer = union(ServiceLoadBalancingStrategy) {
+    round_robin: RoundRobinLoadBalancer(u128),
+};
+
+pub const ServiceLoadBalancingStrategy = enum {
+    round_robin,
+};
 
 pub const ServiceOptions = struct {
     requests_queue_capacity: usize = constants.service_max_requests_queue_capacity,
@@ -61,7 +68,7 @@ pub const Service = struct {
             .replies_queue = replies_queue,
             .topic_name = topic_name,
             .transactions = std.AutoHashMap(u128, Transaction).init(allocator),
-            .load_balancing_strategy = ServiceLoadBalancer{ .round_robin = RoundRobinLoadBalancer.init(allocator) },
+            .load_balancing_strategy = ServiceLoadBalancer{ .round_robin = RoundRobinLoadBalancer(u128).init(allocator) },
         };
     }
 
@@ -93,7 +100,7 @@ pub const Service = struct {
         }
 
         switch (self.load_balancing_strategy) {
-            .round_robin => self.load_balancing_strategy.round_robin.deinit(),
+            .round_robin => self.load_balancing_strategy.round_robin.deinit(self.allocator),
         }
 
         self.advertisers.deinit();
@@ -235,7 +242,7 @@ pub const Service = struct {
 
         switch (self.load_balancing_strategy) {
             .round_robin => |*lb| {
-                try lb.keys.append(advertiser_key);
+                try lb.keys.append(self.allocator, advertiser_key);
                 errdefer _ = lb.keys.pop();
 
                 std.mem.sort(u128, lb.keys.items, {}, std.sort.asc(u128));

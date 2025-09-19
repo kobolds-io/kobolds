@@ -310,10 +310,21 @@ pub const Worker = struct {
         const handshake = entry.value;
         log.info("handshake {any}", .{handshake});
 
+        const reply = try self.node.memory_pool.create();
+        errdefer self.node.memory_pool.destroy(reply);
+
         switch (handshake.challenge_method) {
             .token => {
                 if (self.authenticate(handshake, message)) {
                     log.info("successfully authenticated", .{});
+
+                    // create a session
+                    // const session = try self.node.createSession(peer_id);
+
+                    // reply.* = Message.new(0, .auth_success);
+                    // reply.ref();
+                    // errdefer reply.deref();
+
                 }
             },
             else => @panic("unsupported challenge_method"),

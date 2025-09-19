@@ -8,6 +8,8 @@ const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 const hash = @import("../hash.zig");
 
+const PeerType = @import("./connection2.zig").PeerType;
+
 pub const ProtocolVersion = enum(u4) {
     unsupported,
     v1,
@@ -26,11 +28,6 @@ pub const ChallengeMethod = enum(u8) {
 pub const ChallengeAlgorithm = enum(u8) {
     unsupported,
     hmac256,
-};
-
-pub const PeerType = enum(u8) {
-    client,
-    node,
 };
 
 pub const MessageType = enum(u8) {
