@@ -749,9 +749,7 @@ pub const Node = struct {
                 defer listener.mutex.unlock();
 
                 while (listener.sockets.pop()) |socket| {
-                    try self.addInboundConnectionToNextWorker(socket, .{
-                        .peer_type = listener.config.peer_type,
-                    });
+                    try self.addInboundConnectionToNextWorker(socket, .{});
                 }
             }
         }

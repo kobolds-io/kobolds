@@ -9,7 +9,6 @@ const constants = @import("../constants.zig");
 
 const IO = @import("../io.zig").IO;
 
-const PeerType = @import("../protocol/connection2.zig").PeerType;
 const Transport = @import("../protocol/connection2.zig").Transport;
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 
@@ -35,7 +34,6 @@ pub const ListenerConfig = struct {
     host: []const u8 = "127.0.0.1",
     port: u16 = 8000,
     transport: Transport = .tcp,
-    peer_type: PeerType = .client,
     /// a list of hosts that are allowed to communicate with this node. If `null`, all are allowed
     allowed_inbound_connection_configs: ?[]const AllowedInboundConnectionConfig = null,
 };

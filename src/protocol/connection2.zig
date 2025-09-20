@@ -23,7 +23,6 @@ pub const InboundConnectionConfig = struct {
     host: []const u8 = "0.0.0.0",
     port: u16 = 0,
     transport: Transport = .tcp,
-    peer_type: PeerType = .client,
 };
 
 // TODO: a user should be able to provide a token/key for authentication to remotes

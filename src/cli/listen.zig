@@ -72,7 +72,6 @@ pub fn listen(host: []const u8, port: u16, worker_threads: usize) !void {
         .port = port,
         .transport = .tcp,
         .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
-        .peer_type = .client,
     };
     const listener_configs = [_]ListenerConfig{listener_config};
     node_config.listener_configs = &listener_configs;
