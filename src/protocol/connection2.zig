@@ -30,7 +30,6 @@ pub const OutboundConnectionConfig = struct {
     host: []const u8,
     port: u16,
     transport: Transport = .tcp,
-    peer_type: PeerType = .node,
     /// If `null`, no reconnection attempts will be performed.
     reconnect_config: ?ReconnectionConfig = null,
     /// If `null`, no keep alive messages will be performed.

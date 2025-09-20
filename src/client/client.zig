@@ -276,14 +276,21 @@ pub const Client = struct {
         _ = self.done_channel.receive();
     }
 
+    pub fn connect2(self: *Self, config: OutboundConnectionConfig, timeout_ns: i128) !void {
+        _ = self;
+        _ = timeout_ns;
+
+        if (config.validate()) |error_reason| {
+            log.err("invalid config: {s}", .{error_reason});
+            return error.InvalidConfig;
+        }
+    }
+
     pub fn connect(self: *Self, config: OutboundConnectionConfig, timeout_ns: i128) !*Connection {
         if (config.validate()) |msg| {
             log.err("{s}", .{msg});
             return error.InvalidConfig;
         }
-
-        // clients can only connect to nodes
-        assert(config.peer_type == .node);
 
         const conn = try self.addOutboundConnection(config);
         errdefer self.disconnect(conn);

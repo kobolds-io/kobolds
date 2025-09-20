@@ -83,7 +83,6 @@ fn listen(host: []const u8, port: u16, worker_threads: usize) !void {
         .host = "127.0.0.1",
         .port = 8006,
         .transport = .tcp,
-        .peer_type = .node,
         .reconnect_config = .{
             .enabled = true,
             .max_attempts = 0,
