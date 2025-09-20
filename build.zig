@@ -51,11 +51,11 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     const kid_mod = kid_dep.module("kid");
 
-    const cli_dep = b.dependency("cli", .{
+    const clap_dep = b.dependency("clap", .{
         .target = target,
         .optimize = optimize,
     });
-    const cli_mod = cli_dep.module("cli");
+    const clap_mod = clap_dep.module("clap");
 
     const uuid_dep = b.dependency("uuid", .{
         .target = target,
@@ -63,10 +63,10 @@ fn setupExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     const uuid_mod = uuid_dep.module("uuid");
 
-    kobolds_exe.root_module.addImport("cli", cli_mod);
     kobolds_exe.root_module.addImport("uuid", uuid_mod);
     kobolds_exe.root_module.addImport("stdx", stdx_mod);
     kobolds_exe.root_module.addImport("kid", kid_mod);
+    kobolds_exe.root_module.addImport("clap", clap_mod);
 
     b.installArtifact(kobolds_exe);
 
