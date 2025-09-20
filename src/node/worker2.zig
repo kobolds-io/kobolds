@@ -345,7 +345,6 @@ pub const Worker = struct {
         const entry = self.handshakes.fetchRemove(conn.connection_id) orelse return error.HandshakeMissing;
 
         const handshake = entry.value;
-        log.info("handshake {any}", .{handshake});
 
         const reply = try self.node.memory_pool.create();
         errdefer self.node.memory_pool.destroy(reply);
@@ -353,8 +352,6 @@ pub const Worker = struct {
         switch (handshake.challenge_method) {
             .token => {
                 if (self.authenticate(handshake, message)) {
-                    log.info("successfully authenticated", .{});
-
                     const session_init = message.extension_headers.session_init;
 
                     const session = try self.node.createSession(session_init.peer_id, session_init.peer_type);
@@ -373,8 +370,6 @@ pub const Worker = struct {
 
                     try self.conn_session_map.put(self.allocator, conn.connection_id, session.session_id);
                     errdefer _ = self.conn_session_map.remove(conn.connection_id);
-
-                    log.info("session created", .{});
 
                     try conn.outbox.enqueue(reply);
                 } else {
@@ -429,9 +424,6 @@ pub const Worker = struct {
         var hmac = HMAC.init(token);
         hmac.update(&nonce_buf);
         hmac.final(&out);
-
-        log.info("message_body {any}", .{challenge_payload});
-        log.info("expected HMAC {any}", .{out});
 
         return std.mem.eql(u8, challenge_payload, &out);
     }
