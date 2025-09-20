@@ -25,6 +25,16 @@ const AuthenticatorConfig = @import("../node/authenticator.zig").AuthenticatorCo
 const TokenEntry = @import("../node/authenticator.zig").TokenAuthStrategy.TokenEntry;
 const Signal = @import("stdx").Signal;
 
+const PublishConfig = struct {
+    topic_name: []const u8,
+    body: []const u8,
+};
+
+var publish_config = PublishConfig{
+    .topic_name = "",
+    .body = "",
+};
+
 var node_config = NodeConfig{
     .max_connections = 5,
     .authenticator_config = .{
@@ -73,12 +83,9 @@ var config = struct {
     port: u16 = undefined,
 }{};
 
-pub fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
+pub fn run(allocator: std.mem.Allocator) !void {
     var app_runner = try cli.AppRunner.init(allocator);
+    // defer app_runner.deinit();
 
     const version_root_command = cli.Command{
         .name = "version",
@@ -115,6 +122,37 @@ pub fn run() !void {
 
         .target = .{ .action = .{ .exec = nodeConnect } },
     };
+
+    const node_publish_command = cli.Command{
+        .name = "publish",
+        .description = cli.Description{
+            .one_line = "publish messages",
+            .detailed = "publish messages to a topic",
+        },
+
+        .options = &.{},
+
+        .target = .{
+            .action = .{
+                .exec = nodePublish,
+                .positional_args = .{
+                    .required = &.{
+                        .{
+                            .name = "topic_name",
+                            .help = "topic name to publish the message to",
+                            .value_ref = app_runner.mkRef(&publish_config.topic_name),
+                        },
+                        .{
+                            .name = "body",
+                            .help = "body of the publish message",
+                            .value_ref = app_runner.mkRef(&publish_config.body),
+                        },
+                    },
+                },
+            },
+        },
+    };
+
     const node_root_command = cli.Command{
         .name = "node",
         .description = cli.Description{ .one_line = "commands to control nodes" },
@@ -122,6 +160,7 @@ pub fn run() !void {
             .subcommands = &.{
                 node_listen_command,
                 node_connect_command,
+                node_publish_command,
             },
         },
     };
@@ -327,65 +366,67 @@ pub fn nodeConnect() !void {
 }
 
 pub fn nodePublish() !void {
+    log.info("publish_config {any}", .{publish_config});
+
     // creating a client to communicate with the node
-    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+    // var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+    // const allocator = gpa.allocator();
+    // defer _ = gpa.deinit();
 
-    const outbound_connection_config = OutboundConnectionConfig{
-        .host = "127.0.0.1",
-        .port = 8000,
-        .transport = .tcp,
-        .reconnect_config = .{
-            .enabled = true,
-            .max_attempts = 0,
-            .reconnection_strategy = .timed,
-        },
-        .keep_alive_config = .{
-            .enabled = true,
-            .interval_ms = 300,
-        },
-    };
+    // const outbound_connection_config = OutboundConnectionConfig{
+    //     .host = "127.0.0.1",
+    //     .port = 8000,
+    //     .transport = .tcp,
+    //     .reconnect_config = .{
+    //         .enabled = true,
+    //         .max_attempts = 0,
+    //         .reconnection_strategy = .timed,
+    //     },
+    //     .keep_alive_config = .{
+    //         .enabled = true,
+    //         .interval_ms = 300,
+    //     },
+    // };
 
-    var client = try Client.init(allocator, client_config);
-    defer client.deinit();
+    // var client = try Client.init(allocator, client_config);
+    // defer client.deinit();
 
-    try client.start();
-    defer client.close();
+    // try client.start();
+    // defer client.close();
 
-    var connections = std.array_list.Managed(*Connection).init(allocator);
-    defer connections.deinit();
+    // var connections = std.array_list.Managed(*Connection).init(allocator);
+    // defer connections.deinit();
 
-    const CONNECTION_COUNT = 20;
+    // const CONNECTION_COUNT = 20;
 
-    for (0..CONNECTION_COUNT) |_| {
-        const conn = try client.connect(outbound_connection_config, 10_000 * std.time.ns_per_ms);
-        errdefer client.disconnect(conn);
+    // for (0..CONNECTION_COUNT) |_| {
+    //     const conn = try client.connect(outbound_connection_config, 10_000 * std.time.ns_per_ms);
+    //     errdefer client.disconnect(conn);
 
-        try connections.append(conn);
-    }
-    defer {
-        for (connections.items) |conn| {
-            client.disconnect(conn);
-        }
-    }
+    //     try connections.append(conn);
+    // }
+    // defer {
+    //     for (connections.items) |conn| {
+    //         client.disconnect(conn);
+    //     }
+    // }
 
-    const topic_name = "/test";
-    const body = "";
+    // const topic_name = "/test";
+    // const body = "";
     // const body = "a" ** constants.message_max_body_size;
 
     registerSigintHandler();
 
-    while (!sigint_received) {
-        for (connections.items) |conn| {
-            client.publish(conn, topic_name, body, .{}) catch |err| {
-                log.err("error {any}", .{err});
-                std.Thread.sleep(10 * std.time.ns_per_ms);
-                continue;
-            };
-        }
-        // std.Thread.sleep(1 * std.time.ns_per_ms);
-    }
+    // while (!sigint_received) {
+    //     for (connections.items) |conn| {
+    //         client.publish(conn, topic_name, body, .{}) catch |err| {
+    //             log.err("error {any}", .{err});
+    //             std.Thread.sleep(10 * std.time.ns_per_ms);
+    //             continue;
+    //         };
+    //     }
+    //     // std.Thread.sleep(1 * std.time.ns_per_ms);
+    // }
 }
 
 var subscriber_msg_count: u64 = 0;
