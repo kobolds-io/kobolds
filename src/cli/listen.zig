@@ -47,7 +47,7 @@ pub fn ListenCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterato
     try listen(host, port, worker_threads);
 }
 
-pub fn listen(host: []const u8, port: u16, worker_threads: usize) !void {
+fn listen(host: []const u8, port: u16, worker_threads: usize) !void {
     // creating a client to communicate with the node
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();

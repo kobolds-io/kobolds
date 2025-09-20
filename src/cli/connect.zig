@@ -47,7 +47,7 @@ pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
     try connect(host, port, id, token);
 }
 
-pub fn connect(host: []const u8, port: u16, id: u11, token: []const u8) !void {
+fn connect(host: []const u8, port: u16, id: u11, token: []const u8) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
