@@ -583,12 +583,12 @@ pub const Client = struct {
 
         conn.protocol_state = .ready;
 
-        log.info("successfully authenticated peer_id: {}, conn_id: {}, session_id: {}, session_token: {any}", .{
-            peer_id,
-            conn.connection_id,
-            session_id,
-            message.body(),
-        });
+        // log.info("successfully authenticated peer_id: {}, conn_id: {}, session_id: {}, session_token: {any}", .{
+        //     peer_id,
+        //     conn.connection_id,
+        //     session_id,
+        //     message.body(),
+        // });
     }
 
     fn handleAuthChallengeMessage(self: *Self, conn: *Connection, message: *Message) !void {
@@ -613,13 +613,13 @@ pub const Client = struct {
         const session_message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(session_message);
 
-        session_message.* = Message.new(0, .session_init);
-        session_message.extension_headers.session_init.peer_type = .client;
-
         if (self.session) |session| {
             _ = session;
-            log.info("session already exists!!!!! can't join yet", .{});
+            @panic("session already exists!!!!! can't join yet");
         } else {
+            session_message.* = Message.new(0, .session_init);
+            session_message.extension_headers.session_init.peer_type = .client;
+
             switch (message.extension_headers.auth_challenge.challenge_method) {
                 .token => {
                     if (self.config.authentication_config.token_config) |token_config| {
@@ -639,8 +639,6 @@ pub const Client = struct {
                                 hmac.update(&nonce_slice);
                                 hmac.final(&out);
 
-                                log.info("out.len {} out {any}", .{ out.len, out });
-
                                 session_message.setBody(&out);
                             },
                             else => @panic("unimplemented algorithm"),
@@ -657,8 +655,6 @@ pub const Client = struct {
 
         session_message.ref();
         errdefer session_message.deref();
-
-        log.info("message! {any}", .{message.extension_headers.auth_challenge});
 
         try conn.outbox.enqueue(session_message);
     }

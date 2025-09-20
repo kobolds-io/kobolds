@@ -39,8 +39,6 @@ pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
         return clap.helpToFile(.stderr(), clap.Help, &params, .{});
     }
 
-    std.debug.print("args {any}\n", .{parsed_args.args});
-
     const host = parsed_args.args.host orelse "127.0.0.1";
     const port = parsed_args.args.port orelse 8000;
     const id = parsed_args.args.id orelse 0;

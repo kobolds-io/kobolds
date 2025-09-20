@@ -40,15 +40,9 @@ pub fn ListenCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterato
         return clap.helpToFile(.stderr(), clap.Help, &params, .{});
     }
 
-    std.debug.print("args {any}\n", .{parsed_args.args});
-
     const host = parsed_args.args.host orelse "127.0.0.1";
     const port = parsed_args.args.port orelse 8000;
     const worker_threads = parsed_args.args.@"worker-threads" orelse 3;
-
-    // std.debug.print("host = {s}\n", .{host});
-    // std.debug.print("port = {}\n", .{port});
-    // std.debug.print("worker-threads = {}\n", .{worker_threads});
 
     try listen(host, port, worker_threads);
 }
