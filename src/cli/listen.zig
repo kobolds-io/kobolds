@@ -1,5 +1,7 @@
 const std = @import("std");
 const clap = @import("clap");
+const signal_handler = @import("../signal_handler.zig");
+
 const Node = @import("../node/node.zig").Node;
 const NodeConfig = @import("../node/node.zig").NodeConfig;
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
@@ -65,22 +67,6 @@ pub fn listen(host: []const u8, port: u16, worker_threads: usize) !void {
     const allowed_inbound_connection_config = AllowedInboundConnectionConfig{ .host = "0.0.0.0" };
     const allowed_inbound_connection_configs = [_]AllowedInboundConnectionConfig{allowed_inbound_connection_config};
 
-    // const client_listener_config = ListenerConfig{
-    //     .host = "127.0.0.1",
-    //     .port = 8000,
-    //     .transport = .tcp,
-    //     .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
-    //     .peer_type = .client,
-    // };
-
-    // const node_listener_config = ListenerConfig{
-    //     .host = "127.0.0.1",
-    //     .port = 8001,
-    //     .transport = .tcp,
-    //     .allowed_inbound_connection_configs = &allowed_inbound_connection_configs,
-    //     .peer_type = .node,
-    // };
-
     const listener_config = ListenerConfig{
         .host = host,
         .port = port,
@@ -112,9 +98,9 @@ pub fn listen(host: []const u8, port: u16, worker_threads: usize) !void {
     try node.start();
     defer node.close();
 
-    // registerSigintHandler();
+    signal_handler.registerSigintHandler();
 
-    // while (!sigint_received) {
-    //     std.Thread.sleep(1 * std.time.ns_per_ms);
-    // }
+    while (!signal_handler.sigint_triggered) {
+        std.Thread.sleep(1 * std.time.ns_per_ms);
+    }
 }
