@@ -771,6 +771,12 @@ pub const Client = struct {
     }
 };
 
+pub const ConnectionPool = struct {
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
+};
+
 test "init/deinit" {
     const allocator = testing.allocator;
 
