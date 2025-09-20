@@ -61,6 +61,15 @@ pub fn listen(host: []const u8, port: u16, worker_threads: usize) !void {
 
     var node_config = NodeConfig{
         .worker_threads = worker_threads,
+        .authenticator_config = .{
+            .token = .{
+                .clients = &.{
+                    .{ .id = 10, .token = "asdf" }, // for now these are hardcoded
+                    .{ .id = 11, .token = "asdf" },
+                },
+                .nodes = &.{},
+            },
+        },
     };
 
     // This is just a test used to whitelist a certain inbound connection origins
