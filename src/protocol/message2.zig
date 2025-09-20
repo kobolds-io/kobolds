@@ -32,13 +32,13 @@ pub const ChallengeAlgorithm = enum(u8) {
 
 pub const MessageType = enum(u8) {
     undefined,
-    publish,
-    subscribe,
     auth_challenge,
     session_init,
     session_join,
     auth_failure,
     auth_success,
+    publish,
+    subscribe,
 };
 
 pub const ErrorCode = enum(u8) {
@@ -310,13 +310,13 @@ pub const Message = struct {
     pub fn validate(self: Self) ?[]const u8 {
         if (self.fixed_headers.validate()) |e| return e;
         switch (self.extension_headers) {
-            .publish => |headers| if (headers.validate()) |e| return e,
-            .subscribe => |headers| if (headers.validate()) |e| return e,
             .auth_challenge => |headers| if (headers.validate()) |e| return e,
             .session_init => |headers| if (headers.validate()) |e| return e,
             .session_join => |headers| if (headers.validate()) |e| return e,
             .auth_failure => |headers| if (headers.validate()) |e| return e,
             .auth_success => |headers| if (headers.validate()) |e| return e,
+            .publish => |headers| if (headers.validate()) |e| return e,
+            .subscribe => |headers| if (headers.validate()) |e| return e,
             else => return "invalid headers",
         }
 
@@ -374,13 +374,13 @@ pub const FixedHeaders = packed struct {
 
         const message_type: MessageType = switch (data[i]) {
             0 => .undefined,
-            1 => .publish,
-            2 => .subscribe,
-            3 => .auth_challenge,
-            4 => .session_init,
-            5 => .session_join,
-            6 => .auth_failure,
-            7 => .auth_success,
+            1 => .auth_challenge,
+            2 => .session_init,
+            3 => .session_join,
+            4 => .auth_failure,
+            5 => .auth_success,
+            6 => .publish,
+            7 => .subscribe,
             else => return error.InvalidMessageType,
         };
         i += 1;
@@ -418,13 +418,13 @@ pub const FixedHeaders = packed struct {
 pub const ExtensionHeaders = union(MessageType) {
     const Self = @This();
     undefined: void,
-    publish: PublishHeaders,
-    subscribe: SubscribeHeaders,
     auth_challenge: AuthChallengeHeaders,
     session_init: SessionInitHeaders,
     session_join: SessionJoinHeaders,
     auth_failure: AuthFailureHeaders,
     auth_success: AuthSuccessHeaders,
+    publish: PublishHeaders,
+    subscribe: SubscribeHeaders,
 
     pub fn packedSize(self: *const Self) usize {
         return switch (self.*) {
@@ -448,14 +448,6 @@ pub const ExtensionHeaders = union(MessageType) {
     pub fn fromBytes(message_type: MessageType, data: []const u8) !Self {
         return switch (message_type) {
             .undefined => ExtensionHeaders{ .undefined = {} },
-            .publish => blk: {
-                const headers = try PublishHeaders.fromBytes(data);
-                break :blk ExtensionHeaders{ .publish = headers };
-            },
-            .subscribe => blk: {
-                const headers = try SubscribeHeaders.fromBytes(data);
-                break :blk ExtensionHeaders{ .subscribe = headers };
-            },
             .auth_challenge => blk: {
                 const headers = try AuthChallengeHeaders.fromBytes(data);
                 break :blk ExtensionHeaders{ .auth_challenge = headers };
@@ -475,6 +467,14 @@ pub const ExtensionHeaders = union(MessageType) {
             .auth_success => blk: {
                 const headers = try AuthSuccessHeaders.fromBytes(data);
                 break :blk ExtensionHeaders{ .auth_success = headers };
+            },
+            .publish => blk: {
+                const headers = try PublishHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .publish = headers };
+            },
+            .subscribe => blk: {
+                const headers = try SubscribeHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .subscribe = headers };
             },
         };
     }
