@@ -364,8 +364,8 @@ pub const Node = struct {
         try self.maybeAddInboundConnections();
         try self.gatherMessages();
         try self.processMessages();
-        try self.aggregateMessages();
-        try self.distributeMessages();
+        // try self.aggregateMessages();
+        // try self.distributeMessages();
     }
 
     fn handlePrintingIntervalMetrics(self: *Self) void {
@@ -409,48 +409,54 @@ pub const Node = struct {
     }
 
     fn processMessages(self: *Self) !void {
-        _ = self;
-        // // There should only be `n` messages processed every tick
-        // const max_messages_processed_per_tick: usize = 50_000;
+        // There should only be `n` messages processed every tick
+        // const max_messages_processed_per_tick: usize = 100_000;
         // var i: usize = 0;
         // while (i < max_messages_processed_per_tick) : (i += 1) {
-        //     if (self.inbox.dequeue()) |message| {
-        //         assert(message.refs() == 1);
-        //         defer {
-        //             _ = self.metrics.messages_processed.fetchAdd(1, .seq_cst);
-        //             self.metrics.bytes_processed += @intCast(message.size());
-        //             message.deref();
-        //             if (message.refs() == 0) self.memory_pool.destroy(message);
-        //         }
+        while (self.inbox.dequeue()) |envelope| {
+            assert(envelope.message.refs() == 1);
+            defer {
+                _ = self.metrics.messages_processed.fetchAdd(1, .seq_cst);
+                self.metrics.bytes_processed += @intCast(envelope.message.packedSize());
+                envelope.message.deref();
+                if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+            }
 
-        //         switch (message.headers.message_type) {
-        //             .publish => try self.handlePublish(message),
-        //             .subscribe => try self.handleSubscribe(message),
-        //             .advertise => try self.handleAdvertise(message),
-        //             .unadvertise => try self.handleUnadvertise(message),
-        //             .request => try self.handleRequest(message),
-        //             .reply => try self.handleReply(message),
-        //             .ping => try self.handlePing(message),
-        //             .pong => try self.handlePong(message),
-        //             else => |t| {
-        //                 log.err("received unhandled message type {any}", .{t});
-        //                 @panic("unhandled message!");
-        //             },
-        //         }
-        //     } else break;
-        // }
+            // ensure that the message
+            switch (envelope.message.fixed_headers.message_type) {
+                .publish => try self.handlePublish(envelope),
+                else => {},
+            }
 
-        // var topics_iter = self.topics.valueIterator();
-        // while (topics_iter.next()) |topic_entry| {
-        //     const topic = topic_entry.*;
-        //     try topic.tick();
-        // }
+            // switch (message.headers.message_type) {
+            //     .publish => try self.handlePublish(message),
+            //     .subscribe => try self.handleSubscribe(message),
+            //     .advertise => try self.handleAdvertise(message),
+            //     .unadvertise => try self.handleUnadvertise(message),
+            //     .request => try self.handleRequest(message),
+            //     .reply => try self.handleReply(message),
+            //     .ping => try self.handlePing(message),
+            //     .pong => try self.handlePong(message),
+            //     else => |t| {
+            //         log.err("received unhandled message type {any}", .{t});
+            //         @panic("unhandled message!");
+            //     },
+            // }
+            // } else break;
+            // }
 
-        // var services_iter = self.services.valueIterator();
-        // while (services_iter.next()) |service_entry| {
-        //     const service = service_entry.*;
-        //     try service.tick();
-        // }
+            // var topics_iter = self.topics.valueIterator();
+            // while (topics_iter.next()) |topic_entry| {
+            //     const topic = topic_entry.*;
+            //     try topic.tick();
+            // }
+
+            // var services_iter = self.services.valueIterator();
+            // while (services_iter.next()) |service_entry| {
+            //     const service = service_entry.*;
+            //     try service.tick();
+            // }
+        }
     }
 
     fn aggregateMessages(self: *Self) !void {
@@ -809,20 +815,26 @@ pub const Node = struct {
         try worker.addOutboundConnection(config);
     }
 
-    fn handlePublish(self: *Self, message: *Message) !void {
-        assert(message.refs() == 1);
-        // Publishes actually don't care about the origin of the message so much. Instead, they care much more about
-        // the destination of the mssage. The topic is in charge of distributing messages to subscribers. Subscribers
-        // are in charge of attaching metadata as to the destination of the message
-        const topic = try self.findOrCreateTopic(message.topicName(), .{});
-        if (topic.queue.available() == 0) {
-            // Try and push messages to subscribers to free up slots in the topic
-            try topic.tick();
-        }
+    fn handlePublish(self: *Self, envelope: Envelope) !void {
+        assert(envelope.message.refs() == 1);
 
-        message.ref();
-        topic.queue.enqueue(message) catch message.deref();
+        _ = self;
     }
+
+    // fn handlePublish(self: *Self, message: *Message) !void {
+    //     assert(message.refs() == 1);
+    //     // Publishes actually don't care about the origin of the message so much. Instead, they care much more about
+    //     // the destination of the mssage. The topic is in charge of distributing messages to subscribers. Subscribers
+    //     // are in charge of attaching metadata as to the destination of the message
+    //     const topic = try self.findOrCreateTopic(message.topicName(), .{});
+    //     if (topic.queue.available() == 0) {
+    //         // Try and push messages to subscribers to free up slots in the topic
+    //         try topic.tick();
+    //     }
+
+    //     message.ref();
+    //     topic.queue.enqueue(message) catch message.deref();
+    // }
 
     fn handleSubscribe(self: *Self, message: *Message) !void {
         const reply = try self.memory_pool.create();

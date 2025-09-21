@@ -405,6 +405,68 @@ pub const Connection = struct {
         }
     }
 
+    fn processInboundMessages2(self: *Self) void {
+        assert(!self.recv_submitted);
+
+        // self.bytes_recv += bytes;
+        self.metrics.bytes_recv_total += self.recv_bytes;
+        defer self.recv_bytes = 0;
+
+        const parsed_count = self.parser.parse(
+            &self.messages_buffer,
+            self.recv_buffer[0..self.recv_bytes],
+        ) catch unreachable;
+
+        if (parsed_count == 0) return;
+
+        self.metrics.messages_recv_total += parsed_count;
+
+        const parsed_messages = self.messages_buffer[0..parsed_count];
+
+        // Validate messages
+        for (parsed_messages) |message| {
+            if (message.validate()) |reason| {
+                self.connection_state = .closing;
+                log.err("invalid message: {s}", .{reason});
+                return;
+            }
+        }
+
+        const message_ptrs = self.memory_pool.createN(self.allocator, parsed_count) catch |err| {
+            log.err("inbox memory_pool.createN() returned err: {any}", .{err});
+            return;
+        };
+        defer self.allocator.free(message_ptrs);
+
+        if (message_ptrs.len != parsed_count) {
+            log.err("not enough node ptrs {d} for parsed_messages {d}", .{
+                message_ptrs.len,
+                parsed_count,
+            });
+            for (message_ptrs) |message_ptr| {
+                self.memory_pool.destroy(message_ptr);
+            }
+            return;
+        }
+
+        for (message_ptrs, parsed_messages) |message_ptr, message| {
+            message_ptr.* = message;
+            message_ptr.ref();
+
+            // NOTE: this is kind of redundent because the memory_pool should be handling this
+            assert(message_ptr.refs() == 1);
+        }
+
+        const n = self.inbox.enqueueMany(message_ptrs);
+        if (n < message_ptrs.len) {
+            log.err("could not enqueue all message ptrs. dropping {d} messages", .{message_ptrs[n..].len});
+            for (message_ptrs[n..]) |message_ptr| {
+                message_ptr.deref();
+                self.memory_pool.destroy(message_ptr);
+            }
+        }
+    }
+
     fn processInboundMessages(self: *Self) void {
         assert(!self.recv_submitted);
 
@@ -426,9 +488,14 @@ pub const Connection = struct {
                 &self.messages_buffer,
                 self.recv_buffer[recv_buffer_index .. recv_buffer_index + bytes_to_process],
             ) catch unreachable;
+
             recv_buffer_index += bytes_to_process;
 
-            if (parsed_count == 0) return;
+            if (parsed_count == 0) {
+                log.info("bytes left in buffer {}", .{self.parser.buffer.items.len});
+
+                return;
+            }
 
             self.metrics.messages_recv_total += parsed_count;
 

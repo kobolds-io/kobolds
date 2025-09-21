@@ -125,7 +125,9 @@ fn publish(args: PublishArgs) !void {
             if (signal_handler.sigint_triggered) return;
             next_deadline += period_ns;
 
-            try client.publish(args.topic_name, args.body, .{});
+            client.publish(args.topic_name, args.body, .{}) catch {
+                std.Thread.sleep(100 * std.time.ns_per_ms);
+            };
 
             const now = std.time.nanoTimestamp();
             if (next_deadline > now) {
