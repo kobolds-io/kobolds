@@ -10,11 +10,12 @@ pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
 
     // The parameters for the subcommand.
     const params = comptime clap.parseParamsComptime(
-        \\-h, --help                Display this help and exit.
-        \\-H, --host    <host>      Node host (default 127.0.0.1)
-        \\-p, --port    <port>      Node port (default 8000)
-        \\-i, --id      <id>        id of the client (default: 0) 
-        \\-t, --token    <token>     authentication token (default: ""),
+        \\-h, --help                             Display this help and exit.
+        \\-H, --host    <host>                   Node host (default 127.0.0.1)
+        \\-p, --port    <port>                   Node port (default 8000)
+        \\-i, --id      <id>                     id of the client (default: 0) 
+        \\-t, --token    <token>                 Authentication token (default: ""),
+        \\--max-connections <max_connections>    Maximum number of connections to open (default: 1)
     );
 
     const listen_parsers = .{
@@ -22,6 +23,7 @@ pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
         .port = clap.parsers.int(u16, 10),
         .id = clap.parsers.int(u11, 10),
         .token = clap.parsers.string,
+        .max_connections = clap.parsers.int(u16, 10),
     };
 
     // Here we pass the partially parsed argument iterator.
@@ -43,16 +45,18 @@ pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
     const port = parsed_args.args.port orelse 8000;
     const id = parsed_args.args.id orelse 0;
     const token = parsed_args.args.token orelse "";
+    const max_connections = parsed_args.args.@"max-connections" orelse 1;
 
-    try connect(host, port, id, token);
+    try connect(host, port, id, token, max_connections);
 }
 
-fn connect(host: []const u8, port: u16, id: u11, token: []const u8) !void {
+fn connect(host: []const u8, port: u16, id: u11, token: []const u8, max_connections: u16) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
     const client_config = ClientConfig{
+        .max_connections = max_connections,
         .authentication_config = .{
             .token_config = .{
                 .id = id,
@@ -83,7 +87,10 @@ fn connect(host: []const u8, port: u16, id: u11, token: []const u8) !void {
         },
     };
 
-    try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
+    // const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
+    // defer client.disconnect(conn);
+
+    try client.connect2(outbound_connection_config, 5_000 * std.time.ns_per_ms);
 
     signal_handler.registerSigintHandler();
 

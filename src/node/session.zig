@@ -45,8 +45,6 @@ pub const Session = struct {
     // metadata: Metadata, // Optional client-provided metadata
     load_balancer: LoadBalancer(u64),
 
-    // QUESTION: do i need a mutex for adding/removing connections??
-
     pub fn init(
         allocator: std.mem.Allocator,
         session_id: u64,

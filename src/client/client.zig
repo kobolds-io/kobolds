@@ -50,7 +50,7 @@ pub const TokenAuthConfig = struct {
 };
 
 pub const ClientConfig = struct {
-    max_connections: u16 = 100,
+    max_connections: u16 = 1,
     memory_pool_capacity: usize = 10_000,
     authentication_config: AuthenticationConfig = .{},
 };
@@ -89,6 +89,7 @@ pub const Client = struct {
     inbox: *RingBuffer(*Message),
     inbox_mutex: std.Thread.Mutex,
     session: ?*Session = null,
+    session_mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, config: ClientConfig) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -147,6 +148,7 @@ pub const Client = struct {
             .inbox = inbox,
             .inbox_mutex = std.Thread.Mutex{},
             .session = null,
+            .session_mutex = std.Thread.Mutex{},
         };
     }
 
@@ -276,14 +278,33 @@ pub const Client = struct {
         _ = self.done_channel.receive();
     }
 
+    /// initialize a session with the node. The client will handle scaling connections up to the maximum
     pub fn connect2(self: *Self, config: OutboundConnectionConfig, timeout_ns: i128) !void {
-        _ = self;
         _ = timeout_ns;
 
         if (config.validate()) |error_reason| {
             log.err("invalid config: {s}", .{error_reason});
             return error.InvalidConfig;
         }
+
+        if (self.session) |session| {
+            self.session_mutex.lock();
+            defer self.session_mutex.unlock();
+
+            // we already have a session with an active connection, we should do nothing.
+            if (session.connections.count() > 0) return;
+
+            // we are in a transition state where the session hasn't been deinitialized. Let's do that now.
+            session.deinit(self.allocator);
+            self.allocator.destroy(session);
+            self.session = null;
+        }
+
+        // self.connections_mutex.lock();
+        // defer self.connections_mutex.unlock();
+
+        // Try to create a session!
+
     }
 
     pub fn connect(self: *Self, config: OutboundConnectionConfig, timeout_ns: i128) !*Connection {
@@ -425,6 +446,7 @@ pub const Client = struct {
                 switch (message.fixed_headers.message_type) {
                     .auth_challenge => try self.handleAuthChallengeMessage(conn, message),
                     .auth_success => try self.handleAuthSuccessMessage(conn, message),
+                    .auth_failure => try self.handleAuthFailureMessage(conn, message),
                     else => unreachable,
                 }
             }
@@ -589,13 +611,21 @@ pub const Client = struct {
         self.session = session;
 
         conn.protocol_state = .ready;
+    }
 
-        // log.info("successfully authenticated peer_id: {}, conn_id: {}, session_id: {}, session_token: {any}", .{
-        //     peer_id,
-        //     conn.connection_id,
-        //     session_id,
-        //     message.body(),
-        // });
+    fn handleAuthFailureMessage(self: *Self, conn: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        log.info("auth failure: {any}, closing connection {}", .{
+            message.extension_headers.auth_failure.error_code,
+            conn.connection_id,
+        });
+
+        conn.connection_state = .closing;
+        conn.protocol_state = .terminating;
     }
 
     fn handleAuthChallengeMessage(self: *Self, conn: *Connection, message: *Message) !void {
