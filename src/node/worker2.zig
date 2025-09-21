@@ -58,7 +58,6 @@ pub const Worker = struct {
     state: WorkerState,
     conn_session_map: std.AutoHashMapUnmanaged(u64, u64),
     handshakes: std.AutoHashMapUnmanaged(u64, Handshake),
-    // uninitialized_connections: std.AutoHashMap(u64, *Connection),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -214,9 +213,7 @@ pub const Worker = struct {
 
     pub fn tick(self: *Self) !void {
         try self.tickConnections();
-        // try self.tickUninitializedConnections();
         try self.processInboundConnectionMessages();
-        // try self.processUninitializedConnectionMessages();
         // try self.processOutboundConnectionMessages();
 
     }
@@ -251,14 +248,37 @@ pub const Worker = struct {
         var connections_iter = self.connections.iterator();
         while (connections_iter.next()) |entry| {
             const conn = entry.value_ptr.*;
+            const session_id_opt = self.conn_session_map.get(conn.connection_id);
 
             while (conn.inbox.dequeue()) |message| {
                 switch (message.fixed_headers.message_type) {
                     .session_init => try self.handleSessionInit(conn, message),
                     .session_join => try self.handleSessionJoin(conn, message),
-                    // TODO: .session_join
+                    else => {
+                        if (session_id_opt) |session_id| {
+                            const envelope = Envelope{
+                                .message = message,
+                                .session_id = session_id,
+                                .conn_id = conn.connection_id,
+                            };
 
-                    else => unreachable,
+                            self.inbox_mutex.lock();
+                            defer self.inbox_mutex.unlock();
+
+                            self.inbox.enqueue(envelope) catch |err| {
+                                log.err("could not enqueue message: {any}", .{err});
+                                conn.inbox.prepend(message) catch unreachable;
+                            };
+                        } else {
+                            // message was received but is not associated with a session. Dropping this message
+                            defer {
+                                message.deref();
+                                self.node.memory_pool.destroy(message);
+                            }
+
+                            log.warn("connection {} is not associated with session", .{conn.connection_id});
+                        }
+                    },
                 }
             }
         }
@@ -284,6 +304,7 @@ pub const Worker = struct {
         errdefer conn.deinit();
 
         conn.connection_state = .connected;
+        errdefer conn.connection_state = .closing;
         errdefer conn.protocol_state = .terminating;
 
         self.connections_mutex.lock();
@@ -338,6 +359,27 @@ pub const Worker = struct {
         self.allocator.destroy(conn);
     }
 
+    // fn handlePublish(self: *Self, conn: *Connection, message: *Message) !void {
+    //     defer {
+    //         message.deref();
+    //         if (message.refs() == 0) self.node.memory_pool.destroy(message);
+    //     }
+
+    //     if (self.conn_session_map.get(conn.connection_id)) |session_id| {
+    //         const envelope = Envelope{
+    //             .session_id = session_id,
+    //             .message = message,
+    //             .conn_id = conn.connection_id,
+    //         };
+
+    //         try self.
+    //     } else {
+    //         log.warn("published message is not associated with a session. dropping message {}", .{
+    //             message.extension_headers.publish.message_id,
+    //         });
+    //     }
+    // }
+
     fn handleSessionInit(self: *Self, conn: *Connection, message: *Message) !void {
         defer {
             message.deref();
@@ -354,6 +396,8 @@ pub const Worker = struct {
         switch (handshake.challenge_method) {
             .token => {
                 if (self.authenticate(handshake, message)) {
+                    conn.protocol_state = .ready;
+
                     log.info("successfully authenticated (creating session)!", .{});
                     const session_init = message.extension_headers.session_init;
 
@@ -376,6 +420,8 @@ pub const Worker = struct {
 
                     try conn.outbox.enqueue(reply);
                 } else {
+                    conn.protocol_state = .terminating;
+
                     reply.* = Message.new(0, .auth_failure);
                     reply.ref();
                     errdefer reply.deref();
@@ -405,6 +451,8 @@ pub const Worker = struct {
             .token => {
                 if (self.authenticateWithSession(handshake, message)) {
                     log.info("successfully authenticated (joining session)!", .{});
+
+                    conn.protocol_state = .ready;
                     const session_join_headers = message.extension_headers.session_join;
 
                     try self.node.addConnectionToSession(session_join_headers.session_id, conn);
@@ -423,6 +471,9 @@ pub const Worker = struct {
                     try conn.outbox.enqueue(reply);
                 } else {
                     log.info("authentication unsuccessful", .{});
+
+                    conn.protocol_state = .terminating;
+
                     reply.* = Message.new(0, .auth_failure);
                     reply.ref();
                     errdefer reply.deref();

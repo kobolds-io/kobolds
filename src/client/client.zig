@@ -653,6 +653,47 @@ pub const Client = struct {
         );
         conn.connect_submitted = true;
     }
+
+    pub fn isConnected(self: *Self) bool {
+        self.session_mutex.lock();
+        defer self.session_mutex.unlock();
+
+        if (self.session) |session| {
+            var connections_iter = session.connections.valueIterator();
+            while (connections_iter.next()) |entry| {
+                const conn = entry.*;
+                if (conn.connection_state == .connected and conn.protocol_state == .ready) return true;
+            }
+
+            return false;
+        } else return false;
+    }
+
+    pub fn publish(self: *Self, topic_name: []const u8, body: []const u8, _: PublishOptions) !void {
+        if (!self.isConnected()) return error.NotConnected;
+
+        const message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(message);
+
+        message.* = Message.new(self.kid.generate(), .publish);
+        message.ref();
+        errdefer message.deref();
+
+        message.setTopicName(topic_name);
+        message.setBody(body);
+
+        // at this point we just need to lock everything together
+        self.session_mutex.lock();
+        defer self.session_mutex.unlock();
+
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        const session = self.session.?;
+        const conn = session.getNextConnection();
+
+        try conn.outbox.enqueue(message);
+    }
 };
 
 test "init/deinit" {

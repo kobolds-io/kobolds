@@ -74,27 +74,6 @@ fn connect(host: []const u8, port: u16, client_id: u11, token: []const u8, max_c
     try client.start();
     defer client.close();
 
-    // const outbound_connection_config = OutboundConnectionConfig{
-    //     .host = host,
-    //     .port = port,
-    //     .transport = .tcp,
-
-    //     .reconnect_config = .{
-    //         .enabled = false,
-    //         .max_attempts = 0,
-    //         .reconnection_strategy = .timed,
-    //     },
-    //     .keep_alive_config = .{
-    //         .enabled = true,
-    //         .interval_ms = 300,
-    //     },
-    // };
-
-    // const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
-    // defer client.disconnect(conn);
-
-    // try client.connect2(5_000 * std.time.ns_per_ms);
-
     signal_handler.registerSigintHandler();
 
     while (!signal_handler.sigint_triggered) {
