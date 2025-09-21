@@ -583,7 +583,7 @@ pub const Client = struct {
         assert(session.session_token.len == message.fixed_headers.body_length);
         @memcpy(session.session_token, message.body());
 
-        try session.addConnection(self.allocator, conn.connection_id);
+        try session.addConnection(self.allocator, conn);
         errdefer session.removeConnection(conn.connection_id);
 
         self.session = session;
@@ -769,12 +769,6 @@ pub const Client = struct {
 
         return conn;
     }
-};
-
-pub const ConnectionPool = struct {
-    const Self = @This();
-
-    allocator: std.mem.Allocator,
 };
 
 test "init/deinit" {

@@ -71,6 +71,7 @@ fn connect(host: []const u8, port: u16, id: u11, token: []const u8) !void {
         .host = host,
         .port = port,
         .transport = .tcp,
+
         .reconnect_config = .{
             .enabled = false,
             .max_attempts = 0,
@@ -82,8 +83,7 @@ fn connect(host: []const u8, port: u16, id: u11, token: []const u8) !void {
         },
     };
 
-    const conn = try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
-    defer client.disconnect(conn);
+    try client.connect(outbound_connection_config, 5_000 * std.time.ns_per_ms);
 
     signal_handler.registerSigintHandler();
 

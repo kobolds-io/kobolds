@@ -357,7 +357,7 @@ pub const Worker = struct {
                     const session = try self.node.createSession(session_init.peer_id, session_init.peer_type);
                     errdefer self.node.removeSession(session.session_id);
 
-                    try self.node.addConnectionToSession(session.session_id, conn.connection_id);
+                    try self.node.addConnectionToSession(session.session_id, conn);
                     errdefer _ = self.node.removeConnectionFromSession(session.session_id, conn.connection_id);
 
                     reply.* = Message.new(0, .auth_success);

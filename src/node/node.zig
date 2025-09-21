@@ -1082,12 +1082,12 @@ pub const Node = struct {
         }
     }
 
-    pub fn addConnectionToSession(self: *Self, session_id: u64, conn_id: u64) !void {
+    pub fn addConnectionToSession(self: *Self, session_id: u64, conn: *Connection) !void {
         self.sessions_mutex.lock();
         defer self.sessions_mutex.unlock();
 
         if (self.sessions.get(session_id)) |session| {
-            try session.addConnection(self.allocator, conn_id);
+            try session.addConnection(self.allocator, conn);
         } else {
             return error.SessionNotFound;
         }

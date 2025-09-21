@@ -1,17 +1,20 @@
 const std = @import("std");
+const posix = std.posix;
 const testing = std.testing;
 const assert = std.debug.assert;
 
+const KID = @import("kid").KID;
+const IO = @import("../io.zig").IO;
+
+const MemoryPool = @import("stdx").MemoryPool;
+
+const Message = @import("../protocol/message2.zig").Message;
 const PeerType = @import("../protocol/connection2.zig").PeerType;
-const RoundRobinLoadBalancer = @import("../services/load_balancers.zig").RoundRobinLoadBalancer;
+const Connection = @import("../protocol/connection2.zig").Connection;
 
-pub const SessionLoadBalancer = union(SessionLoadBalancingStrategy) {
-    round_robin: RoundRobinLoadBalancer(u64),
-};
-
-pub const SessionLoadBalancingStrategy = enum {
-    round_robin,
-};
+const LoadBalancer = @import("../load_balancers/load_balancer.zig").LoadBalancer;
+const LoadBalancerStrategy = @import("../load_balancers/load_balancer.zig").LoadBalancerStrategy;
+const RoundRobin = @import("../load_balancers/load_balancer.zig").RoundRobin;
 
 pub const Session = struct {
     const Self = @This();
@@ -28,7 +31,7 @@ pub const Session = struct {
     // id_seed: u64, // Assigned seed for peer-local ID generation
 
     // Connection management
-    connections: std.AutoHashMapUnmanaged(u64, void), // Active TCP connections under this session
+    connections: std.AutoHashMapUnmanaged(u64, *Connection), // Active TCP connections under this session
     // lease_expiry: i64, // Expiration timestamp (epoch ms)
     // max_connections: u16, // Policy: max connections allowed for this session
 
@@ -40,7 +43,7 @@ pub const Session = struct {
     // subscriptions: TopicMap, // Active topic subscriptions
     // inflight: MessageMap, // Pending acks, unacked jobs, etc.
     // metadata: Metadata, // Optional client-provided metadata
-    load_balancer: SessionLoadBalancer,
+    load_balancer: LoadBalancer(u64),
 
     // QUESTION: do i need a mutex for adding/removing connections??
 
@@ -49,7 +52,7 @@ pub const Session = struct {
         session_id: u64,
         peer_id: u64,
         peer_type: PeerType,
-        session_load_balancing_strategy: SessionLoadBalancingStrategy,
+        load_balancing_strategy: LoadBalancerStrategy,
     ) !Self {
         const session_token = try allocator.alloc(u8, 256);
         errdefer allocator.free(session_token);
@@ -68,20 +71,18 @@ pub const Session = struct {
 
         // NOTE: I'm not sure if i would want any other different kind of strategy. Would need to do some research
         // here which would get much more complicated.
-        switch (session_load_balancing_strategy) {
-            .round_robin => {
-                return Self{
-                    .session_id = session_id,
-                    .peer_id = peer_id,
-                    .peer_type = peer_type,
-                    .connections = .empty,
-                    .session_token = session_token,
-                    .load_balancer = SessionLoadBalancer{
-                        .round_robin = RoundRobinLoadBalancer(u64).init(),
-                    },
-                };
+        return switch (load_balancing_strategy) {
+            .round_robin => Self{
+                .session_id = session_id,
+                .peer_id = peer_id,
+                .peer_type = peer_type,
+                .connections = .empty,
+                .session_token = session_token,
+                .load_balancer = LoadBalancer(u64){
+                    .round_robin = .init(),
+                },
             },
-        }
+        };
     }
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
@@ -94,59 +95,38 @@ pub const Session = struct {
         self.connections.deinit(allocator);
     }
 
-    pub fn addConnection(self: *Self, allocator: std.mem.Allocator, conn_id: u64) !void {
-        if (self.connections.get(conn_id)) |_| {
+    pub fn addConnection(self: *Self, allocator: std.mem.Allocator, conn: *Connection) !void {
+        if (self.connections.get(conn.connection_id)) |_| {
             return error.AlreadyExists;
         }
 
-        try self.connections.put(allocator, conn_id, {});
-        errdefer _ = self.connections.remove(conn_id);
+        try self.connections.put(allocator, conn.connection_id, conn);
+        errdefer _ = self.connections.remove(conn.connection_id);
 
         switch (self.load_balancer) {
-            .round_robin => |*lb| {
-                try lb.keys.append(allocator, conn_id);
-                errdefer _ = lb.keys.pop();
-
-                std.mem.sort(u64, lb.keys.items, {}, std.sort.asc(u64));
-            },
+            .round_robin => |*lb| try lb.addItem(allocator, conn.connection_id),
         }
     }
 
     pub fn removeConnection(self: *Self, conn_id: u64) bool {
-        switch (self.load_balancer) {
-            .round_robin => |*lb| {
-                for (lb.keys.items, 0..lb.keys.items.len) |k, index| {
-                    if (k == conn_id) {
-                        // NOTE: I'm like 99% sure that we don't need to resort the list at all if we do an ordered remove
-                        //     i'm dumb though
-                        _ = lb.keys.orderedRemove(index);
-                        break;
-                    }
-                }
-            },
-        }
+        const lb_removed = switch (self.load_balancer) {
+            .round_robin => |*lb| lb.removeItem(conn_id),
+        };
 
-        return self.connections.remove(conn_id);
+        return self.connections.remove(conn_id) and lb_removed;
     }
 
-    pub fn getNextConnection(self: *Self) u64 {
+    pub fn getNextConnection(self: *Self) *Connection {
         assert(self.connections.count() > 0);
 
-        switch (self.load_balancer) {
-            .round_robin => |*lb| {
-                assert(lb.keys.items.len > 0);
+        const next = switch (self.load_balancer) {
+            .round_robin => |*lb| lb.next(),
+        };
 
-                lb.current_index = @min(lb.keys.items.len - 1, lb.current_index);
-                const conn_id = lb.keys.items[lb.current_index];
-
-                lb.current_index = (lb.current_index + 1) % lb.keys.items.len;
-
-                // if there is no key here then something is borked. just explode
-                return self.connections.getKey(conn_id).?;
-            },
-        }
-
-        unreachable;
+        if (next) |conn_id| {
+            return self.connections.get(conn_id).?;
+        } else @panic("self.connections and load_balancer.items do not match");
+        // NOTE: this means that we are out of sync and have no idea how to deal with this
     }
 
     pub fn generateSessionToken256(salt: []const u8) [256]u8 {
@@ -218,28 +198,43 @@ test "add getNext remove" {
 
     try testing.expectEqual(0, session.connections.count());
 
-    const conn_id_1 = 10;
-    const conn_id_2 = 11;
-    const conn_id_3 = 12;
+    var kid = KID.init(0, .{});
 
-    try session.addConnection(allocator, conn_id_1);
-    try session.addConnection(allocator, conn_id_2);
-    try session.addConnection(allocator, conn_id_3);
+    var io = try IO.init(16, 0);
+    defer io.deinit();
+
+    const socket: posix.socket_t = undefined;
+
+    var memory_pool = try MemoryPool(Message).init(allocator, 1_000);
+    defer memory_pool.deinit();
+
+    var conn_1 = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, .{ .inbound = .{} });
+    defer conn_1.deinit();
+
+    var conn_2 = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, .{ .inbound = .{} });
+    defer conn_2.deinit();
+
+    var conn_3 = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, .{ .inbound = .{} });
+    defer conn_3.deinit();
+
+    try session.addConnection(allocator, &conn_1);
+    try session.addConnection(allocator, &conn_2);
+    try session.addConnection(allocator, &conn_3);
 
     try testing.expectEqual(3, session.connections.count());
 
-    try testing.expectEqual(conn_id_1, session.getNextConnection());
-    try testing.expectEqual(conn_id_2, session.getNextConnection());
-    try testing.expectEqual(conn_id_3, session.getNextConnection());
+    try testing.expectEqual(conn_1.connection_id, session.getNextConnection().connection_id);
+    try testing.expectEqual(conn_2.connection_id, session.getNextConnection().connection_id);
+    try testing.expectEqual(conn_3.connection_id, session.getNextConnection().connection_id);
 
     // loops around
-    try testing.expectEqual(conn_id_1, session.getNextConnection());
+    try testing.expectEqual(conn_1.connection_id, session.getNextConnection().connection_id);
 
     // remove the next conn_id
-    try testing.expectEqual(true, session.removeConnection(conn_id_2));
+    try testing.expectEqual(true, session.removeConnection(conn_2.connection_id));
 
     // ensure we get the expected conn_id
-    try testing.expectEqual(conn_id_3, session.getNextConnection());
+    try testing.expectEqual(conn_3.connection_id, session.getNextConnection().connection_id);
 }
 
 test "generate session token" {
