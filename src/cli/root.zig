@@ -3,12 +3,14 @@ const clap = @import("clap");
 
 const ListenCommand = @import("./listen.zig").ListenCommand;
 const ConnectCommand = @import("./connect.zig").ConnectCommand;
+const PublishCommand = @import("./publish.zig").PublishCommand;
 
 pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
     const RootSubCommands = enum {
         help,
         listen,
         connect,
+        publish,
     };
 
     const root_parsers = .{ .subcommand = clap.parsers.enumeration(RootSubCommands) };
@@ -48,5 +50,6 @@ pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator)
         .help => return clap.helpToFile(.stderr(), clap.Help, &root_params, .{}),
         .listen => try ListenCommand(allocator, iter),
         .connect => try ConnectCommand(allocator, iter),
+        .publish => try PublishCommand(allocator, iter),
     }
 }

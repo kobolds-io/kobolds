@@ -412,62 +412,69 @@ pub const Connection = struct {
         self.metrics.bytes_recv_total += self.recv_bytes;
         defer self.recv_bytes = 0;
 
-        // FIX: there is a case where the parser was not able to remove enough bytes from the internal buffer. When
-        // the next call to parser appends the data it will return an error.BufferOverflow. We should really check
-        // if the parser CAN handle more bytes.
+        var recv_buffer_index: usize = 0;
 
-        // Parse received bytes into messages
-        const parsed_count = self.parser.parse(&self.messages_buffer, self.recv_buffer[0..self.recv_bytes]) catch unreachable;
+        // while we still have bytes left on this read, we need to try to parse
+        while (recv_buffer_index < self.recv_bytes) {
+            const parser_buffer_available_bytes = self.parser.buffer.capacity - self.parser.buffer.items.len;
+            if (parser_buffer_available_bytes == 0) return; // there is nothing that we can do so we bail out
 
-        if (parsed_count == 0) return;
+            const bytes_left = self.recv_bytes - recv_buffer_index;
+            const bytes_to_process = @min(bytes_left, parser_buffer_available_bytes);
 
-        self.metrics.messages_recv_total += parsed_count;
+            const parsed_count = self.parser.parse(
+                &self.messages_buffer,
+                self.recv_buffer[recv_buffer_index .. recv_buffer_index + bytes_to_process],
+            ) catch unreachable;
+            recv_buffer_index += bytes_to_process;
 
-        const parsed_messages = self.messages_buffer[0..parsed_count];
+            if (parsed_count == 0) return;
 
-        // Validate messages
-        for (parsed_messages) |message| {
-            // _ = message;
-            // log.warn("skipping validation", .{});
-            // assume that invalid messages are poison and close this connection
-            if (message.validate()) |reason| {
-                self.connection_state = .closing;
-                log.err("invalid message: {s}", .{reason});
+            self.metrics.messages_recv_total += parsed_count;
+
+            const parsed_messages = self.messages_buffer[0..parsed_count];
+
+            // Validate messages
+            for (parsed_messages) |message| {
+                if (message.validate()) |reason| {
+                    self.connection_state = .closing;
+                    log.err("invalid message: {s}", .{reason});
+                    return;
+                }
+            }
+
+            const message_ptrs = self.memory_pool.createN(self.allocator, parsed_count) catch |err| {
+                log.err("inbox memory_pool.createN() returned err: {any}", .{err});
+                return;
+            };
+            defer self.allocator.free(message_ptrs);
+
+            if (message_ptrs.len != parsed_count) {
+                log.err("not enough node ptrs {d} for parsed_messages {d}", .{
+                    message_ptrs.len,
+                    parsed_count,
+                });
+                for (message_ptrs) |message_ptr| {
+                    self.memory_pool.destroy(message_ptr);
+                }
                 return;
             }
-        }
 
-        const message_ptrs = self.memory_pool.createN(self.allocator, parsed_count) catch |err| {
-            log.err("inbox memory_pool.createN() returned err: {any}", .{err});
-            return;
-        };
-        defer self.allocator.free(message_ptrs);
+            for (message_ptrs, parsed_messages) |message_ptr, message| {
+                message_ptr.* = message;
+                message_ptr.ref();
 
-        if (message_ptrs.len != parsed_count) {
-            log.err("not enough node ptrs {d} for parsed_messages {d}", .{
-                message_ptrs.len,
-                parsed_count,
-            });
-            for (message_ptrs) |message_ptr| {
-                self.memory_pool.destroy(message_ptr);
+                // NOTE: this is kind of redundent because the memory_pool should be handling this
+                assert(message_ptr.refs() == 1);
             }
-            return;
-        }
 
-        for (message_ptrs, parsed_messages) |message_ptr, message| {
-            message_ptr.* = message;
-            message_ptr.ref();
-
-            // NOTE: this is kind of redundent because the memory_pool should be handling this
-            assert(message_ptr.refs() == 1);
-        }
-
-        const n = self.inbox.enqueueMany(message_ptrs);
-        if (n < message_ptrs.len) {
-            log.err("could not enqueue all message ptrs. dropping {d} messages", .{message_ptrs[n..].len});
-            for (message_ptrs[n..]) |message_ptr| {
-                message_ptr.deref();
-                self.memory_pool.destroy(message_ptr);
+            const n = self.inbox.enqueueMany(message_ptrs);
+            if (n < message_ptrs.len) {
+                log.err("could not enqueue all message ptrs. dropping {d} messages", .{message_ptrs[n..].len});
+                for (message_ptrs[n..]) |message_ptr| {
+                    message_ptr.deref();
+                    self.memory_pool.destroy(message_ptr);
+                }
             }
         }
     }

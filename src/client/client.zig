@@ -320,19 +320,17 @@ pub const Client = struct {
 
     }
 
-    pub fn disconnect(self: *Self, conn: *Connection) void {
-        self.connections_mutex.lock();
-        defer self.connections_mutex.unlock();
+    pub fn awaitConnected(self: *Self, timeout_ns: u64) void {
+        // if we are already connected, do nothing
+        if (self.isConnected()) return;
 
-        conn.connection_state = .closing;
-    }
+        var now = std.time.nanoTimestamp();
+        const deadline = now + timeout_ns;
+        while (now < deadline) {
+            if (self.isConnected()) return;
 
-    pub fn awaitConnected(self: *Self, conn: *Connection, timeout_ns: i128) !void {
-        _ = self;
-        const deadline = std.time.nanoTimestamp() + timeout_ns;
-
-        while (deadline > std.time.nanoTimestamp()) {
-            _ = conn;
+            std.Thread.sleep(1 * std.time.ns_per_ms);
+            now = std.time.nanoTimestamp();
         }
     }
 
@@ -691,6 +689,11 @@ pub const Client = struct {
 
         const session = self.session.?;
         const conn = session.getNextConnection();
+
+        // log.info("publishing message: {} on conn.connection_id: {}", .{
+        //     message.extension_headers.publish.message_id,
+        //     conn.connection_id,
+        // });
 
         try conn.outbox.enqueue(message);
     }
