@@ -1082,6 +1082,13 @@ pub const Node = struct {
         }
     }
 
+    pub fn getSession(self: *Self, session_id: u64) ?*Session {
+        self.sessions_mutex.lock();
+        defer self.sessions_mutex.unlock();
+
+        return self.sessions.get(session_id);
+    }
+
     pub fn addConnectionToSession(self: *Self, session_id: u64, conn: *Connection) !void {
         self.sessions_mutex.lock();
         defer self.sessions_mutex.unlock();

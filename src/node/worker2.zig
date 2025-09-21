@@ -22,6 +22,7 @@ const Message = @import("../protocol/message2.zig").Message;
 const ChallengeMethod = @import("../protocol/message2.zig").ChallengeMethod;
 const ChallengeAlgorithm = @import("../protocol/message2.zig").ChallengeAlgorithm;
 const TokenEntry = @import("./authenticator.zig").TokenAuthStrategy.TokenEntry;
+const Session = @import("./session.zig").Session;
 
 const Handshake = struct {
     nonce: u128,
@@ -254,6 +255,7 @@ pub const Worker = struct {
             while (conn.inbox.dequeue()) |message| {
                 switch (message.fixed_headers.message_type) {
                     .session_init => try self.handleSessionInit(conn, message),
+                    .session_join => try self.handleSessionJoin(conn, message),
                     // TODO: .session_join
 
                     else => unreachable,
@@ -385,6 +387,53 @@ pub const Worker = struct {
         }
     }
 
+    fn handleSessionJoin(self: *Self, conn: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.node.memory_pool.destroy(message);
+        }
+
+        // Ensure only one handshake per connection
+        const handshake_entry = self.handshakes.fetchRemove(conn.connection_id) orelse return error.HandshakeMissing;
+        const handshake = handshake_entry.value;
+
+        const reply = try self.node.memory_pool.create();
+        errdefer self.node.memory_pool.destroy(reply);
+
+        switch (handshake.challenge_method) {
+            .token => {
+                if (self.authenticateWithSession(handshake, message)) {
+                    log.info("successfully authenticated!", .{});
+                    const session_join_headers = message.extension_headers.session_join;
+
+                    try self.node.addConnectionToSession(session_join_headers.session_id, conn);
+                    errdefer _ = self.node.removeConnectionFromSession(session_join_headers.session_id, conn.connection_id);
+
+                    reply.* = Message.new(0, .auth_success);
+                    reply.ref();
+                    errdefer reply.deref();
+
+                    reply.extension_headers.auth_success.peer_id = session_join_headers.peer_id;
+                    reply.extension_headers.auth_success.session_id = session_join_headers.session_id;
+
+                    try self.conn_session_map.put(self.allocator, conn.connection_id, session_join_headers.session_id);
+                    errdefer _ = self.conn_session_map.remove(conn.connection_id);
+
+                    try conn.outbox.enqueue(reply);
+                } else {
+                    log.info("authentication unsuccessful", .{});
+                    reply.* = Message.new(0, .auth_failure);
+                    reply.ref();
+                    errdefer reply.deref();
+
+                    reply.extension_headers.auth_failure.error_code = .unauthorized;
+                    try conn.outbox.enqueue(reply);
+                }
+            },
+            else => @panic("unsupported challenge_method"),
+        }
+    }
+
     fn authenticate(self: *Self, handshake: Handshake, message: *Message) bool {
         const auth_token_config = self.node.config.authenticator_config.token;
 
@@ -407,6 +456,24 @@ pub const Worker = struct {
         }
 
         return false;
+    }
+
+    fn authenticateWithSession(self: *Self, handshake: Handshake, message: *Message) bool {
+        const session_opt = self.node.getSession(message.extension_headers.session_join.session_id);
+        if (session_opt == null) return false;
+
+        const session = session_opt.?;
+
+        if (session.peer_id != message.extension_headers.session_join.peer_id) return false;
+        if (session.session_id != message.extension_headers.session_join.session_id) return false;
+
+        return switch (handshake.algorithm) {
+            .hmac256 => self.verifyHMAC256(session.session_token, handshake.nonce, message.body()),
+            else => |algorithm| {
+                log.err("use of unsupported algorithm {any}", .{algorithm});
+                return false;
+            },
+        };
     }
 
     fn findClientToken(_: *Self, clients: []const TokenEntry, peer_id: u64) ?TokenEntry {

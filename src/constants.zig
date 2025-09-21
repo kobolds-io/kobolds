@@ -29,12 +29,10 @@ pub const connection_recv_buffer_size = (1024 * 32);
 // pub const connection_send_buffer_size = (1024 * 64);
 pub const connection_send_buffer_size = (1024 * 32);
 
-/// The number of milliseconds the IO instance will wait until it flushes
-/// submissions and completions.
-pub const io_tick_ms: u63 = 1;
 /// The number of microseconds the IO instance will wait until it flushes
 /// submissions and completions.
 pub const io_tick_us: u63 = 250;
+// pub const io_tick_us: u63 = 100_000; // this is for testing!
 
 /// Number of entries used for the submission and completion queues
 pub const io_uring_entries: u16 = 256;

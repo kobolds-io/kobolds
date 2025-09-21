@@ -1,7 +1,6 @@
 // this file is a global importer for all tests
 comptime {
     _ = @import("./client/client.zig");
-    _ = @import("./client/connection_pool.zig");
     _ = @import("./data_structures/connection_messages.zig");
     _ = @import("./data_structures/message_pool.zig");
     _ = @import("./hash.zig");

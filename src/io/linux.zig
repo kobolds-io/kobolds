@@ -341,7 +341,7 @@ pub const IO = struct {
             assert(self.cancel_status == .queued);
 
             while (self.cancel_status == .queued or self.cancel_status == .wait) {
-                self.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch |err| {
+                self.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch |err| {
                     std.debug.panic("IO.cancel_all: run_for_ns error: {}", .{err});
                 };
             }

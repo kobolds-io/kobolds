@@ -182,7 +182,7 @@ pub const Listener = struct {
                 .closed => return,
             }
 
-            self.io.run_for_ns(constants.io_tick_ms * std.time.ns_per_ms) catch |err| {
+            self.io.run_for_ns(constants.io_tick_us * std.time.ns_per_us) catch |err| {
                 log.err("unable to io.run_for_ns {any}", .{err});
                 @panic("Listener failed to run");
             };

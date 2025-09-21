@@ -50,7 +50,10 @@ pub const TokenAuthConfig = struct {
 };
 
 pub const ClientConfig = struct {
-    max_connections: u16 = 1,
+    host: []const u8 = "127.0.0.1",
+    port: u16 = 8000,
+    max_connections: u16 = 5,
+    min_connections: u16 = 2,
     memory_pool_capacity: usize = 10_000,
     authentication_config: AuthenticationConfig = .{},
 };
@@ -279,26 +282,32 @@ pub const Client = struct {
     }
 
     /// initialize a session with the node. The client will handle scaling connections up to the maximum
-    pub fn connect2(self: *Self, config: OutboundConnectionConfig, timeout_ns: i128) !void {
+    pub fn connect2(self: *Self, timeout_ns: u64) !void {
         _ = timeout_ns;
+        _ = self;
 
-        if (config.validate()) |error_reason| {
-            log.err("invalid config: {s}", .{error_reason});
-            return error.InvalidConfig;
-        }
+        // We need to be able to create a session
 
-        if (self.session) |session| {
-            self.session_mutex.lock();
-            defer self.session_mutex.unlock();
+        // // TODO: check if we have a session
+        // if (self.session) |session| {
+        //     self.session_mutex.lock();
+        //     defer self.session_mutex.unlock();
 
-            // we already have a session with an active connection, we should do nothing.
-            if (session.connections.count() > 0) return;
+        //     // we already have a session with an active connection, we should do nothing.
+        //     if (session.connections.count() > 0) return;
 
-            // we are in a transition state where the session hasn't been deinitialized. Let's do that now.
-            session.deinit(self.allocator);
-            self.allocator.destroy(session);
-            self.session = null;
-        }
+        //     // we are in a transition state where the session hasn't been deinitialized. Let's do that now.
+        //     session.deinit(self.allocator);
+        //     self.allocator.destroy(session);
+        //     self.session = null;
+        // }
+
+        // const ready_signal = try self.initiateOutboundConnection();
+        // defer self.allocator.destroy(ready_signal);
+
+        // ready_channel.tryReceive(timeout_ns: u64)
+
+        // try self.spawnConnection();
 
         // self.connections_mutex.lock();
         // defer self.connections_mutex.unlock();
@@ -313,7 +322,7 @@ pub const Client = struct {
             return error.InvalidConfig;
         }
 
-        const conn = try self.addOutboundConnection(config);
+        const conn = try self.createOutboundConnection(config);
         errdefer self.disconnect(conn);
 
         var timer = try std.time.Timer.start();
@@ -361,9 +370,8 @@ pub const Client = struct {
 
     fn tick(self: *Self) !void {
         try self.tickConnections();
-        // try self.tickUninitializedConnections();
+        try self.initializeOutboundConnections();
         try self.processInboundConnectionMessages();
-        // try self.processUninitializedConnectionMessages();
         // try self.processClientMessages();
         // try self.aggregateOutboundMessages();
     }
@@ -387,6 +395,27 @@ pub const Client = struct {
                 log.err("could not tick connection error: {any}", .{err});
                 continue;
             };
+        }
+    }
+
+    fn initializeOutboundConnections(self: *Self) !void {
+        // figure out how many connections we currently have
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        var connections_iter = self.connections.valueIterator();
+        while (connections_iter.next()) |entry| {
+            const conn = entry.*;
+            if (conn.protocol_state == .authenticating) return;
+        }
+
+        if (self.connections.count() < self.config.min_connections) {
+
+            // ensure that all of them are past authenticating before creating another connection
+
+            // we need to create a new connection
+            try self.createOutboundConnection();
+            return;
         }
     }
 
@@ -587,30 +616,39 @@ pub const Client = struct {
     }
 
     fn handleAuthSuccessMessage(self: *Self, conn: *Connection, message: *Message) !void {
-        assert(self.session == null);
         defer {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
-        const session = try self.allocator.create(Session);
-        errdefer self.allocator.destroy(session);
+        if (self.session) |session| {
+            try session.addConnection(self.allocator, conn);
 
-        const peer_id = message.extension_headers.auth_success.peer_id;
-        const session_id = message.extension_headers.auth_success.session_id;
+            conn.protocol_state = .ready;
 
-        session.* = try Session.init(self.allocator, session_id, peer_id, .node, .round_robin);
-        errdefer session.deinit(self.allocator);
+            log.info("successfully authenticated (joined session)!", .{});
+        } else {
+            const session = try self.allocator.create(Session);
+            errdefer self.allocator.destroy(session);
 
-        assert(session.session_token.len == message.fixed_headers.body_length);
-        @memcpy(session.session_token, message.body());
+            const peer_id = message.extension_headers.auth_success.peer_id;
+            const session_id = message.extension_headers.auth_success.session_id;
 
-        try session.addConnection(self.allocator, conn);
-        errdefer session.removeConnection(conn.connection_id);
+            session.* = try Session.init(self.allocator, session_id, peer_id, .node, .round_robin);
+            errdefer session.deinit(self.allocator);
 
-        self.session = session;
+            assert(session.session_token.len == message.fixed_headers.body_length);
+            @memcpy(session.session_token, message.body());
 
-        conn.protocol_state = .ready;
+            try session.addConnection(self.allocator, conn);
+            errdefer session.removeConnection(conn.connection_id);
+
+            self.session = session;
+
+            conn.protocol_state = .ready;
+
+            log.info("successfully authenticated (new session)!", .{});
+        }
     }
 
     fn handleAuthFailureMessage(self: *Self, conn: *Connection, message: *Message) !void {
@@ -637,8 +675,8 @@ pub const Client = struct {
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
-        const tmp_conn_id = conn.connection_id;
         // we need to swap the ID of this connection
+        const tmp_conn_id = conn.connection_id;
         defer _ = self.connections.remove(tmp_conn_id);
 
         // we immediately assign this connection the id it receives from the node
@@ -651,8 +689,33 @@ pub const Client = struct {
         errdefer self.memory_pool.destroy(session_message);
 
         if (self.session) |session| {
-            _ = session;
-            @panic("session already exists!!!!! can't join yet");
+            session_message.* = Message.new(0, .session_join);
+            session_message.extension_headers.session_join.peer_id = session.peer_id;
+            session_message.extension_headers.session_join.session_id = session.session_id;
+
+            switch (message.extension_headers.auth_challenge.challenge_method) {
+                .token => {
+                    switch (message.extension_headers.auth_challenge.algorithm) {
+                        .hmac256 => {
+                            const HMAC = std.crypto.auth.hmac.sha2.HmacSha256;
+                            var out: [HMAC.mac_length]u8 = undefined;
+                            var nonce_slice: [@sizeOf(u128)]u8 = undefined;
+
+                            // convert the nonce to a slice
+                            std.mem.writeInt(u128, &nonce_slice, message.extension_headers.auth_challenge.nonce, .big);
+
+                            var hmac = HMAC.init(session.session_token);
+                            hmac.update(&nonce_slice);
+                            hmac.final(&out);
+
+                            session_message.setBody(&out);
+                            log.info("attempting to join session", .{});
+                        },
+                        else => @panic("unimplemented algorithm"),
+                    }
+                },
+                else => @panic("unsupported challenge_method"),
+            }
         } else {
             session_message.* = Message.new(0, .session_init);
             session_message.extension_headers.session_init.peer_type = .client;
@@ -669,9 +732,9 @@ pub const Client = struct {
                                 var out: [HMAC.mac_length]u8 = undefined;
                                 var nonce_slice: [@sizeOf(u128)]u8 = undefined;
 
+                                // convert the nonce to a slice
                                 std.mem.writeInt(u128, &nonce_slice, message.extension_headers.auth_challenge.nonce, .big);
 
-                                // convert the nonce to a slice
                                 var hmac = HMAC.init(token_config.token);
                                 hmac.update(&nonce_slice);
                                 hmac.final(&out);
@@ -753,9 +816,9 @@ pub const Client = struct {
         return all_connections_closed;
     }
 
-    fn addOutboundConnection(self: *Self, config: OutboundConnectionConfig) !*Connection {
+    fn createOutboundConnection(self: *Self) !void {
         // create the socket
-        const address = try std.net.Address.parseIp4(config.host, config.port);
+        const address = try std.net.Address.parseIp4(self.config.host, self.config.port);
         const socket_type: u32 = posix.SOCK.STREAM;
         const protocol = posix.IPPROTO.TCP;
         const socket = try posix.socket(address.any.family, socket_type, protocol);
@@ -774,15 +837,17 @@ pub const Client = struct {
             socket,
             self.allocator,
             self.memory_pool,
-            .{ .outbound = config },
+            .{
+                .outbound = .{
+                    .host = self.config.host,
+                    .port = self.config.port,
+                },
+            },
         );
         errdefer conn.deinit();
 
         conn.connection_state = .connecting;
         conn.protocol_state = .authenticating;
-
-        self.connections_mutex.lock();
-        defer self.connections_mutex.unlock();
 
         try self.connections.put(tmp_conn_id, conn);
         errdefer self.connections.remove(tmp_conn_id);
@@ -796,8 +861,6 @@ pub const Client = struct {
             address,
         );
         conn.connect_submitted = true;
-
-        return conn;
     }
 };
 
@@ -806,7 +869,4 @@ test "init/deinit" {
 
     var client = try Client.init(allocator, .{});
     defer client.deinit();
-
-    try client.start();
-    defer client.close();
 }
