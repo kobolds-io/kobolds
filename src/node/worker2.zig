@@ -326,13 +326,13 @@ pub const Worker = struct {
         const conn_id = conn.connection_id;
         defer log.info("worker: {} removed connection {}", .{ self.id, conn_id });
 
-        if (self.conn_session_map.fetchRemove(conn.connection_id)) |kv_entry| {
+        if (self.conn_session_map.fetchRemove(conn_id)) |kv_entry| {
             const session_id = kv_entry.value;
 
             _ = self.node.removeConnectionFromSession(session_id, conn_id);
         }
 
-        _ = self.connections.remove(conn.connection_id);
+        _ = self.connections.remove(conn_id);
 
         conn.deinit();
         self.allocator.destroy(conn);
@@ -354,6 +354,7 @@ pub const Worker = struct {
         switch (handshake.challenge_method) {
             .token => {
                 if (self.authenticate(handshake, message)) {
+                    log.info("successfully authenticated (creating session)!", .{});
                     const session_init = message.extension_headers.session_init;
 
                     const session = try self.node.createSession(session_init.peer_id, session_init.peer_type);
@@ -403,7 +404,7 @@ pub const Worker = struct {
         switch (handshake.challenge_method) {
             .token => {
                 if (self.authenticateWithSession(handshake, message)) {
-                    log.info("successfully authenticated!", .{});
+                    log.info("successfully authenticated (joining session)!", .{});
                     const session_join_headers = message.extension_headers.session_join;
 
                     try self.node.addConnectionToSession(session_join_headers.session_id, conn);
