@@ -678,7 +678,7 @@ test "processing inbound messages" {
 
     const socket: posix.socket_t = undefined;
 
-    var memory_pool = try MemoryPool(Message).init(allocator, 5_000);
+    var memory_pool = try MemoryPool(Message).init(allocator, 10_000);
     defer memory_pool.deinit();
 
     const config = ConnectionConfig{ .inbound = .{} };
@@ -696,7 +696,7 @@ test "processing inbound messages" {
     while (true) {
         if (messages_count == conn.inbox.capacity) break;
 
-        var message = Message.new(kid.generate(), .publish);
+        var message = Message.new(.publish);
         message.setTopicName("a");
         const bytes = message.serialize(&buf);
 
@@ -734,7 +734,7 @@ test "processing outbound messages" {
 
     const socket: posix.socket_t = undefined;
 
-    var memory_pool = try MemoryPool(Message).init(allocator, 5_000);
+    var memory_pool = try MemoryPool(Message).init(allocator, 10_000);
     defer memory_pool.deinit();
 
     const config = ConnectionConfig{ .inbound = .{} };
@@ -749,7 +749,7 @@ test "processing outbound messages" {
         const message = try memory_pool.create();
         errdefer memory_pool.destroy(message);
 
-        message.* = Message.new(kid.generate(), .publish);
+        message.* = Message.new(.publish);
         message.setTopicName("a");
         message.ref();
 

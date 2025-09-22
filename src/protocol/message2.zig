@@ -58,7 +58,7 @@ pub const Message = struct {
     // how many times this message is referenced
     ref_count: atomic.Value(u32),
 
-    pub fn new(id: u64, message_type: MessageType) Self {
+    pub fn new(message_type: MessageType) Self {
         return switch (message_type) {
             .undefined => Self{
                 .fixed_headers = .{ .message_type = message_type },
@@ -69,18 +69,14 @@ pub const Message = struct {
             },
             .publish => Self{
                 .fixed_headers = .{ .message_type = message_type },
-                .extension_headers = .{ .publish = PublishHeaders{
-                    .message_id = id,
-                } },
+                .extension_headers = .{ .publish = PublishHeaders{} },
                 .body_buffer = undefined,
                 .checksum = 0,
                 .ref_count = atomic.Value(u32).init(0),
             },
             .subscribe => Self{
                 .fixed_headers = .{ .message_type = message_type },
-                .extension_headers = .{ .subscribe = SubscribeHeaders{
-                    .message_id = id,
-                } },
+                .extension_headers = .{ .subscribe = SubscribeHeaders{} },
                 .body_buffer = undefined,
                 .checksum = 0,
                 .ref_count = atomic.Value(u32).init(0),
@@ -483,7 +479,6 @@ pub const ExtensionHeaders = union(MessageType) {
 pub const PublishHeaders = struct {
     const Self = @This();
 
-    message_id: u64 = 0,
     topic_name_length: u8 = 0,
     topic_name: [constants.message_max_topic_name_size]u8 = undefined,
 
@@ -492,14 +487,12 @@ pub const PublishHeaders = struct {
     }
 
     fn minimumSize() usize {
-        return @sizeOf(u64) + 1;
+        // return @sizeOf(u64) + 1;
+        return 1;
     }
 
     pub fn toBytes(self: Self, buf: []u8) usize {
         var i: usize = 0;
-
-        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.message_id, .big);
-        i += @sizeOf(u64);
 
         buf[i] = self.topic_name_length;
         i += 1;
@@ -515,9 +508,6 @@ pub const PublishHeaders = struct {
 
         if (data.len < Self.minimumSize()) return error.Truncated;
 
-        const message_id = std.mem.readInt(u64, data[0..@sizeOf(u64)], .big);
-        i += @sizeOf(u64);
-
         const topic_name_length = data[i];
         i += 1;
 
@@ -528,14 +518,12 @@ pub const PublishHeaders = struct {
         @memcpy(topic_name[0..topic_name_length], data[i .. i + topic_name_length]);
 
         return Self{
-            .message_id = message_id,
             .topic_name_length = topic_name_length,
             .topic_name = topic_name,
         };
     }
 
     pub fn validate(self: Self) ?[]const u8 {
-        if (self.message_id == 0) return "invalid message_id";
         if (self.topic_name_length == 0) return "invalid topic_name_length";
         if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
 
@@ -546,7 +534,6 @@ pub const PublishHeaders = struct {
 pub const SubscribeHeaders = struct {
     const Self = @This();
 
-    message_id: u64 = 0,
     transaction_id: u64 = 0,
     topic_name_length: u8 = 0,
     topic_name: [constants.message_max_topic_name_size]u8 = undefined,
@@ -556,14 +543,11 @@ pub const SubscribeHeaders = struct {
     }
 
     fn minimumSize() usize {
-        return @sizeOf(u64) + @sizeOf(u64) + 1;
+        return @sizeOf(u64) + 1;
     }
 
     pub fn toBytes(self: Self, buf: []u8) usize {
         var i: usize = 0;
-
-        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.message_id, .big);
-        i += @sizeOf(u64);
 
         std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.transaction_id, .big);
         i += @sizeOf(u64);
@@ -582,9 +566,6 @@ pub const SubscribeHeaders = struct {
 
         if (data.len < Self.minimumSize()) return error.Truncated;
 
-        const message_id = std.mem.readInt(u64, data[i..@sizeOf(u64)][0..@sizeOf(u64)], .big);
-        i += @sizeOf(u64);
-
         const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
         i += @sizeOf(u64);
 
@@ -598,7 +579,6 @@ pub const SubscribeHeaders = struct {
         @memcpy(topic_name[0..topic_name_length], data[i .. i + topic_name_length]);
 
         return Self{
-            .message_id = message_id,
             .transaction_id = transaction_id,
             .topic_name_length = topic_name_length,
             .topic_name = topic_name,
@@ -606,7 +586,6 @@ pub const SubscribeHeaders = struct {
     }
 
     pub fn validate(self: Self) ?[]const u8 {
-        if (self.message_id == 0) return "invalid message_id";
         if (self.transaction_id == 0) return "invalid transaction_id";
         if (self.topic_name_length == 0) return "invalid topic_name_length";
         if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
@@ -901,37 +880,37 @@ test "size of structs" {
     try testing.expectEqual(8, @sizeOf(FixedHeaders));
     try testing.expectEqual(6, FixedHeaders.packedSize());
 
-    const undefined_message = Message.new(0, .undefined);
+    const undefined_message = Message.new(.undefined);
     try testing.expectEqual(16, undefined_message.size());
     try testing.expectEqual(14, undefined_message.packedSize());
 
-    const publish_message = Message.new(0, .publish);
-    try testing.expectEqual(64, publish_message.size());
-    try testing.expectEqual(23, publish_message.packedSize());
+    const publish_message = Message.new(.publish);
+    try testing.expectEqual(49, publish_message.size());
+    try testing.expectEqual(15, publish_message.packedSize());
 
-    const subscribe_message = Message.new(0, .subscribe);
-    try testing.expectEqual(72, subscribe_message.size());
-    try testing.expectEqual(31, subscribe_message.packedSize());
+    const subscribe_message = Message.new(.subscribe);
+    try testing.expectEqual(64, subscribe_message.size());
+    try testing.expectEqual(23, subscribe_message.packedSize());
 
-    const session_init_message = Message.new(0, .session_init);
+    const session_init_message = Message.new(.session_init);
     try testing.expectEqual(32, session_init_message.size());
     try testing.expectEqual(23, session_init_message.packedSize());
 
-    const session_join_message = Message.new(0, .session_join);
+    const session_join_message = Message.new(.session_join);
     try testing.expectEqual(32, session_join_message.size());
     try testing.expectEqual(30, session_join_message.packedSize());
 
-    const auth_failure_message = Message.new(0, .auth_failure);
+    const auth_failure_message = Message.new(.auth_failure);
     try testing.expectEqual(17, auth_failure_message.size());
     try testing.expectEqual(15, auth_failure_message.packedSize());
 
-    const auth_success_message = Message.new(0, .auth_success);
+    const auth_success_message = Message.new(.auth_success);
     try testing.expectEqual(32, auth_success_message.size());
     try testing.expectEqual(30, auth_success_message.packedSize());
 }
 
 test "message can comprise of variable size extensions" {
-    const publish_message = Message.new(0, .publish);
+    const publish_message = Message.new(.publish);
     try testing.expectEqual(publish_message.fixed_headers.message_type, .publish);
 }
 
@@ -949,7 +928,7 @@ test "message serialization" {
     var buf: [@sizeOf(Message)]u8 = undefined;
 
     for (message_types) |message_type| {
-        var message = Message.new(111, message_type);
+        var message = Message.new(message_type);
 
         const bytes = message.serialize(&buf);
 
@@ -971,7 +950,7 @@ test "message deserialization" {
     var buf: [@sizeOf(Message)]u8 = undefined;
 
     for (message_types) |message_type| {
-        var message = Message.new(300, message_type);
+        var message = Message.new(message_type);
 
         // serialize the message
         const bytes = message.serialize(&buf);
@@ -993,20 +972,12 @@ test "message deserialization" {
             },
             .publish => {
                 try testing.expectEqual(
-                    message.extension_headers.publish.message_id,
-                    deserialized_message.extension_headers.publish.message_id,
-                );
-                try testing.expectEqual(
                     message.extension_headers.publish.topic_name_length,
                     deserialized_message.extension_headers.publish.topic_name_length,
                 );
                 try testing.expect(std.mem.eql(u8, message.topicName(), deserialized_message.topicName()));
             },
             .subscribe => {
-                try testing.expectEqual(
-                    message.extension_headers.subscribe.message_id,
-                    deserialized_message.extension_headers.subscribe.message_id,
-                );
                 try testing.expectEqual(
                     message.extension_headers.subscribe.transaction_id,
                     deserialized_message.extension_headers.subscribe.transaction_id,

@@ -746,7 +746,8 @@ pub const Client = struct {
         const message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(message);
 
-        message.* = Message.new(self.kid.generate(), .publish);
+        message.* = Message.new(0, .publish);
+        // message.* = Message.new(self.kid.generate(), .publish);
         message.ref();
         errdefer message.deref();
 

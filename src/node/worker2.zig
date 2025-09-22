@@ -262,6 +262,7 @@ pub const Worker = struct {
                                 .message = message,
                                 .session_id = session_id,
                                 .conn_id = conn.connection_id,
+                                .message_id = self.node.kid.generate(),
                             };
 
                             self.inbox_mutex.lock();
@@ -318,7 +319,7 @@ pub const Worker = struct {
         const auth_challenge = try self.node.memory_pool.create();
         errdefer self.node.memory_pool.destroy(auth_challenge);
 
-        auth_challenge.* = Message.new(0, .auth_challenge);
+        auth_challenge.* = Message.new(.auth_challenge);
         auth_challenge.ref();
         errdefer auth_challenge.deref();
 
@@ -409,7 +410,7 @@ pub const Worker = struct {
                     try self.node.addConnectionToSession(session.session_id, conn);
                     errdefer _ = self.node.removeConnectionFromSession(session.session_id, conn.connection_id);
 
-                    reply.* = Message.new(0, .auth_success);
+                    reply.* = Message.new(.auth_success);
                     reply.ref();
                     errdefer reply.deref();
 
@@ -424,7 +425,7 @@ pub const Worker = struct {
                 } else {
                     conn.protocol_state = .terminating;
 
-                    reply.* = Message.new(0, .auth_failure);
+                    reply.* = Message.new(.auth_failure);
                     reply.ref();
                     errdefer reply.deref();
 
@@ -460,7 +461,7 @@ pub const Worker = struct {
                     try self.node.addConnectionToSession(session_join_headers.session_id, conn);
                     errdefer _ = self.node.removeConnectionFromSession(session_join_headers.session_id, conn.connection_id);
 
-                    reply.* = Message.new(0, .auth_success);
+                    reply.* = Message.new(.auth_success);
                     reply.ref();
                     errdefer reply.deref();
 
@@ -476,7 +477,7 @@ pub const Worker = struct {
 
                     conn.protocol_state = .terminating;
 
-                    reply.* = Message.new(0, .auth_failure);
+                    reply.* = Message.new(.auth_failure);
                     reply.ref();
                     errdefer reply.deref();
 
