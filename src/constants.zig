@@ -44,8 +44,8 @@ pub const client_outbox_capacity: usize = 10_000;
 pub const client_inbox_capacity: usize = 10_000;
 pub const worker_outbox_capacity: usize = 10_000;
 pub const worker_inbox_capacity: usize = 10_000;
-pub const connection_outbox_capacity: usize = 1_000;
-pub const connection_inbox_capacity: usize = 1_000;
+pub const connection_outbox_capacity: usize = 10_000;
+pub const connection_inbox_capacity: usize = 10_000;
 
 pub const topic_max_queue_capacity: usize = 5_000;
 pub const publisher_max_queue_capacity: usize = 1_000;

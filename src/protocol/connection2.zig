@@ -498,10 +498,10 @@ pub const Connection = struct {
                     assert(message_ptr.refs() == 1);
                 }
 
-                const n = self.inbox.enqueueMany(message_ptrs);
-                if (n < message_ptrs.len) {
-                    log.err("could not enqueue all message ptrs. dropping {d} messages", .{message_ptrs[n..].len});
-                    for (message_ptrs[n..]) |message_ptr| {
+                const messages_enqueued = self.inbox.enqueueMany(message_ptrs);
+                if (messages_enqueued < message_ptrs.len) {
+                    log.err("could not enqueue all message ptrs. dropping {d} messages", .{message_ptrs[messages_enqueued..].len});
+                    for (message_ptrs[messages_enqueued..]) |message_ptr| {
                         message_ptr.deref();
                         self.memory_pool.destroy(message_ptr);
                     }

@@ -182,16 +182,28 @@ fn publish(args: PublishArgs) !void {
 
         var next_deadline = std.time.nanoTimestamp();
         var messages_published_in_period: usize = 0;
+        var total_messages_sent: u128 = 0;
+        var publish_rate_timer = try std.time.Timer.start();
+        var last_report = publish_rate_timer.read();
 
         while (messages_published_in_period < args.rate) : (messages_published_in_period += 1) {
             if (signal_handler.sigint_triggered) return;
             next_deadline += period_ns;
 
             client.publish(args.topic_name, args.body, .{}) catch {
-                // const b = "a" ** constants.message_max_body_size;
-                // client.publish(args.topic_name, b, .{}) catch {
                 std.Thread.sleep(100 * std.time.ns_per_ms);
+                continue;
             };
+
+            total_messages_sent += 1;
+
+            if (publish_rate_timer.read() - last_report >= std.time.ns_per_s) {
+                std.debug.print("elapsed: {d}s, total_published: {d}\n", .{
+                    publish_rate_timer.read() / std.time.ns_per_s,
+                    total_messages_sent,
+                });
+                last_report = publish_rate_timer.read();
+            }
 
             const now = std.time.nanoTimestamp();
             if (next_deadline > now) {

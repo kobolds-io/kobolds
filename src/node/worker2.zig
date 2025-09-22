@@ -233,8 +233,6 @@ pub const Worker = struct {
                 continue;
             }
 
-            if (self.node.memory_pool.available() < 1_000) continue;
-
             conn.tick() catch |err| {
                 log.err("could not tick connection error: {any}", .{err});
                 continue;
@@ -252,6 +250,8 @@ pub const Worker = struct {
             const conn = entry.value_ptr.*;
             const session_id_opt = self.conn_session_map.get(conn.connection_id);
 
+            defer assert(conn.inbox.count == 0);
+
             while (conn.inbox.dequeue()) |message| {
                 switch (message.fixed_headers.message_type) {
                     .session_init => try self.handleSessionInit(conn, message),
@@ -268,7 +268,7 @@ pub const Worker = struct {
                             defer self.inbox_mutex.unlock();
 
                             self.inbox.enqueue(envelope) catch {
-                                // log.err("could not enqueue message: {any}", .{err});
+                                log.err("could not enqueue message", .{});
                                 conn.inbox.prepend(message) catch unreachable;
                             };
                         } else {
