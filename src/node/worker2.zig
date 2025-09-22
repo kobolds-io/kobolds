@@ -268,7 +268,7 @@ pub const Worker = struct {
                             defer self.inbox_mutex.unlock();
 
                             self.inbox.enqueue(envelope) catch {
-                                log.err("could not enqueue message", .{});
+                                // log.err("could not enqueue message", .{});
                                 conn.inbox.prepend(message) catch unreachable;
                             };
                         } else {
