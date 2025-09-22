@@ -77,13 +77,13 @@ pub const Worker = struct {
         const inbox = try allocator.create(RingBuffer(Envelope));
         errdefer allocator.destroy(inbox);
 
-        inbox.* = try RingBuffer(Envelope).init(allocator, 1_000);
+        inbox.* = try RingBuffer(Envelope).init(allocator, constants.worker_inbox_capacity);
         errdefer inbox.deinit();
 
         const outbox = try allocator.create(RingBuffer(Envelope));
         errdefer allocator.destroy(outbox);
 
-        outbox.* = try RingBuffer(Envelope).init(allocator, 1_000);
+        outbox.* = try RingBuffer(Envelope).init(allocator, constants.worker_outbox_capacity);
         errdefer outbox.deinit();
 
         const io = try allocator.create(IO);
@@ -233,6 +233,8 @@ pub const Worker = struct {
                 continue;
             }
 
+            if (self.node.memory_pool.available() < 1_000) continue;
+
             conn.tick() catch |err| {
                 log.err("could not tick connection error: {any}", .{err});
                 continue;
@@ -265,8 +267,8 @@ pub const Worker = struct {
                             self.inbox_mutex.lock();
                             defer self.inbox_mutex.unlock();
 
-                            self.inbox.enqueue(envelope) catch |err| {
-                                log.err("could not enqueue message: {any}", .{err});
+                            self.inbox.enqueue(envelope) catch {
+                                // log.err("could not enqueue message: {any}", .{err});
                                 conn.inbox.prepend(message) catch unreachable;
                             };
                         } else {

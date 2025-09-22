@@ -17,4 +17,5 @@ comptime {
     _ = @import("./protocol/parser2.zig");
     _ = @import("./protocol/parser_test.zig");
     _ = @import("./utils.zig");
+    _ = @import("./pubsub/topic2.zig");
 }

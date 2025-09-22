@@ -2,6 +2,8 @@ const std = @import("std");
 const clap = @import("clap");
 const signal_handler = @import("../signal_handler.zig");
 
+const constants = @import("../constants.zig");
+
 const Client = @import("../client/client.zig").Client;
 const ClientConfig = @import("../client/client.zig").ClientConfig;
 const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
@@ -18,6 +20,7 @@ pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
         \\--max-connections <max_connections>    Maximum number of connections to open (default: 1)
         \\--min-connections <min_connections>    Minimum number of connections to open (default: 1)
         \\-r, --rate        <rate>               Rate to publish messages (default: 0)
+        \\-c, --count       <count>              Publish a set number of messages (default: 0)
         \\<topic_name>                           Topic name
         \\<body>                                 Body of the message
     );
@@ -32,6 +35,7 @@ pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
         .topic_name = clap.parsers.string,
         .body = clap.parsers.string,
         .rate = clap.parsers.int(u32, 10),
+        .count = clap.parsers.int(u32, 10),
     };
 
     // Here we pass the partially parsed argument iterator.
@@ -61,7 +65,13 @@ pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
         .max_connections = parsed_args.args.@"max-connections" orelse 1,
         .min_connections = parsed_args.args.@"min-connections" orelse 1,
         .rate = parsed_args.args.rate orelse 0,
+        .count = parsed_args.args.count orelse 0,
     };
+
+    // validate
+    if (args.rate > 0 and args.count > 0) return error.RateAndCountAreMutuallyExclusive;
+    if (args.rate > 1_000_000) return error.RateBreachesArbitraryLimit;
+    if (args.count > 100_000_000) return error.CountBreachesArbitraryLimit;
 
     try publish(args);
 }
@@ -76,6 +86,7 @@ const PublishArgs = struct {
     topic_name: []const u8,
     body: []const u8,
     rate: u32,
+    count: u32,
 };
 
 fn publish(args: PublishArgs) !void {
@@ -111,6 +122,57 @@ fn publish(args: PublishArgs) !void {
 
     std.debug.print("connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
 
+    // signal_handler.registerSigintHandler();
+    // while (!signal_handler.sigint_triggered) {
+    //     client.publish(args.topic_name, args.body, .{}) catch {
+    //         // const b = "a" ** constants.message_max_body_size;
+    //         // client.publish(args.topic_name, b, .{}) catch {
+    //         // std.Thread.sleep(1 * std.time.ns_per_ms);
+    //     };
+    // }
+
+    if (args.count > 0) {
+        signal_handler.registerSigintHandler();
+
+        var publish_count_timer = try std.time.Timer.start();
+        var last_report = publish_count_timer.read();
+
+        var published: usize = 0;
+        while (published < args.count) : (published += 1) {
+            if (signal_handler.sigint_triggered) return;
+
+            client.publish(args.topic_name, args.body, .{}) catch {
+                published -= 1;
+                continue;
+                // std.Thread.sleep(1 * std.time.ns_per_ms);
+            };
+
+            const now = publish_count_timer.read();
+            if (now - last_report >= std.time.ns_per_s) {
+                const remaining = args.count - published - 1;
+                std.debug.print("elapsed: {d}ms, published {d}, remaining {d}\n", .{
+                    publish_count_timer.read() / std.time.ns_per_ms,
+                    published + 1,
+                    remaining,
+                });
+                last_report = now;
+            }
+        }
+
+        // FIX: ensure that all messages have been sent
+        // client.flush();
+
+        const elapsed = publish_count_timer.read();
+        std.debug.print("took {d}ms to publish {d} messages\n", .{
+            elapsed / std.time.ns_per_ms,
+            args.count,
+        });
+
+        // this just keeps the connections open for a bit longer
+        std.Thread.sleep(500 * std.time.ns_per_ms);
+        return;
+    }
+
     if (args.rate == 0) {
         try client.publish(args.topic_name, args.body, .{});
     } else {
@@ -126,6 +188,8 @@ fn publish(args: PublishArgs) !void {
             next_deadline += period_ns;
 
             client.publish(args.topic_name, args.body, .{}) catch {
+                // const b = "a" ** constants.message_max_body_size;
+                // client.publish(args.topic_name, b, .{}) catch {
                 std.Thread.sleep(100 * std.time.ns_per_ms);
             };
 

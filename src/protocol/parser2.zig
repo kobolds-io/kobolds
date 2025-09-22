@@ -49,13 +49,10 @@ pub const Parser = struct {
 
             const parsed = Message.deserialize(buf[read_offset..]) catch |err| switch (err) {
                 error.Truncated => break, // there is nothing more for us to do in this loop
-                error.InvalidMessageType, error.InvalidChecksum => {
+                error.InvalidTopicName, error.InvalidMessage, error.InvalidMessageType, error.InvalidChecksum => {
                     read_offset += 1; // skip bad byte
+                    log.warn("parse err {any}", .{err});
                     continue;
-                },
-                else => {
-                    log.err("unhandled error: {any}", .{err});
-                    unreachable;
                 },
             };
 

@@ -56,7 +56,7 @@ pub const ClientConfig = struct {
     port: u16 = 8000,
     max_connections: u16 = 10,
     min_connections: u16 = 3,
-    memory_pool_capacity: usize = 10_000,
+    memory_pool_capacity: usize = 100_000,
     authentication_config: AuthenticationConfig = .{},
 };
 
@@ -66,36 +66,46 @@ const ClientState = enum {
     closed,
 };
 
+const ClientMetrics = struct {
+    bytes_recv_total: u128 = 0,
+    bytes_send_total: u128 = 0,
+    messages_recv_total: u128 = 0,
+    messages_send_total: u128 = 0,
+};
+
 pub const Client = struct {
     const Self = @This();
 
-    id: u11,
+    advertiser_callbacks: std.AutoHashMap(u128, AdvertiserCallback),
     allocator: std.mem.Allocator,
-    config: ClientConfig,
     close_channel: *UnbufferedChannel(bool),
-    done_channel: *UnbufferedChannel(bool),
-    io: *IO,
-    kid: KID,
-    state: ClientState,
-    memory_pool: *MemoryPool(Message),
-    mutex: std.Thread.Mutex,
-    connections_mutex: std.Thread.Mutex,
-    connections: std.AutoHashMap(u64, *Connection),
-    uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
-    transactions: std.AutoHashMap(uuid.Uuid, *Signal(*Message)),
-    transactions_mutex: std.Thread.Mutex,
+    config: ClientConfig,
     connection_messages: ConnectionMessages,
     connection_messages_mutex: std.Thread.Mutex,
-    topics: std.StringHashMap(*Topic),
-    topics_mutex: std.Thread.Mutex,
-    subscriber_callbacks: std.AutoHashMap(u128, SubscriberCallback),
-    services: std.StringHashMap(*Service),
-    services_mutex: std.Thread.Mutex,
-    advertiser_callbacks: std.AutoHashMap(u128, AdvertiserCallback),
-    inbox: *RingBuffer(*Message),
+    connections_mutex: std.Thread.Mutex,
+    connections: std.AutoHashMap(u64, *Connection),
+    done_channel: *UnbufferedChannel(bool),
+    id: u11,
     inbox_mutex: std.Thread.Mutex,
-    session: ?*Session = null,
+    inbox: *RingBuffer(*Message),
+    outbox_mutex: std.Thread.Mutex,
+    outbox: *RingBuffer(*Message),
+    io: *IO,
+    kid: KID,
+    memory_pool: *MemoryPool(Message),
+    metrics: ClientMetrics,
+    mutex: std.Thread.Mutex,
+    services_mutex: std.Thread.Mutex,
+    services: std.StringHashMap(*Service),
     session_mutex: std.Thread.Mutex,
+    session: ?*Session = null,
+    state: ClientState,
+    subscriber_callbacks: std.AutoHashMap(u128, SubscriberCallback),
+    topics_mutex: std.Thread.Mutex,
+    topics: std.StringHashMap(*Topic),
+    transactions_mutex: std.Thread.Mutex,
+    transactions: std.AutoHashMap(uuid.Uuid, *Signal(*Message)),
+    uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
 
     pub fn init(allocator: std.mem.Allocator, config: ClientConfig) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -117,45 +127,54 @@ pub const Client = struct {
         const memory_pool = try allocator.create(MemoryPool(Message));
         errdefer allocator.destroy(memory_pool);
 
-        memory_pool.* = try MemoryPool(Message).init(allocator, 10_000);
+        memory_pool.* = try MemoryPool(Message).init(allocator, config.memory_pool_capacity);
         errdefer memory_pool.deinit();
 
         const inbox = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(inbox);
 
-        inbox.* = try RingBuffer(*Message).init(allocator, 5_000);
+        inbox.* = try RingBuffer(*Message).init(allocator, constants.client_inbox_capacity);
         errdefer inbox.deinit();
+
+        const outbox = try allocator.create(RingBuffer(*Message));
+        errdefer allocator.destroy(outbox);
+
+        outbox.* = try RingBuffer(*Message).init(allocator, constants.client_outbox_capacity);
+        errdefer outbox.deinit();
 
         // TODO: we should add an outbox to act as the global outbound communicator
 
         return Self{
-            .id = config.client_id,
+            .advertiser_callbacks = std.AutoHashMap(u128, AdvertiserCallback).init(allocator),
             .allocator = allocator,
             .close_channel = close_channel,
             .config = config,
+            .connection_messages = ConnectionMessages.init(allocator, memory_pool),
+            .connection_messages_mutex = std.Thread.Mutex{},
+            .connections_mutex = std.Thread.Mutex{},
+            .connections = std.AutoHashMap(u64, *Connection).init(allocator),
             .done_channel = done_channel,
+            .id = config.client_id,
+            .inbox = inbox,
+            .inbox_mutex = std.Thread.Mutex{},
+            .outbox = outbox,
+            .outbox_mutex = std.Thread.Mutex{},
             .io = io,
             .kid = KID.init(config.client_id, .{}),
             .memory_pool = memory_pool,
-            .state = .closed,
+            .metrics = ClientMetrics{},
             .mutex = std.Thread.Mutex{},
-            .connections_mutex = std.Thread.Mutex{},
-            .connections = std.AutoHashMap(u64, *Connection).init(allocator),
-            .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
-            .transactions = std.AutoHashMap(uuid.Uuid, *Signal(*Message)).init(allocator),
-            .transactions_mutex = std.Thread.Mutex{},
-            .connection_messages = ConnectionMessages.init(allocator, memory_pool),
-            .connection_messages_mutex = std.Thread.Mutex{},
-            .topics = std.StringHashMap(*Topic).init(allocator),
-            .topics_mutex = std.Thread.Mutex{},
-            .subscriber_callbacks = std.AutoHashMap(u128, SubscriberCallback).init(allocator),
-            .services = std.StringHashMap(*Service).init(allocator),
             .services_mutex = std.Thread.Mutex{},
-            .advertiser_callbacks = std.AutoHashMap(u128, AdvertiserCallback).init(allocator),
-            .inbox = inbox,
-            .inbox_mutex = std.Thread.Mutex{},
-            .session = null,
+            .services = std.StringHashMap(*Service).init(allocator),
             .session_mutex = std.Thread.Mutex{},
+            .session = null,
+            .state = .closed,
+            .subscriber_callbacks = std.AutoHashMap(u128, SubscriberCallback).init(allocator),
+            .topics_mutex = std.Thread.Mutex{},
+            .topics = std.StringHashMap(*Topic).init(allocator),
+            .transactions_mutex = std.Thread.Mutex{},
+            .transactions = std.AutoHashMap(uuid.Uuid, *Signal(*Message)).init(allocator),
+            .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
         };
     }
 
@@ -203,6 +222,11 @@ pub const Client = struct {
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
+        while (self.outbox.dequeue()) |message| {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
         if (self.session) |session| {
             session.deinit(self.allocator);
             self.allocator.destroy(session);
@@ -218,12 +242,14 @@ pub const Client = struct {
         self.services.deinit();
         self.advertiser_callbacks.deinit();
         self.inbox.deinit();
+        self.outbox.deinit();
 
         self.allocator.destroy(self.memory_pool);
         self.allocator.destroy(self.io);
         self.allocator.destroy(self.done_channel);
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.inbox);
+        self.allocator.destroy(self.outbox);
     }
 
     pub fn start(self: *Self) !void {
@@ -334,10 +360,29 @@ pub const Client = struct {
         }
     }
 
+    pub fn flush(self: *Self) void {
+        while (true) {
+            var all_messages_sent: bool = true;
+
+            var connections_iter = self.connections.valueIterator();
+            while (connections_iter.next()) |entry| {
+                const conn = entry.*;
+
+                if (conn.send_buffer_list.items.len > 0 or conn.send_submitted or conn.send_buffer_overflow_count > 0) {
+                    all_messages_sent = false;
+                    break;
+                }
+            }
+
+            if (all_messages_sent) return;
+        }
+    }
+
     fn tick(self: *Self) !void {
         try self.tickConnections();
         try self.initializeOutboundConnections();
-        try self.processInboundConnectionMessages();
+        try self.processInboundMessages();
+        try self.processOutboundMessages();
         // try self.processClientMessages();
         // try self.aggregateOutboundMessages();
     }
@@ -384,7 +429,7 @@ pub const Client = struct {
         }
     }
 
-    fn processInboundConnectionMessages(self: *Self) !void {
+    fn processInboundMessages(self: *Self) !void {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
@@ -411,6 +456,31 @@ pub const Client = struct {
                     else => unreachable,
                 }
             }
+        }
+    }
+
+    fn processOutboundMessages(self: *Self) !void {
+        self.outbox_mutex.lock();
+        defer self.outbox_mutex.unlock();
+
+        self.session_mutex.lock();
+        defer self.session_mutex.unlock();
+
+        if (self.session == null) return;
+        const session = self.session.?;
+
+        self.connections_mutex.lock();
+        defer self.connections_mutex.unlock();
+
+        while (self.outbox.dequeue()) |message| {
+            assert(message.refs() == 1);
+
+            const conn = session.getNextConnection();
+
+            conn.outbox.enqueue(message) catch {
+                self.outbox.prepend(message) catch unreachable;
+                return;
+            };
         }
     }
 
@@ -657,6 +727,9 @@ pub const Client = struct {
         defer self.session_mutex.unlock();
 
         if (self.session) |session| {
+            self.connections_mutex.lock();
+            defer self.connections_mutex.unlock();
+
             var connections_iter = session.connections.valueIterator();
             while (connections_iter.next()) |entry| {
                 const conn = entry.*;
@@ -680,22 +753,22 @@ pub const Client = struct {
         message.setTopicName(topic_name);
         message.setBody(body);
 
-        // at this point we just need to lock everything together
-        self.session_mutex.lock();
-        defer self.session_mutex.unlock();
+        self.outbox_mutex.lock();
+        defer self.outbox_mutex.unlock();
 
-        self.connections_mutex.lock();
-        defer self.connections_mutex.unlock();
+        try self.outbox.enqueue(message);
 
-        const session = self.session.?;
-        const conn = session.getNextConnection();
+        // // at this point we just need to lock everything together
+        // self.session_mutex.lock();
+        // defer self.session_mutex.unlock();
 
-        // log.info("publishing message: {} on conn.connection_id: {}", .{
-        //     message.extension_headers.publish.message_id,
-        //     conn.connection_id,
-        // });
+        // self.connections_mutex.lock();
+        // defer self.connections_mutex.unlock();
 
-        try conn.outbox.enqueue(message);
+        // const session = self.session.?;
+        // const conn = session.getNextConnection();
+
+        // try conn.outbox.enqueue(message);
     }
 };
 

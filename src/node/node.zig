@@ -37,7 +37,6 @@ const Advertiser = @import("../services/advertiser.zig").Advertiser;
 const Requestor = @import("../services/requestor.zig").Requestor;
 
 const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
-// const Envelope = @import("../data_structures/envelope.zig").Envelope;
 const Envelope = @import("./envelope.zig").Envelope;
 
 const Session = @import("./session.zig").Session;
@@ -816,9 +815,11 @@ pub const Node = struct {
     }
 
     fn handlePublish(self: *Self, envelope: Envelope) !void {
+        _ = self;
         assert(envelope.message.refs() == 1);
 
-        _ = self;
+        // const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
+        // _ = topic;
     }
 
     // fn handlePublish(self: *Self, message: *Message) !void {
