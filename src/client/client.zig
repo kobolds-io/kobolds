@@ -558,7 +558,7 @@ pub const Client = struct {
         errdefer self.memory_pool.destroy(session_message);
 
         if (self.session) |session| {
-            session_message.* = Message.new(0, .session_join);
+            session_message.* = Message.new(.session_join);
             session_message.extension_headers.session_join.peer_id = session.peer_id;
             session_message.extension_headers.session_join.session_id = session.session_id;
 
@@ -586,7 +586,7 @@ pub const Client = struct {
                 else => @panic("unsupported challenge_method"),
             }
         } else {
-            session_message.* = Message.new(0, .session_init);
+            session_message.* = Message.new(.session_init);
             session_message.extension_headers.session_init.peer_type = .client;
 
             switch (message.extension_headers.auth_challenge.challenge_method) {
@@ -746,8 +746,7 @@ pub const Client = struct {
         const message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(message);
 
-        message.* = Message.new(0, .publish);
-        // message.* = Message.new(self.kid.generate(), .publish);
+        message.* = Message.new(.publish);
         message.ref();
         errdefer message.deref();
 
