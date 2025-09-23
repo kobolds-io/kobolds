@@ -761,18 +761,6 @@ pub const Client = struct {
         defer self.outbox_mutex.unlock();
 
         try self.outbox.enqueue(message);
-
-        // // at this point we just need to lock everything together
-        // self.session_mutex.lock();
-        // defer self.session_mutex.unlock();
-
-        // self.connections_mutex.lock();
-        // defer self.connections_mutex.unlock();
-
-        // const session = self.session.?;
-        // const conn = session.getNextConnection();
-
-        // try conn.outbox.enqueue(message);
     }
 };
 

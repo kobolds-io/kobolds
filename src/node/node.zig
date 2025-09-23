@@ -463,9 +463,7 @@ pub const Node = struct {
 
                 // We are going to create envelopes here
                 while (session_outbox.available() > 0 and !subscriber.queue.isEmpty()) {
-                    if (subscriber.queue.dequeue()) |envelope| {
-                        session_outbox.enqueue(envelope) catch unreachable;
-                    }
+                    session_outbox.concatenateAvailable(subscriber.queue);
                 }
             }
         }
