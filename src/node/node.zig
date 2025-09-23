@@ -818,20 +818,16 @@ pub const Node = struct {
         topic.queue.enqueue(envelope) catch envelope.message.deref();
     }
 
-    // fn handlePublish(self: *Self, message: *Message) !void {
-    //     assert(message.refs() == 1);
-    //     // Publishes actually don't care about the origin of the message so much. Instead, they care much more about
-    //     // the destination of the mssage. The topic is in charge of distributing messages to subscribers. Subscribers
-    //     // are in charge of attaching metadata as to the destination of the message
-    //     const topic = try self.findOrCreateTopic(message.topicName(), .{});
-    //     if (topic.queue.available() == 0) {
-    //         // Try and push messages to subscribers to free up slots in the topic
-    //         try topic.tick();
-    //     }
+    fn handleSubscribe(self: *Self, envelope: Envelope) !void {
+        _ = self;
+        _ = envelope;
+        // const reply_message = try self.memory_pool.create();
+        // errdefer self.memory_pool.destroy(reply_message);
+        //
+        // reply_message = Message.new(.reply);
+        // reply_message.setTransactionId(envelope.message.transactionId());
 
-    //     message.ref();
-    //     topic.queue.enqueue(message) catch message.deref();
-    // }
+    }
 
     // fn handleSubscribe(self: *Self, message: *Message) !void {
     //     const reply = try self.memory_pool.create();
