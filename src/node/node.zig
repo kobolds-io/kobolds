@@ -408,10 +408,6 @@ pub const Node = struct {
     }
 
     fn processMessages(self: *Self) !void {
-        // There should only be `n` messages processed every tick
-        // const max_messages_processed_per_tick: usize = 100_000;
-        // var i: usize = 0;
-        // while (i < max_messages_processed_per_tick) : (i += 1) {
         while (self.inbox.dequeue()) |envelope| {
             assert(envelope.message.refs() == 1);
             defer {
@@ -426,35 +422,6 @@ pub const Node = struct {
                 .publish => try self.handlePublish(envelope),
                 else => {},
             }
-
-            // switch (message.headers.message_type) {
-            //     .publish => try self.handlePublish(message),
-            //     .subscribe => try self.handleSubscribe(message),
-            //     .advertise => try self.handleAdvertise(message),
-            //     .unadvertise => try self.handleUnadvertise(message),
-            //     .request => try self.handleRequest(message),
-            //     .reply => try self.handleReply(message),
-            //     .ping => try self.handlePing(message),
-            //     .pong => try self.handlePong(message),
-            //     else => |t| {
-            //         log.err("received unhandled message type {any}", .{t});
-            //         @panic("unhandled message!");
-            //     },
-            // }
-            // } else break;
-            // }
-
-            // var topics_iter = self.topics.valueIterator();
-            // while (topics_iter.next()) |topic_entry| {
-            //     const topic = topic_entry.*;
-            //     try topic.tick();
-            // }
-
-            // var services_iter = self.services.valueIterator();
-            // while (services_iter.next()) |service_entry| {
-            //     const service = service_entry.*;
-            //     try service.tick();
-            // }
         }
     }
 
