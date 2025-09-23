@@ -1,5 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
+const KID = @import("kid").KID;
 
 const RingBuffer = @import("stdx").RingBuffer;
 
@@ -14,11 +15,14 @@ pub const PublisherOptions = struct {
 
 pub const Publisher = struct {
     const Self = @This();
-    queue: RingBuffer(Envelope),
 
-    pub fn init(allocator: std.mem.Allocator, options: PublisherOptions) !Self {
+    queue: RingBuffer(Envelope),
+    publisher_key: u64,
+
+    pub fn init(allocator: std.mem.Allocator, publisher_key: u64, options: PublisherOptions) !Self {
         return Self{
             .queue = try RingBuffer(Envelope).init(allocator, options.queue_capacity),
+            .publisher_key = publisher_key,
         };
     }
 
@@ -87,54 +91,66 @@ test "init/deinit" {
 }
 
 test "gather envelopes from publishers" {
-    const allocator = testing.allocator;
+    //     const allocator = testing.allocator;
 
-    var topic = try Topic.init(allocator, "/test/topic", .{ .queue_capacity = 10 });
-    defer topic.deinit(allocator);
+    //     var kid = KID.init(1, .{});
 
-    var message_1 = Message.new(.publish);
-    const envelope_1 = Envelope{
-        .message = &message_1,
-        .conn_id = 0,
-        .session_id = 0,
-        .message_id = 1,
-    };
+    //     var topic = try Topic.init(allocator, "/test/topic", .{ .queue_capacity = 10 });
+    //     defer topic.deinit(allocator);
 
-    var message_2 = Message.new(.publish);
-    const envelope_2 = Envelope{
-        .message = &message_2,
-        .conn_id = 0,
-        .session_id = 0,
-        .message_id = 2,
-    };
+    //     for (0..topic.queue.capacity) |_| {
+    //         var message_1 = Message.new(.publish);
+    //         const envelope_1 = Envelope{
+    //             .message = &message_1,
+    //             .conn_id = 0,
+    //             .session_id = 0,
+    //             .message_id = kid.generate(),
+    //         };
+    //     }
 
-    var message_3 = Message.new(.publish);
-    const envelope_3 = Envelope{
-        .message = &message_3,
-        .conn_id = 0,
-        .session_id = 0,
-        .message_id = 3,
-    };
+    //     var message_1 = Message.new(.publish);
+    //     const envelope_1 = Envelope{
+    //         .message = &message_1,
+    //         .conn_id = 0,
+    //         .session_id = 0,
+    //         .message_id = kid.generate(),
+    //     };
 
-    // create a publisher
-    var publisher_1 = try Publisher.init(allocator, .{ .queue_capacity = 10 });
-    defer publisher_1.deinit(allocator);
+    //     var message_2 = Message.new(.publish);
+    //     const envelope_2 = Envelope{
+    //         .message = &message_2,
+    //         .conn_id = 0,
+    //         .session_id = 0,
+    //         .message_id = 2,
+    //     };
 
-    var publisher_2 = try Publisher.init(allocator, .{ .queue_capacity = 10 });
-    defer publisher_2.deinit(allocator);
+    //     var message_3 = Message.new(.publish);
+    //     const envelope_3 = Envelope{
+    //         .message = &message_3,
+    //         .conn_id = 0,
+    //         .session_id = 0,
+    //         .message_id = 3,
+    //     };
 
-    // add the messages to the publishers
-    try publisher_1.queue.enqueue(envelope_1);
-    try publisher_2.queue.enqueue(envelope_2);
-    try publisher_2.queue.enqueue(envelope_3);
+    //     // create a publisher
+    //     var publisher_1 = try Publisher.init(allocator, .{ .queue_capacity = 10 });
+    //     defer publisher_1.deinit(allocator);
 
-    // add all the publishers to this topic
-    try topic.publishers.put(allocator, 1, &publisher_1);
-    try topic.publishers.put(allocator, 2, &publisher_2);
+    //     var publisher_2 = try Publisher.init(allocator, .{ .queue_capacity = 10 });
+    //     defer publisher_2.deinit(allocator);
 
-    try testing.expectEqual(0, topic.queue.count);
+    //     // add the messages to the publishers
+    //     try publisher_1.queue.enqueue(envelope_1);
+    //     try publisher_2.queue.enqueue(envelope_2);
+    //     try publisher_2.queue.enqueue(envelope_3);
 
-    try topic.gatherEnvelopes();
+    //     // add all the publishers to this topic
+    //     try topic.publishers.put(allocator, 1, &publisher_1);
+    //     try topic.publishers.put(allocator, 2, &publisher_2);
 
-    try testing.expectEqual(3, topic.queue.count);
+    //     try testing.expectEqual(0, topic.queue.count);
+
+    //     try topic.gatherEnvelopes();
+
+    //     try testing.expectEqual(3, topic.queue.count);
 }

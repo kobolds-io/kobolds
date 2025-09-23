@@ -7,9 +7,10 @@ const constants = @import("../constants.zig");
 const RingBuffer = @import("stdx").RingBuffer;
 const MemoryPool = @import("stdx").MemoryPool;
 
-const Message = @import("../protocol/message.zig").Message;
+const Message = @import("../protocol/message2.zig").Message;
+const Envelope = @import("../node/envelope.zig").Envelope;
 
-const Publisher = @import("./publisher.zig").Publisher;
+// const Publisher = @import("./publisher.zig").Publisher;
 const Subscriber = @import("./subscriber.zig").Subscriber;
 
 pub const TopicOptions = struct {
@@ -27,12 +28,12 @@ pub const Topic = struct {
 
     allocator: std.mem.Allocator,
     memory_pool: *MemoryPool(Message),
-    publishers: std.AutoHashMap(u128, *Publisher),
-    queue: *RingBuffer(*Message),
-    subscriber_queues: std.array_list.Managed(*RingBuffer(*Message)),
-    subscribers: std.AutoHashMap(u128, *Subscriber),
+    // publishers: std.AutoHashMap(u128, *Publisher),
+    queue: *RingBuffer(Envelope),
+    subscriber_queues: std.array_list.Managed(*RingBuffer(Envelope)),
+    subscribers: std.AutoHashMap(u64, *Subscriber),
     topic_name: []const u8,
-    tmp_copy_buffer: []*Message,
+    tmp_copy_buffer: []Envelope,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -40,23 +41,23 @@ pub const Topic = struct {
         topic_name: []const u8,
         options: TopicOptions,
     ) !Self {
-        const queue = try allocator.create(RingBuffer(*Message));
+        const queue = try allocator.create(RingBuffer(Envelope));
         errdefer allocator.destroy(queue);
 
         // TODO: the buffer size should be configured. perhaps this could be a NodeConfig thing
-        queue.* = try RingBuffer(*Message).init(allocator, options.queue_capacity);
+        queue.* = try RingBuffer(Envelope).init(allocator, options.queue_capacity);
         errdefer queue.deinit();
 
-        const tmp_copy_buffer = try allocator.alloc(*Message, options.subscriber_queue_capacity);
+        const tmp_copy_buffer = try allocator.alloc(Envelope, options.subscriber_queue_capacity);
         errdefer allocator.free(tmp_copy_buffer);
 
         return Self{
             .allocator = allocator,
             .memory_pool = memory_pool,
-            .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
+            // .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
             .queue = queue,
-            .subscriber_queues = std.array_list.Managed(*RingBuffer(*Message)).init(allocator),
-            .subscribers = std.AutoHashMap(u128, *Subscriber).init(allocator),
+            .subscriber_queues = std.array_list.Managed(*RingBuffer(Envelope)).init(allocator),
+            .subscribers = std.AutoHashMap(u64, *Subscriber).init(allocator),
             .topic_name = topic_name,
             .tmp_copy_buffer = tmp_copy_buffer,
         };
@@ -70,9 +71,9 @@ pub const Topic = struct {
         while (subscribers_iter.next()) |entry| {
             const subscriber = entry.*;
 
-            while (subscriber.queue.dequeue()) |message| {
-                message.deref();
-                if (message.refs() == 0) self.memory_pool.destroy(message);
+            while (subscriber.queue.dequeue()) |envelope| {
+                envelope.message.deref();
+                if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
             }
 
             subscriber.deinit();
@@ -86,7 +87,7 @@ pub const Topic = struct {
         // }
 
         self.subscribers.deinit();
-        self.publishers.deinit();
+        // self.publishers.deinit();
         self.queue.deinit();
         self.subscriber_queues.deinit();
 
@@ -145,7 +146,7 @@ pub const Topic = struct {
         }
     }
 
-    pub fn addSubscriber(self: *Self, subscriber_key: u128, conn_id: u128) !void {
+    pub fn addSubscriber(self: *Self, subscriber_key: u64, conn_id: u128) !void {
         const subscriber = try self.allocator.create(Subscriber);
         errdefer self.allocator.destroy(subscriber);
 
@@ -160,11 +161,12 @@ pub const Topic = struct {
         try self.subscribers.put(subscriber_key, subscriber);
     }
 
-    pub fn removeSubscriber(self: *Self, subscriber_key: u128) bool {
+    pub fn removeSubscriber(self: *Self, subscriber_key: u64) bool {
         if (self.subscribers.fetchRemove(subscriber_key)) |entry| {
             const subscriber = entry.value;
 
-            while (subscriber.queue.dequeue()) |message| {
+            while (subscriber.queue.dequeue()) |envelope| {
+                const message = envelope.message;
                 message.deref();
                 if (message.refs() == 0) self.memory_pool.destroy(message);
             }
@@ -179,7 +181,9 @@ pub const Topic = struct {
     }
 
     fn clearQueue(self: *Self) void {
-        while (self.queue.dequeue()) |message| {
+        while (self.queue.dequeue()) |envelope| {
+            const message = envelope.message;
+
             assert(message.refs() == 1);
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);

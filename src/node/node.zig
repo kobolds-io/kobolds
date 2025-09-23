@@ -785,6 +785,8 @@ pub const Node = struct {
         _ = self;
         assert(envelope.message.refs() == 1);
 
+        // get the key of the publisher
+
         // const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
         // _ = topic;
     }

@@ -4,26 +4,26 @@ const uuid = @import("uuid");
 
 const RingBuffer = @import("stdx").RingBuffer;
 
-const Message = @import("../protocol/message.zig").Message;
+const Envelope = @import("../node/envelope.zig").Envelope;
 
 pub const Subscriber = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
-    conn_id: uuid.Uuid,
-    key: u128,
-    queue: *RingBuffer(*Message),
+    session_id: uuid.Uuid,
+    key: u64,
+    queue: *RingBuffer(Envelope),
 
-    pub fn init(allocator: std.mem.Allocator, key: u128, conn_id: uuid.Uuid, queue_capacity: usize) !Self {
-        const queue = try allocator.create(RingBuffer(*Message));
+    pub fn init(allocator: std.mem.Allocator, key: u64, session_id: u64, queue_capacity: usize) !Self {
+        const queue = try allocator.create(RingBuffer(Envelope));
         errdefer allocator.destroy(queue);
 
-        queue.* = try RingBuffer(*Message).init(allocator, queue_capacity);
+        queue.* = try RingBuffer(Envelope).init(allocator, queue_capacity);
         errdefer queue.deinit();
 
         return Self{
             .allocator = allocator,
-            .conn_id = conn_id,
+            .session_id = session_id,
             .key = key,
             .queue = queue,
         };
