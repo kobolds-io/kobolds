@@ -355,15 +355,15 @@ pub const Node = struct {
     }
 
     fn tick(self: *Self) !void {
-        // self.handlePrintingIntervalMetrics();
-        log.info("memory pool remaining {}", .{self.memory_pool.available()});
+        self.handlePrintingIntervalMetrics();
+        // log.info("memory pool remaining {}", .{self.memory_pool.available()});
 
         self.pruneEmptySessions();
         // try self.pruneDeadConnections();
         try self.maybeAddInboundConnections();
         try self.gatherMessages();
         try self.processMessages();
-        // try self.aggregateMessages();
+        try self.aggregateMessages();
         // try self.distributeMessages();
     }
 
@@ -392,6 +392,11 @@ pub const Node = struct {
     }
 
     fn gatherMessages(self: *Self) !void {
+
+        // FIX: this needs to basically loop and start at the last worker that it left off at. That way that all workers
+        // are serviced evenly. There is a high probability that one worker can block another worker from ever
+        // having messages processed.
+
         var workers_iter = self.workers.valueIterator();
         while (workers_iter.next()) |worker_entry| {
             if (self.inbox.available() == 0) break;
@@ -423,34 +428,36 @@ pub const Node = struct {
                 else => {},
             }
         }
+
+        var topics_iter = self.topics.iterator();
+        while (topics_iter.next()) |entry| {
+            const topic_name = entry.key_ptr.*;
+            _ = topic_name;
+            const topic = entry.value_ptr.*;
+
+            try topic.tick();
+        }
     }
 
     fn aggregateMessages(self: *Self) !void {
-        _ = self;
-        // var topics_iter = self.topics.valueIterator();
-        // while (topics_iter.next()) |topic_entry| {
-        //     const topic: *Topic = topic_entry.*;
-        //     if (topic.subscribers.count() == 0) continue;
+        var topics_iter = self.topics.valueIterator();
+        while (topics_iter.next()) |topic_entry| {
+            const topic: *Topic = topic_entry.*;
+            if (topic.subscribers.count() == 0) continue;
 
-        //     var subscribers_iter = topic.subscribers.valueIterator();
-        //     while (subscribers_iter.next()) |subscriber_entry| {
-        //         const subscriber: *Subscriber = subscriber_entry.*;
-        //         const connection_outbox = try self.findOrCreateConnectionOutbox(subscriber.conn_id);
+            var subscribers_iter = topic.subscribers.valueIterator();
+            while (subscribers_iter.next()) |subscriber_entry| {
+                const subscriber: *Subscriber = subscriber_entry.*;
+                const session_outbox = try self.findOrCreateSessionOutbox(subscriber.session_id);
 
-        //         // We are going to create envelopes here
-        //         while (connection_outbox.available() > 0 and !subscriber.queue.isEmpty()) {
-        //             if (subscriber.queue.dequeue()) |message| {
-        //                 const envelope = Envelope{
-        //                     .connection_id = subscriber.conn_id,
-        //                     .message = message,
-        //                 };
-
-        //                 // we are checking this loop that adding the envelope will be successful
-        //                 connection_outbox.enqueue(envelope) catch unreachable;
-        //             }
-        //         }
-        //     }
-        // }
+                // We are going to create envelopes here
+                while (session_outbox.available() > 0 and !subscriber.queue.isEmpty()) {
+                    if (subscriber.queue.dequeue()) |envelope| {
+                        session_outbox.enqueue(envelope) catch unreachable;
+                    }
+                }
+            }
+        }
 
         // var services_iter = self.services.valueIterator();
         // while (services_iter.next()) |service_entry| {
@@ -496,36 +503,36 @@ pub const Node = struct {
         // }
     }
 
-    fn distributeMessages(self: *Self) !void {
-        var workers_iter = self.workers.valueIterator();
-        while (workers_iter.next()) |worker_entry| {
-            const worker = worker_entry.*;
+    // fn distributeMessages(self: *Self) !void {
+    //     var workers_iter = self.workers.valueIterator();
+    //     while (workers_iter.next()) |worker_entry| {
+    //         const worker = worker_entry.*;
 
-            worker.outbox_mutex.lock();
-            defer worker.outbox_mutex.unlock();
+    //         worker.outbox_mutex.lock();
+    //         defer worker.outbox_mutex.unlock();
 
-            if (worker.outbox.isFull()) continue;
+    //         if (worker.outbox.isFull()) continue;
 
-            worker.connections_mutex.lock();
-            defer worker.connections_mutex.unlock();
+    //         worker.connections_mutex.lock();
+    //         defer worker.connections_mutex.unlock();
 
-            // FIX: this is pretty inefficient as we are re looking up the connections for each worker every single
-            // time. A better would be to already know the worker the messages were destined for before we even get to
-            // this loop.
-            var worker_connections_iter = worker.connections.keyIterator();
-            while (worker_connections_iter.next()) |connection_id_entry| {
-                const conn_id: uuid.Uuid = connection_id_entry.*;
+    //         // FIX: this is pretty inefficient as we are re looking up the connections for each worker every single
+    //         // time. A better would be to already know the worker the messages were destined for before we even get to
+    //         // this loop.
+    //         var worker_connections_iter = worker.connections.keyIterator();
+    //         while (worker_connections_iter.next()) |connection_id_entry| {
+    //             const conn_id: uuid.Uuid = connection_id_entry.*;
 
-                if (self.session_outboxes.get(conn_id)) |connection_outbox| {
-                    worker.outbox.concatenateAvailable(connection_outbox);
-                } else {
-                    // this connection doesn't have an outbox.
-                    const connection_outbox = try self.findOrCreateConnectionOutbox(conn_id);
-                    worker.outbox.concatenateAvailable(connection_outbox);
-                }
-            }
-        }
-    }
+    //             if (self.session_outboxes.get(conn_id)) |connection_outbox| {
+    //                 worker.outbox.concatenateAvailable(connection_outbox);
+    //             } else {
+    //                 // this connection doesn't have an outbox.
+    //                 const connection_outbox = try self.findOrCreateSessionOutbox(conn_id);
+    //                 worker.outbox.concatenateAvailable(connection_outbox);
+    //             }
+    //         }
+    //     }
+    // }
 
     fn pruneEmptySessions(self: *Self) void {
         self.sessions_mutex.lock();
@@ -606,22 +613,22 @@ pub const Node = struct {
         }
     }
 
-    fn findOrCreateConnectionOutbox(self: *Self, conn_id: u128) !*RingBuffer(Envelope) {
-        var connection_outbox: *RingBuffer(Envelope) = undefined;
-        if (self.session_outboxes.get(conn_id)) |queue| {
-            connection_outbox = queue;
+    fn findOrCreateSessionOutbox(self: *Self, session_id: u64) !*RingBuffer(Envelope) {
+        var session_outbox: *RingBuffer(Envelope) = undefined;
+        if (self.session_outboxes.get(session_id)) |queue| {
+            session_outbox = queue;
         } else {
             const queue = try self.allocator.create(RingBuffer(Envelope));
             errdefer self.allocator.destroy(queue);
 
-            queue.* = try RingBuffer(Envelope).init(self.allocator, constants.connection_outbox_capacity);
+            queue.* = try RingBuffer(Envelope).init(self.allocator, 1_000);
             errdefer queue.deinit();
 
-            try self.session_outboxes.put(conn_id, queue);
-            connection_outbox = queue;
+            try self.session_outboxes.put(session_id, queue);
+            session_outbox = queue;
         }
 
-        return connection_outbox;
+        return session_outbox;
     }
 
     fn initializeWorkers(self: *Self) !void {
@@ -809,203 +816,203 @@ pub const Node = struct {
     //     topic.queue.enqueue(message) catch message.deref();
     // }
 
-    fn handleSubscribe(self: *Self, message: *Message) !void {
-        const reply = try self.memory_pool.create();
-        errdefer self.memory_pool.destroy(reply);
+    // fn handleSubscribe(self: *Self, message: *Message) !void {
+    //     const reply = try self.memory_pool.create();
+    //     errdefer self.memory_pool.destroy(reply);
 
-        reply.* = Message.new();
-        reply.headers.message_type = .reply;
-        reply.setTopicName(message.topicName());
-        reply.setTransactionId(message.transactionId());
-        reply.setErrorCode(.ok);
-        reply.ref();
-        errdefer reply.deref();
+    //     reply.* = Message.new();
+    //     reply.headers.message_type = .reply;
+    //     reply.setTopicName(message.topicName());
+    //     reply.setTransactionId(message.transactionId());
+    //     reply.setErrorCode(.ok);
+    //     reply.ref();
+    //     errdefer reply.deref();
 
-        const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
-        if (connection_outbox.isFull()) {
-            return error.ConnectionOutboxFull;
-        }
+    //     const connection_outbox = try self.findOrCreateSessionOutbox(message.headers.connection_id);
+    //     if (connection_outbox.isFull()) {
+    //         return error.ConnectionOutboxFull;
+    //     }
 
-        const topic = try self.findOrCreateTopic(message.topicName(), .{});
+    //     const topic = try self.findOrCreateTopic(message.topicName(), .{});
 
-        // QUESTION: A connection can only be subscribed to a topic ONCE. Is this good behavior???
-        const subscriber_key = utils.generateKey(message.topicName(), message.headers.connection_id);
+    //     // QUESTION: A connection can only be subscribed to a topic ONCE. Is this good behavior???
+    //     const subscriber_key = utils.generateKey(message.topicName(), message.headers.connection_id);
 
-        topic.addSubscriber(subscriber_key, message.headers.connection_id) catch |err| {
-            log.err("error adding subscriber: {any}", .{err});
-            reply.setErrorCode(.err);
-        };
-        errdefer _ = topic.removeSubscriber(subscriber_key);
+    //     topic.addSubscriber(subscriber_key, message.headers.connection_id) catch |err| {
+    //         log.err("error adding subscriber: {any}", .{err});
+    //         reply.setErrorCode(.err);
+    //     };
+    //     errdefer _ = topic.removeSubscriber(subscriber_key);
 
-        const envelope = Envelope{
-            .connection_id = message.headers.connection_id,
-            .message = reply,
-        };
+    //     const envelope = Envelope{
+    //         .connection_id = message.headers.connection_id,
+    //         .message = reply,
+    //     };
 
-        try connection_outbox.enqueue(envelope);
-    }
+    //     try connection_outbox.enqueue(envelope);
+    // }
 
-    fn handleAdvertise(self: *Self, message: *Message) !void {
-        const reply = try self.memory_pool.create();
-        errdefer self.memory_pool.destroy(reply);
+    // fn handleAdvertise(self: *Self, message: *Message) !void {
+    //     const reply = try self.memory_pool.create();
+    //     errdefer self.memory_pool.destroy(reply);
 
-        reply.* = Message.new();
-        reply.headers.message_type = .reply;
-        reply.setTopicName(message.topicName());
-        reply.setTransactionId(message.transactionId());
-        reply.setErrorCode(.ok);
-        reply.ref();
-        errdefer reply.deref();
+    //     reply.* = Message.new();
+    //     reply.headers.message_type = .reply;
+    //     reply.setTopicName(message.topicName());
+    //     reply.setTransactionId(message.transactionId());
+    //     reply.setErrorCode(.ok);
+    //     reply.ref();
+    //     errdefer reply.deref();
 
-        const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
-        if (connection_outbox.isFull()) {
-            return error.ConnectionOutboxFull;
-        }
+    //     const connection_outbox = try self.findOrCreateSessionOutbox(message.headers.connection_id);
+    //     if (connection_outbox.isFull()) {
+    //         return error.ConnectionOutboxFull;
+    //     }
 
-        const service = try self.findOrCreateService(message.topicName(), .{});
+    //     const service = try self.findOrCreateService(message.topicName(), .{});
 
-        // QUESTION: A connection can only be subscribed to a service ONCE. Is this good behavior???
-        const advertiser_key = utils.generateKey(message.topicName(), message.headers.connection_id);
+    //     // QUESTION: A connection can only be subscribed to a service ONCE. Is this good behavior???
+    //     const advertiser_key = utils.generateKey(message.topicName(), message.headers.connection_id);
 
-        service.addAdvertiser(advertiser_key, message.headers.connection_id) catch |err| {
-            log.err("error adding advertiser: {any}", .{err});
-            reply.setErrorCode(.err);
-        };
-        errdefer _ = service.removeAdvertiser(advertiser_key);
+    //     service.addAdvertiser(advertiser_key, message.headers.connection_id) catch |err| {
+    //         log.err("error adding advertiser: {any}", .{err});
+    //         reply.setErrorCode(.err);
+    //     };
+    //     errdefer _ = service.removeAdvertiser(advertiser_key);
 
-        const envelope = Envelope{
-            .connection_id = message.headers.connection_id,
-            .message = reply,
-        };
+    //     const envelope = Envelope{
+    //         .connection_id = message.headers.connection_id,
+    //         .message = reply,
+    //     };
 
-        try connection_outbox.enqueue(envelope);
-    }
+    //     try connection_outbox.enqueue(envelope);
+    // }
 
-    fn handleUnadvertise(self: *Self, message: *Message) !void {
-        const reply = try self.memory_pool.create();
-        errdefer self.memory_pool.destroy(reply);
+    // fn handleUnadvertise(self: *Self, message: *Message) !void {
+    //     const reply = try self.memory_pool.create();
+    //     errdefer self.memory_pool.destroy(reply);
 
-        reply.* = Message.new();
-        reply.headers.message_type = .reply;
-        reply.setTopicName(message.topicName());
-        reply.setTransactionId(message.transactionId());
-        reply.setErrorCode(.ok);
-        reply.ref();
-        errdefer reply.deref();
+    //     reply.* = Message.new();
+    //     reply.headers.message_type = .reply;
+    //     reply.setTopicName(message.topicName());
+    //     reply.setTransactionId(message.transactionId());
+    //     reply.setErrorCode(.ok);
+    //     reply.ref();
+    //     errdefer reply.deref();
 
-        const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
-        if (connection_outbox.isFull()) {
-            return error.ConnectionOutboxFull;
-        }
+    //     const connection_outbox = try self.findOrCreateSessionOutbox(message.headers.connection_id);
+    //     if (connection_outbox.isFull()) {
+    //         return error.ConnectionOutboxFull;
+    //     }
 
-        const service = try self.findOrCreateService(message.topicName(), .{});
+    //     const service = try self.findOrCreateService(message.topicName(), .{});
 
-        // QUESTION: A connection can only be subscribed to a service ONCE. Is this good behavior???
-        const advertiser_key = utils.generateKey(message.topicName(), message.headers.connection_id);
+    //     // QUESTION: A connection can only be subscribed to a service ONCE. Is this good behavior???
+    //     const advertiser_key = utils.generateKey(message.topicName(), message.headers.connection_id);
 
-        if (!service.removeAdvertiser(advertiser_key)) {
-            // Advertiser did not exist on service
-            reply.setErrorCode(.err);
-        }
+    //     if (!service.removeAdvertiser(advertiser_key)) {
+    //         // Advertiser did not exist on service
+    //         reply.setErrorCode(.err);
+    //     }
 
-        const envelope = Envelope{
-            .connection_id = message.headers.connection_id,
-            .message = reply,
-        };
-        try connection_outbox.enqueue(envelope);
-    }
+    //     const envelope = Envelope{
+    //         .connection_id = message.headers.connection_id,
+    //         .message = reply,
+    //     };
+    //     try connection_outbox.enqueue(envelope);
+    // }
 
-    fn handleRequest(self: *Self, message: *Message) !void {
-        assert(message.refs() == 1);
-        const service = try self.findOrCreateService(message.topicName(), .{});
+    // fn handleRequest(self: *Self, message: *Message) !void {
+    //     assert(message.refs() == 1);
+    //     const service = try self.findOrCreateService(message.topicName(), .{});
 
-        if (service.requests_queue.available() == 0) {
-            try service.tick();
-        }
+    //     if (service.requests_queue.available() == 0) {
+    //         try service.tick();
+    //     }
 
-        if (service.requests_queue.available() > 0) {
-            message.ref();
-            try service.requests_queue.enqueue(message);
-            return;
-        }
+    //     if (service.requests_queue.available() > 0) {
+    //         message.ref();
+    //         try service.requests_queue.enqueue(message);
+    //         return;
+    //     }
 
-        const reply = try self.memory_pool.create();
-        errdefer self.memory_pool.destroy(reply);
+    //     const reply = try self.memory_pool.create();
+    //     errdefer self.memory_pool.destroy(reply);
 
-        reply.* = Message.new();
-        reply.headers.message_type = .reply;
-        reply.setTopicName(message.topicName());
-        reply.setTransactionId(message.transactionId());
-        reply.setErrorCode(.err);
-        reply.ref();
-        errdefer reply.deref();
+    //     reply.* = Message.new();
+    //     reply.headers.message_type = .reply;
+    //     reply.setTopicName(message.topicName());
+    //     reply.setTransactionId(message.transactionId());
+    //     reply.setErrorCode(.err);
+    //     reply.ref();
+    //     errdefer reply.deref();
 
-        const connection_outbox = try self.findOrCreateConnectionOutbox(message.headers.connection_id);
-        if (connection_outbox.isFull()) {
-            return error.ConnectionOutboxFull;
-        }
+    //     const connection_outbox = try self.findOrCreateSessionOutbox(message.headers.connection_id);
+    //     if (connection_outbox.isFull()) {
+    //         return error.ConnectionOutboxFull;
+    //     }
 
-        const envelope = Envelope{
-            .connection_id = message.headers.connection_id,
-            .message = reply,
-        };
+    //     const envelope = Envelope{
+    //         .connection_id = message.headers.connection_id,
+    //         .message = reply,
+    //     };
 
-        try connection_outbox.enqueue(envelope);
-    }
+    //     try connection_outbox.enqueue(envelope);
+    // }
 
-    fn handleReply(self: *Self, message: *Message) !void {
-        assert(message.refs() == 1);
+    // fn handleReply(self: *Self, message: *Message) !void {
+    //     assert(message.refs() == 1);
 
-        const service = try self.findOrCreateService(message.topicName(), .{});
-        if (service.replies_queue.available() == 0) {
-            try service.tick();
-        }
+    //     const service = try self.findOrCreateService(message.topicName(), .{});
+    //     if (service.replies_queue.available() == 0) {
+    //         try service.tick();
+    //     }
 
-        message.ref();
-        service.replies_queue.enqueue(message) catch message.deref();
-    }
+    //     message.ref();
+    //     service.replies_queue.enqueue(message) catch message.deref();
+    // }
 
-    fn handlePing(self: *Self, message: *Message) !void {
-        assert(message.refs() == 1);
+    // fn handlePing(self: *Self, message: *Message) !void {
+    //     assert(message.refs() == 1);
 
-        log.debug("received ping from origin_id: {d}, connection_id: {d}", .{
-            message.headers.origin_id,
-            message.headers.connection_id,
-        });
-        // Since this is a `ping` we don't need to do any extra work to figure out how to respond
-        message.headers.message_type = .pong;
-        // message.headers.origin_id = self.id;
-        message.setTransactionId(message.transactionId());
-        message.setErrorCode(.ok);
+    //     log.debug("received ping from origin_id: {d}, connection_id: {d}", .{
+    //         message.headers.origin_id,
+    //         message.headers.connection_id,
+    //     });
+    //     // Since this is a `ping` we don't need to do any extra work to figure out how to respond
+    //     message.headers.message_type = .pong;
+    //     // message.headers.origin_id = self.id;
+    //     message.setTransactionId(message.transactionId());
+    //     message.setErrorCode(.ok);
 
-        const conn_outbox = self.findOrCreateConnectionOutbox(message.headers.connection_id) catch |err| {
-            log.err("Failed to findOrCreateConnectionOutbox: {any}", .{err});
-            return;
-        };
+    //     const conn_outbox = self.findOrCreateSessionOutbox(message.headers.connection_id) catch |err| {
+    //         log.err("Failed to findOrCreateConnectionOutbox: {any}", .{err});
+    //         return;
+    //     };
 
-        message.ref();
-        const envelope = Envelope{
-            .connection_id = message.headers.connection_id,
-            .message = message,
-        };
+    //     message.ref();
+    //     const envelope = Envelope{
+    //         .connection_id = message.headers.connection_id,
+    //         .message = message,
+    //     };
 
-        if (conn_outbox.enqueue(envelope)) |_| {} else |err| {
-            log.err("Failed to enqueue message to conn_outbox: {any}", .{err});
-            message.deref();
-        }
-    }
+    //     if (conn_outbox.enqueue(envelope)) |_| {} else |err| {
+    //         log.err("Failed to enqueue message to conn_outbox: {any}", .{err});
+    //         message.deref();
+    //     }
+    // }
 
-    fn handlePong(self: *Self, message: *Message) !void {
-        defer {
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
-        }
+    // fn handlePong(self: *Self, message: *Message) !void {
+    //     defer {
+    //         message.deref();
+    //         if (message.refs() == 0) self.memory_pool.destroy(message);
+    //     }
 
-        log.debug("received pong from origin_id: {d}, connection_id: {d}", .{
-            message.headers.origin_id,
-            message.headers.connection_id,
-        });
-    }
+    //     log.debug("received pong from origin_id: {d}, connection_id: {d}", .{
+    //         message.headers.origin_id,
+    //         message.headers.connection_id,
+    //     });
+    // }
 
     fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
         _ = options;

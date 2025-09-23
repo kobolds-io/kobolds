@@ -64,7 +64,7 @@ pub const Topic = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        assert(self.queue.count == 0);
+        // assert(self.queue.count == 0);
         self.clearQueue();
 
         var subscribers_iter = self.subscribers.valueIterator();

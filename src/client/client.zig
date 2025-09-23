@@ -133,13 +133,13 @@ pub const Client = struct {
         const inbox = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(inbox);
 
-        inbox.* = try RingBuffer(*Message).init(allocator, constants.client_inbox_capacity);
+        inbox.* = try RingBuffer(*Message).init(allocator, constants.default_client_inbox_capacity);
         errdefer inbox.deinit();
 
         const outbox = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(outbox);
 
-        outbox.* = try RingBuffer(*Message).init(allocator, constants.client_outbox_capacity);
+        outbox.* = try RingBuffer(*Message).init(allocator, constants.default_client_outbox_capacity);
         errdefer outbox.deinit();
 
         // TODO: we should add an outbox to act as the global outbound communicator

@@ -9,7 +9,7 @@ pub const Subscriber = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
-    session_id: uuid.Uuid,
+    session_id: u64,
     key: u64,
     queue: *RingBuffer(Envelope),
 
