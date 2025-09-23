@@ -36,7 +36,6 @@ const ServiceOptions = @import("../services/service.zig").ServiceOptions;
 const Advertiser = @import("../services/advertiser.zig").Advertiser;
 const Requestor = @import("../services/requestor.zig").Requestor;
 
-const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
 const Envelope = @import("./envelope.zig").Envelope;
 
 const Session = @import("./session.zig").Session;
@@ -50,7 +49,7 @@ pub const NodeConfig = struct {
     node_id: u11 = 0,
     worker_threads: usize = 3,
     max_connections: u16 = 1024,
-    memory_pool_capacity: usize = 100_000,
+    memory_pool_capacity: usize = constants.default_node_memory_pool_capacity,
     listener_configs: ?[]const ListenerConfig = null,
     outbound_configs: ?[]const OutboundConnectionConfig = null,
     authenticator_config: AuthenticatorConfig = .{ .none = .{} },
@@ -98,7 +97,7 @@ pub const Node = struct {
     authenticator: *Authenticator,
     close_channel: *UnbufferedChannel(bool),
     config: NodeConfig,
-    connection_outboxes: std.AutoHashMap(u128, *RingBuffer(Envelope)),
+    session_outboxes: std.AutoHashMap(u64, *RingBuffer(Envelope)),
     done_channel: *UnbufferedChannel(bool),
     inbox: *RingBuffer(Envelope),
     io: *IO,
@@ -175,7 +174,7 @@ pub const Node = struct {
             .authenticator = authenticator,
             .close_channel = close_channel,
             .config = config,
-            .connection_outboxes = std.AutoHashMap(u128, *RingBuffer(Envelope)).init(allocator),
+            .session_outboxes = std.AutoHashMap(u64, *RingBuffer(Envelope)).init(allocator),
             .done_channel = done_channel,
             .inbox = inbox,
             .io = io,
@@ -234,7 +233,7 @@ pub const Node = struct {
             if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
         }
 
-        var connection_outboxes_iter = self.connection_outboxes.valueIterator();
+        var connection_outboxes_iter = self.session_outboxes.valueIterator();
         while (connection_outboxes_iter.next()) |entry| {
             const outbox = entry.*;
 
@@ -254,7 +253,7 @@ pub const Node = struct {
         self.topics.deinit();
         self.services.deinit();
         self.inbox.deinit();
-        self.connection_outboxes.deinit();
+        self.session_outboxes.deinit();
         self.authenticator.deinit();
         self.sessions.deinit(self.allocator);
 
@@ -356,14 +355,14 @@ pub const Node = struct {
     }
 
     fn tick(self: *Self) !void {
-        self.handlePrintingIntervalMetrics();
+        // self.handlePrintingIntervalMetrics();
+        log.info("memory pool remaining {}", .{self.memory_pool.available()});
 
         self.pruneEmptySessions();
         // try self.pruneDeadConnections();
         try self.maybeAddInboundConnections();
         try self.gatherMessages();
         try self.processMessages();
-        try self.routeMessages();
         // try self.aggregateMessages();
         // try self.distributeMessages();
     }
@@ -424,13 +423,6 @@ pub const Node = struct {
                 else => {},
             }
         }
-    }
-
-    // TODO: maybe we have this function that is in charge of
-    // 1. push aggregated messages to topic
-    // 2. tick topic and distribute
-    fn routeMessages(self: *Self) !void {
-        _ = self;
     }
 
     fn aggregateMessages(self: *Self) !void {
@@ -524,7 +516,7 @@ pub const Node = struct {
             while (worker_connections_iter.next()) |connection_id_entry| {
                 const conn_id: uuid.Uuid = connection_id_entry.*;
 
-                if (self.connection_outboxes.get(conn_id)) |connection_outbox| {
+                if (self.session_outboxes.get(conn_id)) |connection_outbox| {
                     worker.outbox.concatenateAvailable(connection_outbox);
                 } else {
                     // this connection doesn't have an outbox.
@@ -594,7 +586,7 @@ pub const Node = struct {
                     _ = service.removeAdvertiser(advertiser_key);
                 }
 
-                if (self.connection_outboxes.fetchRemove(conn_id)) |outbox_entry| {
+                if (self.session_outboxes.fetchRemove(conn_id)) |outbox_entry| {
                     const outbox = outbox_entry.value;
                     while (outbox.dequeue()) |envelope| {
                         const message = envelope.message;
@@ -616,7 +608,7 @@ pub const Node = struct {
 
     fn findOrCreateConnectionOutbox(self: *Self, conn_id: u128) !*RingBuffer(Envelope) {
         var connection_outbox: *RingBuffer(Envelope) = undefined;
-        if (self.connection_outboxes.get(conn_id)) |queue| {
+        if (self.session_outboxes.get(conn_id)) |queue| {
             connection_outbox = queue;
         } else {
             const queue = try self.allocator.create(RingBuffer(Envelope));
@@ -625,7 +617,7 @@ pub const Node = struct {
             queue.* = try RingBuffer(Envelope).init(self.allocator, constants.connection_outbox_capacity);
             errdefer queue.deinit();
 
-            try self.connection_outboxes.put(conn_id, queue);
+            try self.session_outboxes.put(conn_id, queue);
             connection_outbox = queue;
         }
 
@@ -790,13 +782,16 @@ pub const Node = struct {
     }
 
     fn handlePublish(self: *Self, envelope: Envelope) !void {
-        _ = self;
         assert(envelope.message.refs() == 1);
 
-        // get aggregate all the messages destined for this topic.
+        const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
+        if (topic.queue.available() == 0) {
+            // Try and push messages to subscribers to free up slots in the topic
+            try topic.tick();
+        }
 
-        // const publisher = try self.findOrCreatePublisher(envelope.session_id, envelope.message.topicName());
-
+        envelope.message.ref();
+        topic.queue.enqueue(envelope) catch envelope.message.deref();
     }
 
     // fn handlePublish(self: *Self, message: *Message) !void {

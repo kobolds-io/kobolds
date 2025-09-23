@@ -131,13 +131,13 @@ pub const Topic = struct {
         if (max_copy == 0) return;
 
         const n = self.queue.dequeueMany(self.tmp_copy_buffer[0..max_copy]);
-        for (self.tmp_copy_buffer[0..n]) |message| {
+        for (self.tmp_copy_buffer[0..n]) |envelope| {
             // increase the number of refs for this message to match how many subscribers
             // the message will be added to
-            _ = message.ref_count.fetchAdd(@intCast(self.subscriber_queues.items.len), .seq_cst);
+            _ = envelope.message.ref_count.fetchAdd(@intCast(self.subscriber_queues.items.len), .seq_cst);
 
             // deref once for the bus since it is giving up control
-            message.deref();
+            envelope.message.deref();
         }
 
         for (self.subscriber_queues.items) |queue| {
@@ -146,14 +146,14 @@ pub const Topic = struct {
         }
     }
 
-    pub fn addSubscriber(self: *Self, subscriber_key: u64, conn_id: u128) !void {
+    pub fn addSubscriber(self: *Self, subscriber_key: u64, session_id: u64) !void {
         const subscriber = try self.allocator.create(Subscriber);
         errdefer self.allocator.destroy(subscriber);
 
         subscriber.* = try Subscriber.init(
             self.allocator,
             subscriber_key,
-            conn_id,
+            session_id,
             constants.subscriber_max_queue_capacity,
         );
         errdefer subscriber.deinit();

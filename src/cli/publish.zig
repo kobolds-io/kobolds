@@ -159,9 +159,6 @@ fn publish(args: PublishArgs) !void {
             }
         }
 
-        // FIX: ensure that all messages have been sent
-        // client.flush();
-
         const elapsed = publish_count_timer.read();
         std.debug.print("took {d}ms to publish {d} messages\n", .{
             elapsed / std.time.ns_per_ms,
@@ -181,15 +178,17 @@ fn publish(args: PublishArgs) !void {
         const period_ns = std.time.ns_per_s / args.rate;
 
         var next_deadline = std.time.nanoTimestamp();
-        var messages_published_in_period: usize = 0;
         var total_messages_sent: u128 = 0;
         var publish_rate_timer = try std.time.Timer.start();
         var last_report = publish_rate_timer.read();
 
-        while (messages_published_in_period < args.rate) : (messages_published_in_period += 1) {
+        while (true) {
             if (signal_handler.sigint_triggered) return;
+
+            // schedule next slot
             next_deadline += period_ns;
 
+            // try publish
             client.publish(args.topic_name, args.body, .{}) catch {
                 std.Thread.sleep(100 * std.time.ns_per_ms);
                 continue;
@@ -197,21 +196,23 @@ fn publish(args: PublishArgs) !void {
 
             total_messages_sent += 1;
 
-            if (publish_rate_timer.read() - last_report >= std.time.ns_per_s) {
+            // print once per second
+            const elapsed = publish_rate_timer.read();
+            if (elapsed - last_report >= std.time.ns_per_s) {
                 std.debug.print("elapsed: {d}s, total_published: {d}\n", .{
-                    publish_rate_timer.read() / std.time.ns_per_s,
+                    elapsed / std.time.ns_per_s,
                     total_messages_sent,
                 });
-                last_report = publish_rate_timer.read();
+                last_report = elapsed;
             }
 
+            // pacing
             const now = std.time.nanoTimestamp();
             if (next_deadline > now) {
                 std.Thread.sleep(@intCast(next_deadline - now));
-                // we reset this if we have finished this loop
-                messages_published_in_period = 0;
             } else {
-                // std.debug.print("we're late skip sleep\n", .{});
+                // we fell behind — skip sleeping
+                next_deadline = now;
             }
         }
     }

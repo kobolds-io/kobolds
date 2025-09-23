@@ -56,7 +56,7 @@ pub const ClientConfig = struct {
     port: u16 = 8000,
     max_connections: u16 = 10,
     min_connections: u16 = 3,
-    memory_pool_capacity: usize = 100_000,
+    memory_pool_capacity: usize = constants.default_client_memory_pool_capacity,
     authentication_config: AuthenticationConfig = .{},
 };
 

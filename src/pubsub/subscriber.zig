@@ -3,7 +3,6 @@ const utils = @import("../utils.zig");
 const uuid = @import("uuid");
 
 const RingBuffer = @import("stdx").RingBuffer;
-
 const Envelope = @import("../node/envelope.zig").Envelope;
 
 pub const Subscriber = struct {

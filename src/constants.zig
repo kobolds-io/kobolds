@@ -14,31 +14,34 @@ pub const message_min_size = @sizeOf(Headers);
 
 /// The size of the parser's working buffer to be used for decoding messsages
 /// over multiple parse calls.
-pub const parser_max_buffer_size = (1024 * 256) * 2; // TODO: this number needs to be adjusted
+// pub const parser_max_buffer_size = (1024 * 256) * 2; // TODO: this number needs to be adjusted
 // pub const parser_max_buffer_size = (1024 * 64) * 2; // TODO: this number needs to be adjusted
-// pub const parser_max_buffer_size = (1024 * 32) * 2; // TODO: this number needs to be adjusted
+pub const parser_max_buffer_size = (1024 * 32) * 2; // TODO: this number needs to be adjusted
 pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, @sizeOf(Message));
 
 /// The number of bytes used as the recv buffer in each connection
-pub const connection_recv_buffer_size = (1024 * 256);
+// pub const connection_recv_buffer_size = (1024 * 256);
 // pub const connection_recv_buffer_size = (1024 * 64);
-// pub const connection_recv_buffer_size = (1024 * 32);
+pub const connection_recv_buffer_size = (1024 * 32);
 
 /// The number of bytes used as the send buffer in each connection
-pub const connection_send_buffer_size = (1024 * 256);
+// pub const connection_send_buffer_size = (1024 * 256);
 // pub const connection_send_buffer_size = (1024 * 64);
-// pub const connection_send_buffer_size = (1024 * 32);
+pub const connection_send_buffer_size = (1024 * 32);
 
 /// The number of microseconds the IO instance will wait until it flushes
 /// submissions and completions.
-pub const io_tick_us: u63 = 100;
-// pub const io_tick_us: u63 = 100_000; // this is for testing!
+// pub const io_tick_us: u63 = 100;
+pub const io_tick_us: u63 = 100_000; // this is for testing!
 
 /// Number of entries used for the submission and completion queues
 pub const io_uring_entries: u16 = 256;
 
 /// Optionally verify if operations based on this boolean.
 pub const verify: bool = true;
+
+pub const default_node_memory_pool_capacity: usize = 10_000;
+pub const default_client_memory_pool_capacity: usize = 1_000;
 
 pub const client_outbox_capacity: usize = 10_000;
 pub const client_inbox_capacity: usize = 10_000;
