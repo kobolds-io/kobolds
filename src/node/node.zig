@@ -363,6 +363,7 @@ pub const Node = struct {
         try self.maybeAddInboundConnections();
         try self.gatherMessages();
         try self.processMessages();
+        try self.routeMessages();
         // try self.aggregateMessages();
         // try self.distributeMessages();
     }
@@ -423,6 +424,13 @@ pub const Node = struct {
                 else => {},
             }
         }
+    }
+
+    // TODO: maybe we have this function that is in charge of
+    // 1. push aggregated messages to topic
+    // 2. tick topic and distribute
+    fn routeMessages(self: *Self) !void {
+        _ = self;
     }
 
     fn aggregateMessages(self: *Self) !void {
@@ -785,10 +793,10 @@ pub const Node = struct {
         _ = self;
         assert(envelope.message.refs() == 1);
 
-        // get the key of the publisher
+        // get aggregate all the messages destined for this topic.
 
-        // const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
-        // _ = topic;
+        // const publisher = try self.findOrCreatePublisher(envelope.session_id, envelope.message.topicName());
+
     }
 
     // fn handlePublish(self: *Self, message: *Message) !void {
