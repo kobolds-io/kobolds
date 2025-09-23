@@ -31,6 +31,8 @@ const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
 const Topic = @import("../pubsub/topic.zig").Topic;
 const TopicOptions = @import("../pubsub/topic.zig").TopicOptions;
 
+const LoadBalancer = @import("../load_balancers/load_balancer.zig").LoadBalancer;
+
 const Service = @import("../services/service.zig").Service;
 const ServiceOptions = @import("../services/service.zig").ServiceOptions;
 const Advertiser = @import("../services/advertiser.zig").Advertiser;
@@ -110,6 +112,7 @@ pub const Node = struct {
     state: NodeState,
     topics: std.StringHashMap(*Topic),
     workers: *std.AutoHashMap(usize, *Worker),
+    workers_load_balancer: LoadBalancer(usize),
     sessions: std.AutoHashMapUnmanaged(u64, *Session),
     sessions_mutex: std.Thread.Mutex,
 
@@ -189,6 +192,9 @@ pub const Node = struct {
             .workers = workers,
             .sessions = .empty,
             .sessions_mutex = std.Thread.Mutex{},
+            .workers_load_balancer = LoadBalancer(usize){
+                .round_robin = .init(),
+            },
         };
     }
 
@@ -248,6 +254,9 @@ pub const Node = struct {
 
         self.listeners.deinit();
         self.workers.deinit();
+        switch (self.workers_load_balancer) {
+            .round_robin => |*lb| lb.deinit(self.allocator),
+        }
         self.memory_pool.deinit();
         self.io.deinit();
         self.topics.deinit();
@@ -392,23 +401,25 @@ pub const Node = struct {
     }
 
     fn gatherMessages(self: *Self) !void {
+        switch (self.workers_load_balancer) {
+            .round_robin => |*lb| {
+                var iters: usize = 0;
 
-        // FIX: this needs to basically loop and start at the last worker that it left off at. That way that all workers
-        // are serviced evenly. There is a high probability that one worker can block another worker from ever
-        // having messages processed.
+                while (iters < self.workers.count()) : (iters += 1) {
+                    if (self.inbox.available() == 0) return;
 
-        var workers_iter = self.workers.valueIterator();
-        while (workers_iter.next()) |worker_entry| {
-            if (self.inbox.available() == 0) break;
+                    if (lb.next()) |worker_id| {
+                        if (self.workers.get(worker_id)) |worker| {
+                            worker.inbox_mutex.lock();
+                            defer worker.inbox_mutex.unlock();
 
-            const worker = worker_entry.*;
+                            if (worker.inbox.isEmpty()) continue;
 
-            worker.inbox_mutex.lock();
-            defer worker.inbox_mutex.unlock();
-
-            if (worker.inbox.isEmpty()) continue;
-
-            self.inbox.concatenateAvailable(worker.inbox);
+                            self.inbox.concatenateAvailable(worker.inbox);
+                        } else @panic("failed to get worker");
+                    }
+                }
+            },
         }
     }
 
@@ -544,6 +555,10 @@ pub const Node = struct {
             const session = entry.value_ptr.*;
 
             if (session.connections.count() == 0) {
+
+                // TODO: remove sessions subscriptions from any topics
+                // TODO: remove the session_outbox
+
                 log.info("pruning empty session {}", .{session_id});
                 session.deinit(self.allocator);
                 self.allocator.destroy(session);
@@ -643,6 +658,10 @@ pub const Node = struct {
 
             try self.workers.put(id, worker);
             errdefer _ = self.workers.remove(id);
+
+            switch (self.workers_load_balancer) {
+                .round_robin => |*lb| try lb.addItem(self.allocator, id),
+            }
         }
     }
 

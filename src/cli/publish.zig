@@ -122,15 +122,6 @@ fn publish(args: PublishArgs) !void {
 
     std.debug.print("connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
 
-    // signal_handler.registerSigintHandler();
-    // while (!signal_handler.sigint_triggered) {
-    //     client.publish(args.topic_name, args.body, .{}) catch {
-    //         // const b = "a" ** constants.message_max_body_size;
-    //         // client.publish(args.topic_name, b, .{}) catch {
-    //         // std.Thread.sleep(1 * std.time.ns_per_ms);
-    //     };
-    // }
-
     if (args.count > 0) {
         signal_handler.registerSigintHandler();
 
@@ -166,7 +157,8 @@ fn publish(args: PublishArgs) !void {
         });
 
         // this just keeps the connections open for a bit longer
-        std.Thread.sleep(500 * std.time.ns_per_ms);
+        // std.Thread.sleep(50 * std.time.ns_per_ms);
+        client.flush();
         return;
     }
 

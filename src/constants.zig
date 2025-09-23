@@ -31,8 +31,8 @@ pub const connection_send_buffer_size = (1024 * 32);
 
 /// The number of microseconds the IO instance will wait until it flushes
 /// submissions and completions.
-// pub const io_tick_us: u63 = 100;
-pub const io_tick_us: u63 = 100_000; // this is for testing!
+pub const io_tick_us: u63 = 100;
+// pub const io_tick_us: u63 = 100_000; // this is for testing!
 
 /// Number of entries used for the submission and completion queues
 pub const io_uring_entries: u16 = 256;
@@ -40,10 +40,10 @@ pub const io_uring_entries: u16 = 256;
 /// Optionally verify if operations based on this boolean.
 pub const verify: bool = true;
 
-pub const default_node_memory_pool_capacity: usize = 300_000;
+pub const default_node_memory_pool_capacity: usize = 100_000;
 pub const default_client_memory_pool_capacity: usize = 10_000;
-pub const default_client_outbox_capacity: usize = default_client_memory_pool_capacity / 2;
-pub const default_client_inbox_capacity: usize = default_client_memory_pool_capacity / 2;
+pub const default_client_outbox_capacity: usize = default_client_memory_pool_capacity;
+pub const default_client_inbox_capacity: usize = default_client_memory_pool_capacity;
 
 pub const worker_outbox_capacity: usize = 10_000;
 pub const worker_inbox_capacity: usize = 10_000;
