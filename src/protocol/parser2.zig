@@ -51,7 +51,7 @@ pub const Parser = struct {
                 error.Truncated => break, // there is nothing more for us to do in this loop
                 error.InvalidTopicName, error.InvalidMessage, error.InvalidMessageType, error.InvalidChecksum => {
                     read_offset += 1; // skip bad byte
-                    log.warn("parse err {any}", .{err});
+                    log.debug("parse err {any}", .{err});
                     continue;
                 },
             };
@@ -97,7 +97,7 @@ test "parser.parse" {
 
     // Create a message
     const body = [_]u8{97} ** constants.message_max_body_size;
-    var message = Message.new(.undefined);
+    var message = Message.new(.unsupported);
     message.setBody(&body);
 
     const buf = try allocator.alloc(u8, message.packedSize());
@@ -120,7 +120,8 @@ test "parse parses multiple messages" {
 
     const allocator = testing.allocator;
 
-    var message = Message.new(.undefined);
+    var message = Message.new(.publish);
+    message.setTopicName("/test");
     message.setBody(want_body);
 
     const buf = try allocator.alloc(u8, message.packedSize());

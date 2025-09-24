@@ -10,28 +10,51 @@ const hash = @import("../hash.zig");
 
 const PeerType = @import("./connection2.zig").PeerType;
 
-pub const ProtocolVersion = enum(u4) {
-    unsupported,
-    v1,
-};
-
 pub const DeserializeResult = struct {
     message: Message,
     bytes_consumed: usize,
 };
 
 pub const ChallengeMethod = enum(u8) {
+    unsupported,
     none,
     token,
+
+    pub fn fromByte(byte: u8) ChallengeMethod {
+        return switch (byte) {
+            1 => .none,
+            2 => .token,
+            else => .unsupported,
+        };
+    }
 };
 
 pub const ChallengeAlgorithm = enum(u8) {
     unsupported,
     hmac256,
+
+    pub fn fromByte(byte: u8) ChallengeAlgorithm {
+        return switch (byte) {
+            1 => .hmac256,
+            else => .unsupported,
+        };
+    }
+};
+
+pub const ProtocolVersion = enum(u4) {
+    unsupported,
+    v1,
+
+    pub fn fromBits(bits: u4) ProtocolVersion {
+        return switch (bits) {
+            1 => .v1,
+            else => .unsupported,
+        };
+    }
 };
 
 pub const MessageType = enum(u8) {
-    undefined,
+    unsupported,
     auth_challenge,
     session_init,
     session_join,
@@ -39,19 +62,44 @@ pub const MessageType = enum(u8) {
     auth_success,
     publish,
     subscribe,
+    subscribe_ack,
+
+    pub fn fromByte(byte: u8) MessageType {
+        return switch (byte) {
+            1 => .auth_challenge,
+            2 => .session_init,
+            3 => .session_join,
+            4 => .auth_failure,
+            5 => .auth_success,
+            6 => .publish,
+            7 => .subscribe,
+            8 => .subscribe_ack,
+            else => .unsupported,
+        };
+    }
 };
 
 pub const ErrorCode = enum(u8) {
     unsupported,
+    ok,
     unauthenticated,
     unauthorized,
+
+    pub fn fromByte(byte: u8) ErrorCode {
+        return switch (byte) {
+            1 => .ok,
+            2 => .unauthenticated,
+            3 => .unauthorized,
+            else => .unsupported,
+        };
+    }
 };
 
 pub const Message = struct {
     const Self = @This();
 
     fixed_headers: FixedHeaders = FixedHeaders{},
-    extension_headers: ExtensionHeaders = ExtensionHeaders{ .undefined = {} },
+    extension_headers: ExtensionHeaders = ExtensionHeaders{ .unsupported = {} },
     body_buffer: [constants.message_max_body_size]u8 = undefined,
     checksum: u64 = 0,
 
@@ -60,13 +108,6 @@ pub const Message = struct {
 
     pub fn new(message_type: MessageType) Self {
         return switch (message_type) {
-            .undefined => Self{
-                .fixed_headers = .{ .message_type = message_type },
-                .extension_headers = .{ .undefined = {} },
-                .body_buffer = undefined,
-                .checksum = 0,
-                .ref_count = atomic.Value(u32).init(0),
-            },
             .publish => Self{
                 .fixed_headers = .{ .message_type = message_type },
                 .extension_headers = .{ .publish = PublishHeaders{} },
@@ -77,6 +118,13 @@ pub const Message = struct {
             .subscribe => Self{
                 .fixed_headers = .{ .message_type = message_type },
                 .extension_headers = .{ .subscribe = SubscribeHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .subscribe_ack => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .subscribe_ack = SubscribeAckHeaders{} },
                 .body_buffer = undefined,
                 .checksum = 0,
                 .ref_count = atomic.Value(u32).init(0),
@@ -112,6 +160,13 @@ pub const Message = struct {
             .auth_success => Self{
                 .fixed_headers = .{ .message_type = message_type },
                 .extension_headers = .{ .auth_success = AuthSuccessHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            else => Self{
+                .fixed_headers = .{ .message_type = .unsupported },
+                .extension_headers = .{ .unsupported = {} },
                 .body_buffer = undefined,
                 .checksum = 0,
                 .ref_count = atomic.Value(u32).init(0),
@@ -205,9 +260,10 @@ pub const Message = struct {
     /// Calculate the size of the unserialized message.
     pub fn size(self: Self) usize {
         const extension_size: usize = switch (self.fixed_headers.message_type) {
-            .undefined => 0,
+            .unsupported => 0,
             .publish => @sizeOf(PublishHeaders),
             .subscribe => @sizeOf(SubscribeHeaders),
+            .subscribe_ack => @sizeOf(SubscribeAckHeaders),
             .auth_challenge => @sizeOf(AuthChallengeHeaders),
             .session_init => @sizeOf(SessionInitHeaders),
             .session_join => @sizeOf(SessionJoinHeaders),
@@ -313,6 +369,7 @@ pub const Message = struct {
             .auth_success => |headers| if (headers.validate()) |e| return e,
             .publish => |headers| if (headers.validate()) |e| return e,
             .subscribe => |headers| if (headers.validate()) |e| return e,
+            .subscribe_ack => |headers| if (headers.validate()) |e| return e,
             else => return "invalid headers",
         }
 
@@ -328,7 +385,7 @@ pub const FixedHeaders = packed struct {
     }
 
     body_length: u16 = 0,
-    message_type: MessageType = .undefined,
+    message_type: MessageType = .unsupported,
     protocol_version: ProtocolVersion = .v1,
     flags: u4 = 0,
     padding: u16 = 0,
@@ -368,26 +425,20 @@ pub const FixedHeaders = packed struct {
         const body_length = (@as(u16, data[i]) << 8) | @as(u16, data[i + 1]);
         i += 2;
 
-        const message_type: MessageType = switch (data[i]) {
-            0 => .undefined,
-            1 => .auth_challenge,
-            2 => .session_init,
-            3 => .session_join,
-            4 => .auth_failure,
-            5 => .auth_success,
-            6 => .publish,
-            7 => .subscribe,
-            else => return error.InvalidMessageType,
-        };
+        const message_type = MessageType.fromByte(data[i]);
+        if (message_type == .unsupported) return error.InvalidMessageType;
         i += 1;
 
         const protocol_version_flags = data[i];
-        const protocol_version_int: u4 = @intCast(protocol_version_flags >> 4);
-        const protocol_version: ProtocolVersion = switch (protocol_version_int) {
-            1 => .v1,
-            else => .unsupported,
-        };
+
+        // get the bits for the protocol version
+        const protocol_version_bits: u4 = @intCast(protocol_version_flags >> 4);
+        const protocol_version = ProtocolVersion.fromBits(protocol_version_bits);
+
+        // get the bits for the flags
         const flags: u4 = @intCast(protocol_version_flags & 0xF);
+
+        // add 1 byte for both the protocol_version and flags
         i += 1;
 
         const padding = (@as(u16, data[i]) << 8) | @as(u16, data[i + 1]);
@@ -403,7 +454,7 @@ pub const FixedHeaders = packed struct {
     }
 
     pub fn validate(self: Self) ?[]const u8 {
-        if (self.message_type == .undefined) return "invalid message_type";
+        if (self.message_type == .unsupported) return "invalid message_type";
         if (self.protocol_version == .unsupported) return "invalid protocol_version";
         if (self.padding != 0) return "invalid padding";
 
@@ -413,7 +464,8 @@ pub const FixedHeaders = packed struct {
 
 pub const ExtensionHeaders = union(MessageType) {
     const Self = @This();
-    undefined: void,
+
+    unsupported: void,
     auth_challenge: AuthChallengeHeaders,
     session_init: SessionInitHeaders,
     session_join: SessionJoinHeaders,
@@ -421,17 +473,18 @@ pub const ExtensionHeaders = union(MessageType) {
     auth_success: AuthSuccessHeaders,
     publish: PublishHeaders,
     subscribe: SubscribeHeaders,
+    subscribe_ack: SubscribeAckHeaders,
 
     pub fn packedSize(self: *const Self) usize {
         return switch (self.*) {
-            .undefined => 0,
+            .unsupported => 0,
             inline else => |headers| headers.packedSize(),
         };
     }
 
     pub fn toBytes(self: *Self, buf: []u8) usize {
         return switch (self.*) {
-            .undefined => 0,
+            .unsupported => 0,
             inline else => |headers| blk: {
                 assert(buf.len >= @sizeOf(@TypeOf(headers)));
 
@@ -443,7 +496,7 @@ pub const ExtensionHeaders = union(MessageType) {
 
     pub fn fromBytes(message_type: MessageType, data: []const u8) !Self {
         return switch (message_type) {
-            .undefined => ExtensionHeaders{ .undefined = {} },
+            .unsupported => ExtensionHeaders{ .unsupported = {} },
             .auth_challenge => blk: {
                 const headers = try AuthChallengeHeaders.fromBytes(data);
                 break :blk ExtensionHeaders{ .auth_challenge = headers };
@@ -471,6 +524,10 @@ pub const ExtensionHeaders = union(MessageType) {
             .subscribe => blk: {
                 const headers = try SubscribeHeaders.fromBytes(data);
                 break :blk ExtensionHeaders{ .subscribe = headers };
+            },
+            .subscribe_ack => blk: {
+                const headers = try SubscribeAckHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .subscribe_ack = headers };
             },
         };
     }
@@ -589,6 +646,58 @@ pub const SubscribeHeaders = struct {
         if (self.transaction_id == 0) return "invalid transaction_id";
         if (self.topic_name_length == 0) return "invalid topic_name_length";
         if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
+
+        return null;
+    }
+};
+
+pub const SubscribeAckHeaders = struct {
+    const Self = @This();
+
+    transaction_id: u64 = 0,
+    error_code: ErrorCode = .ok,
+
+    pub fn packedSize(_: Self) usize {
+        return Self.minimumSize();
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(u64) + 1;
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        var i: usize = 0;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.transaction_id, .big);
+        i += @sizeOf(u64);
+
+        buf[i] = @intFromEnum(self.error_code);
+        i += 1;
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const error_code = ErrorCode.fromByte(data[i]);
+        // TODO: should we return an error if this is an unsupported error code?
+        i += 1;
+
+        return Self{
+            .transaction_id = transaction_id,
+            .error_code = error_code,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.error_code == .unsupported) return "invalid error_code";
 
         return null;
     }
@@ -807,11 +916,7 @@ pub const AuthFailureHeaders = struct {
 
         if (data.len < Self.minimumSize()) return error.Truncated;
 
-        const error_code: ErrorCode = switch (data[i]) {
-            1 => .unauthenticated,
-            2 => .unauthorized,
-            else => .unsupported,
-        };
+        const error_code = ErrorCode.fromByte(data[i]);
         i += 1;
 
         return Self{
@@ -880,9 +985,9 @@ test "size of structs" {
     try testing.expectEqual(8, @sizeOf(FixedHeaders));
     try testing.expectEqual(6, FixedHeaders.packedSize());
 
-    const undefined_message = Message.new(.undefined);
-    try testing.expectEqual(16, undefined_message.size());
-    try testing.expectEqual(14, undefined_message.packedSize());
+    const unsupported_message = Message.new(.unsupported);
+    try testing.expectEqual(16, unsupported_message.size());
+    try testing.expectEqual(14, unsupported_message.packedSize());
 
     const publish_message = Message.new(.publish);
     try testing.expectEqual(49, publish_message.size());
@@ -891,6 +996,10 @@ test "size of structs" {
     const subscribe_message = Message.new(.subscribe);
     try testing.expectEqual(64, subscribe_message.size());
     try testing.expectEqual(23, subscribe_message.packedSize());
+
+    const subscribe_ack_message = Message.new(.subscribe_ack);
+    try testing.expectEqual(32, subscribe_ack_message.size());
+    try testing.expectEqual(23, subscribe_ack_message.packedSize());
 
     const session_init_message = Message.new(.session_init);
     try testing.expectEqual(32, session_init_message.size());
@@ -916,9 +1025,9 @@ test "message can comprise of variable size extensions" {
 
 test "message serialization" {
     const message_types = [_]MessageType{
-        .undefined,
         .publish,
         .subscribe,
+        .subscribe_ack,
         .session_init,
         .session_join,
         .auth_failure,
@@ -938,9 +1047,9 @@ test "message serialization" {
 
 test "message deserialization" {
     const message_types = [_]MessageType{
-        .undefined,
         .publish,
         .subscribe,
+        .subscribe_ack,
         .session_init,
         .session_join,
         .auth_failure,
@@ -967,7 +1076,7 @@ test "message deserialization" {
         try testing.expect(std.mem.eql(u8, message.body(), deserialized_message.body()));
 
         switch (message_type) {
-            .undefined => {
+            .unsupported => {
                 try testing.expectEqual(message.size(), deserialized_message.size());
             },
             .publish => {
@@ -987,6 +1096,16 @@ test "message deserialization" {
                     deserialized_message.extension_headers.subscribe.topic_name_length,
                 );
                 try testing.expect(std.mem.eql(u8, message.topicName(), deserialized_message.topicName()));
+            },
+            .subscribe_ack => {
+                try testing.expectEqual(
+                    message.extension_headers.subscribe_ack.transaction_id,
+                    deserialized_message.extension_headers.subscribe_ack.transaction_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.subscribe_ack.error_code,
+                    deserialized_message.extension_headers.subscribe_ack.error_code,
+                );
             },
             .auth_challenge => {
                 try testing.expectEqual(
