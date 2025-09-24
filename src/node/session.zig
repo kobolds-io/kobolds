@@ -39,7 +39,8 @@ pub const Session = struct {
     // features: FeatureSet, // PubSub, KV, WorkerQueue, etc.
     // permissions: PermissionSet, // ACLs per topic/queue/etc.
 
-    // // State & tracking
+    // State & tracking
+    subscriptions: std.StringHashMapUnmanaged(void),
     // subscriptions: TopicMap, // Active topic subscriptions
     // inflight: MessageMap, // Pending acks, unacked jobs, etc.
     // metadata: Metadata, // Optional client-provided metadata
@@ -75,6 +76,7 @@ pub const Session = struct {
                 .peer_id = peer_id,
                 .peer_type = peer_type,
                 .connections = .empty,
+                .subscriptions = .empty,
                 .session_token = session_token,
                 .load_balancer = LoadBalancer(u64){
                     .round_robin = .init(),
@@ -91,12 +93,11 @@ pub const Session = struct {
         }
 
         self.connections.deinit(allocator);
+        self.subscriptions.deinit(allocator);
     }
 
     pub fn addConnection(self: *Self, allocator: std.mem.Allocator, conn: *Connection) !void {
-        if (self.connections.get(conn.connection_id)) |_| {
-            return error.AlreadyExists;
-        }
+        if (self.connections.contains(conn.connection_id)) return error.AlreadyExists;
 
         try self.connections.put(allocator, conn.connection_id, conn);
         errdefer _ = self.connections.remove(conn.connection_id);
@@ -112,6 +113,18 @@ pub const Session = struct {
         };
 
         return self.connections.remove(conn_id) and lb_removed;
+    }
+
+    pub fn addSubscription(self: *Self, allocator: std.mem.Allocator, topic_name: []const u8) !void {
+        // don't do anything if we are already subscribed. this is for deduplication of subscriptions
+        if (self.connections.contains(topic_name)) return;
+
+        try self.subscriptions.put(allocator, topic_name, {});
+        errdefer _ = self.subscriptions.remove(topic_name);
+    }
+
+    pub fn removeSubscription(self: *Self, topic_name: []const u8) bool {
+        return self.subscriptions.remove(topic_name);
     }
 
     pub fn getNextConnection(self: *Self) *Connection {

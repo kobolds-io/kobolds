@@ -30,8 +30,8 @@ pub const Topic = struct {
     memory_pool: *MemoryPool(Message),
     // publishers: std.AutoHashMap(u128, *Publisher),
     queue: *RingBuffer(Envelope),
-    subscriber_queues: std.array_list.Managed(*RingBuffer(Envelope)),
-    subscribers: std.AutoHashMap(u64, *Subscriber),
+    subscriber_queues: std.ArrayList(*RingBuffer(Envelope)),
+    subscribers: std.AutoHashMapUnmanaged(u64, *Subscriber),
     topic_name: []const u8,
     tmp_copy_buffer: []Envelope,
 
@@ -56,8 +56,8 @@ pub const Topic = struct {
             .memory_pool = memory_pool,
             // .publishers = std.AutoHashMap(u128, *Publisher).init(allocator),
             .queue = queue,
-            .subscriber_queues = std.array_list.Managed(*RingBuffer(Envelope)).init(allocator),
-            .subscribers = std.AutoHashMap(u64, *Subscriber).init(allocator),
+            .subscriber_queues = .empty,
+            .subscribers = .empty,
             .topic_name = topic_name,
             .tmp_copy_buffer = tmp_copy_buffer,
         };
@@ -86,10 +86,10 @@ pub const Topic = struct {
         //     self.allocator.destroy(publisher);
         // }
 
-        self.subscribers.deinit();
         // self.publishers.deinit();
         self.queue.deinit();
-        self.subscriber_queues.deinit();
+        self.subscriber_queues.deinit(self.allocator);
+        self.subscribers.deinit(self.allocator);
 
         self.allocator.destroy(self.queue);
         self.allocator.free(self.tmp_copy_buffer);
@@ -106,7 +106,7 @@ pub const Topic = struct {
         }
 
         if (self.subscriber_queues.items.len != self.subscribers.count()) {
-            try self.subscriber_queues.resize(self.subscribers.count());
+            try self.subscriber_queues.resize(self.allocator, self.subscribers.count());
         }
 
         // The subscriber queues.items.len should always be equal to the number of subscribers and should be updated
@@ -147,6 +147,8 @@ pub const Topic = struct {
     }
 
     pub fn addSubscriber(self: *Self, subscriber_key: u64, session_id: u64) !void {
+        if (self.subscribers.contains(subscriber_key)) return error.AlreadyExists;
+
         const subscriber = try self.allocator.create(Subscriber);
         errdefer self.allocator.destroy(subscriber);
 
@@ -158,7 +160,7 @@ pub const Topic = struct {
         );
         errdefer subscriber.deinit();
 
-        try self.subscribers.put(subscriber_key, subscriber);
+        try self.subscribers.put(self.allocator, subscriber_key, subscriber);
     }
 
     pub fn removeSubscriber(self: *Self, subscriber_key: u64) bool {

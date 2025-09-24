@@ -84,12 +84,14 @@ pub const ErrorCode = enum(u8) {
     ok,
     unauthenticated,
     unauthorized,
+    failure,
 
     pub fn fromByte(byte: u8) ErrorCode {
         return switch (byte) {
             1 => .ok,
             2 => .unauthenticated,
             3 => .unauthorized,
+            4 => .failure,
             else => .unsupported,
         };
     }

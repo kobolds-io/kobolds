@@ -436,6 +436,7 @@ pub const Node = struct {
             // ensure that the message
             switch (envelope.message.fixed_headers.message_type) {
                 .publish => try self.handlePublish(envelope),
+                .subscribe => try self.handleSubscribe(envelope),
                 else => {},
             }
         }
@@ -461,10 +462,7 @@ pub const Node = struct {
                 const subscriber: *Subscriber = subscriber_entry.*;
                 const session_outbox = try self.findOrCreateSessionOutbox(subscriber.session_id);
 
-                // We are going to create envelopes here
-                while (session_outbox.available() > 0 and !subscriber.queue.isEmpty()) {
-                    session_outbox.concatenateAvailable(subscriber.queue);
-                }
+                session_outbox.concatenateAvailable(subscriber.queue);
             }
         }
 
@@ -819,14 +817,38 @@ pub const Node = struct {
     }
 
     fn handleSubscribe(self: *Self, envelope: Envelope) !void {
-        _ = self;
-        _ = envelope;
-        // const reply_message = try self.memory_pool.create();
-        // errdefer self.memory_pool.destroy(reply_message);
-        //
-        // reply_message = Message.new(.reply);
-        // reply_message.setTransactionId(envelope.message.transactionId());
+        assert(envelope.message.refs() == 1);
 
+        const subscribe_ack = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(subscribe_ack);
+
+        subscribe_ack.* = Message.new(.subscribe_ack);
+        subscribe_ack.extension_headers.subscribe_ack.transaction_id =
+            envelope.message.extension_headers.subscribe.transaction_id;
+        subscribe_ack.extension_headers.subscribe_ack.error_code = .ok;
+        subscribe_ack.ref();
+        errdefer subscribe_ack.deref();
+
+        const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
+        const subscriber_key = utils.generateKey64(envelope.message.topicName(), envelope.session_id);
+
+        topic.addSubscriber(subscriber_key, envelope.session_id) catch |err| switch (err) {
+            error.AlreadyExists => {},
+            else => {
+                subscribe_ack.extension_headers.subscribe_ack.error_code = .failure;
+            },
+        };
+
+        const session_outbox = try self.findOrCreateSessionOutbox(envelope.session_id);
+
+        const subscribe_ack_envelope = Envelope{
+            .message = subscribe_ack,
+            .message_id = self.kid.generate(),
+            .session_id = envelope.session_id,
+            .conn_id = envelope.conn_id,
+        };
+
+        try session_outbox.enqueue(subscribe_ack_envelope);
     }
 
     // fn handleSubscribe(self: *Self, message: *Message) !void {

@@ -18,8 +18,6 @@ const Signal = @import("stdx").Signal;
 const MemoryPool = @import("stdx").MemoryPool;
 const RingBuffer = @import("stdx").RingBuffer;
 
-// const Accept = @import("../protocol/message.zig").Accept;
-// const AuthChallenge = @import("../protocol/message2.zig").AuthChallenge;
 const Message = @import("../protocol/message2.zig").Message;
 const Connection = @import("../protocol/connection2.zig").Connection;
 const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
@@ -141,8 +139,6 @@ pub const Client = struct {
 
         outbox.* = try RingBuffer(*Message).init(allocator, constants.default_client_outbox_capacity);
         errdefer outbox.deinit();
-
-        // TODO: we should add an outbox to act as the global outbound communicator
 
         return Self{
             .advertiser_callbacks = std.AutoHashMap(u128, AdvertiserCallback).init(allocator),
@@ -761,6 +757,41 @@ pub const Client = struct {
         defer self.outbox_mutex.unlock();
 
         try self.outbox.enqueue(message);
+    }
+
+    pub fn subscribe(self: *Self, topic_name: []const u8, callback: SubscriberCallback, _: SubscribeOptions) !u64 {
+        if (!self.isConnected()) return error.NotConnected;
+
+        const subscription_id = self.kid.generate();
+        try self.subscriber_callbacks.put(subscription_id, callback);
+        errdefer _ = self.subscriber_callbacks.remove(subscription_id);
+
+        var topic: *Topic = undefined;
+        if (self.topics.get(topic_name)) |t| {
+            topic = t;
+        } else {
+            topic = try self.allocator.create(Topic);
+            errdefer self.allocator.destroy(topic);
+
+            topic.* = try Topic.init(self.allocator, self.memory_pool, topic_name, .{});
+            errdefer topic.deinit();
+
+            try self.topics.put(topic_name, topic);
+        }
+
+        const subscribe_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(subscribe_message);
+
+        subscribe_message.* = Message.new(.subscribe);
+        subscribe_message.setTopicName(topic_name);
+        subscribe_message.extension_headers.subscribe.transaction_id = self.kid.generate();
+        subscribe_message.ref();
+        errdefer subscribe_message.deref();
+
+        self.outbox_mutex.lock();
+        defer self.outbox_mutex.unlock();
+
+        try self.outbox.enqueue(subscribe_message);
     }
 };
 

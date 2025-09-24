@@ -45,7 +45,7 @@ pub fn bytesToU16(bytes: *const [2]u8) u16 {
     return std.mem.readInt(u16, bytes, .big);
 }
 
-pub fn generateKey64(topic_name: []const u8, id: u64) u128 {
+pub fn generateKey64(topic_name: []const u8, id: u64) u64 {
     var buf: [constants.message_max_topic_name_size + @sizeOf(u64)]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     const fba_allocator = fba.allocator();
