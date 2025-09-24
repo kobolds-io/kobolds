@@ -376,7 +376,7 @@ pub const Node = struct {
         try self.gatherMessages();
         try self.processMessages();
         try self.aggregateMessages();
-        // try self.distributeMessages();
+        try self.distributeMessages();
     }
 
     fn handlePrintingIntervalMetrics(self: *Self) void {
@@ -455,7 +455,6 @@ pub const Node = struct {
     }
 
     fn aggregateMessages(self: *Self) !void {
-
         // aggregate all topic messages to the subscriber's session_outboxes
         var topics_iter = self.topics.valueIterator();
         while (topics_iter.next()) |topic_entry| {
@@ -466,44 +465,58 @@ pub const Node = struct {
             while (subscribers_iter.next()) |subscriber_entry| {
                 const subscriber: *Subscriber = subscriber_entry.*;
 
+                if (subscriber.queue.count > 0) {
+                    log.info("subscriber has a message!", .{});
+                }
+
                 const session_outbox = try self.findOrCreateSessionOutbox(subscriber.session_id);
 
+                // we need to rewrite each envelope to use a different conn_id
                 session_outbox.concatenateAvailable(subscriber.queue);
             }
         }
 
-        var session_outboxes_iter = self.session_outboxes.iterator();
-        while (session_outboxes_iter.next()) |entry| {
-            _ = entry;
-            // const session_id = entry.key_ptr.*;
-            // const session_outbox = entry.value_ptr.*;
-            // if (session_outbox.dequeue()) |prev_envelope| {
+        // var sessions_iter = self.sessions.valueIterator();
 
-            //     // if there is nothing in the session_outbox then skip
-            //     if (session_outbox.count == 0) continue;
+        // while (sessions_iter.next()) |entry| {
+        //     const session = entry.*;
+        // }
 
-            //     if (self.getSession(session_id)) |session| {
-            //         const session_outbox_count = session_outbox.count;
+        // var session_outboxes_iter = self.session_outboxes.iterator();
+        // while (session_outboxes_iter.next()) |entry| {
+        //     const session_id = entry.key_ptr.*;
+        //     const session_outbox = entry.value_ptr.*;
 
-            //         var iter: usize = 0;
-            //         while (iter < session_outbox_count) : (iter += 1) {
-            //             const conn_id = session.getNextConnection().connection_id;
-            //             if (self.connection_outboxes.get(conn_id)) |conn_outbox| {
-            //                 if (conn_outbox.count() ==  0) continue;
-            //                 const envelope = Envelope{
-            //                     .message =  prev_envelope.message,
-            //                     .message_id =  prev_envelope.message_id,
-            //                     .conn_id = conn_id,
-            //                     .session_id =  prev_envelope.session_id,
-            //                 };
+        //     // if there is nothing in the session_outbox then skip
+        //     if (session_outbox.count == 0) continue;
 
-            //                 try self.connection_outboxes
+        //     // get the session
+        //     if (self.getSession(session_id)) |session| {
+        //         const num_connections = session.connections.count();
+        //         const conn_id = session.getNextConnection().connection_id;
 
-            //             } else unreachable;
-            //         }
-            //     }
-            // }
-        }
+        //         var i: usize = 0;
+        //         middle: while (i < num_connections) {
+        //             const conn_outbox = try self.findOrCreateConnectionOutbox(conn_id);
+
+        //             while (session_outbox.dequeue()) |prev_envelope| {
+        //                 if (conn_outbox.available() == 0) {
+        //                     session_outbox.prepend(prev_envelope) catch unreachable;
+        //                     i += 1;
+        //                     continue :middle;
+        //                 }
+        //                 const envelope = Envelope{
+        //                     .message = prev_envelope.message,
+        //                     .message_id = prev_envelope.message_id,
+        //                     .session_id = prev_envelope.session_id,
+        //                     .conn_id = conn_id,
+        //                 };
+
+        //                 conn_outbox.enqueue(envelope) catch unreachable;
+        //             } else break :middle;
+        //         }
+        //     }
+        // }
 
         // var services_iter = self.services.valueIterator();
         // while (services_iter.next()) |service_entry| {
@@ -549,6 +562,37 @@ pub const Node = struct {
         // }
     }
 
+    // fn distributeMessages(self: *Self) !void {
+    //     var workers_iter = self.workers.valueIterator();
+    //     while (workers_iter.next()) |worker_entry| {
+    //         const worker = worker_entry.*;
+
+    //         worker.outbox_mutex.lock();
+    //         defer worker.outbox_mutex.unlock();
+
+    //         if (worker.outbox.isFull()) continue;
+
+    //         worker.connections_mutex.lock();
+    //         defer worker.connections_mutex.unlock();
+
+    //         // FIX: this is pretty inefficient as we are re looking up the connections for each worker every single
+    //         // time. A better would be to already know the worker the messages were destined for before we even get to
+    //         // this loop.
+    //         var worker_connections_iter = worker.connections.keyIterator();
+    //         while (worker_connections_iter.next()) |connection_id_entry| {
+    //             const conn_id: u64 = connection_id_entry.*;
+
+    //             if (self.connection_outboxes.get(conn_id)) |connection_outbox| {
+    //                 worker.outbox.concatenateAvailable(connection_outbox);
+    //             } else {
+    //                 // this connection doesn't have an outbox.
+    //                 const connection_outbox = try self.findOrCreateConnectionOutbox(conn_id);
+    //                 worker.outbox.concatenateAvailable(connection_outbox);
+    //             }
+    //         }
+    //     }
+    // }
+
     fn distributeMessages(self: *Self) !void {
         var workers_iter = self.workers.valueIterator();
         while (workers_iter.next()) |worker_entry| {
@@ -561,10 +605,24 @@ pub const Node = struct {
 
             var conn_sessions_iter = worker.conns_sessions.valueIterator();
             while (conn_sessions_iter.next()) |entry| {
+                const conn_id = entry.*;
                 const session_id = entry.*;
 
                 if (self.session_outboxes.get(session_id)) |outbox| {
-                    worker.outbox.concatenateAvailable(outbox);
+                    while (!outbox.isEmpty() and !worker.outbox.isFull()) {
+                        const prev_envelope = outbox.dequeue().?;
+
+                        const envelope = Envelope{
+                            .message = prev_envelope.message,
+                            .conn_id = conn_id,
+                            .session_id = prev_envelope.session_id,
+                            .message_id = prev_envelope.message_id,
+                        };
+
+                        log.info("enqueuing message. worker.id: {}", .{worker.id});
+
+                        worker.outbox.enqueue(envelope) catch @panic("something modified this");
+                    }
                 }
             }
 
@@ -596,9 +654,36 @@ pub const Node = struct {
             const session = entry.value_ptr.*;
 
             if (session.connections.count() == 0) {
+                // Loop over all connection_outboxes
+                var topics_iter = self.topics.valueIterator();
+                while (topics_iter.next()) |topic_entry| {
+                    const topic = topic_entry.*;
 
-                // TODO: remove sessions subscriptions from any topics
-                // TODO: remove the session_outbox
+                    const subscriber_key = utils.generateKey64(topic.topic_name, session_id);
+                    if (topic.subscribers.fetchRemove(subscriber_key)) |subscriber_entry| {
+                        const subscriber = subscriber_entry.value;
+                        while (subscriber.queue.dequeue()) |envelope| {
+                            envelope.message.deref();
+                            if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+                        }
+
+                        log.debug("removing subscriber to {s} topic", .{topic.topic_name});
+
+                        subscriber.deinit();
+                        self.allocator.destroy(subscriber);
+                    }
+                }
+
+                if (self.session_outboxes.fetchRemove(session_id)) |outbox_entry| {
+                    const outbox = outbox_entry.value;
+                    while (outbox.dequeue()) |envelope| {
+                        envelope.message.deref();
+                        if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+                    }
+
+                    outbox.deinit();
+                    self.allocator.destroy(outbox);
+                }
 
                 log.info("pruning empty session {}", .{session_id});
                 session.deinit(self.allocator);
