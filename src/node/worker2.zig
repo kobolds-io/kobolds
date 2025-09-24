@@ -56,7 +56,7 @@ pub const Worker = struct {
     outbox_mutex: std.Thread.Mutex,
     outbox: *RingBuffer(Envelope),
     state: WorkerState,
-    conn_session_map: std.AutoHashMapUnmanaged(u64, u64),
+    conns_sessions: std.AutoHashMapUnmanaged(u64, u64),
     handshakes: std.AutoHashMapUnmanaged(u64, Handshake),
 
     pub fn init(
@@ -98,7 +98,7 @@ pub const Worker = struct {
             .connections_mutex = std.Thread.Mutex{},
             .connections = std.AutoHashMap(u64, *Connection).init(allocator),
             .handshakes = .empty,
-            .conn_session_map = .empty,
+            .conns_sessions = .empty,
             .done_channel = done_channel,
             .id = id,
             .inbox = inbox,
@@ -135,7 +135,7 @@ pub const Worker = struct {
         self.io.deinit();
         self.connections.deinit();
         self.handshakes.deinit(self.allocator);
-        self.conn_session_map.deinit(self.allocator);
+        self.conns_sessions.deinit(self.allocator);
 
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
@@ -213,9 +213,8 @@ pub const Worker = struct {
 
     pub fn tick(self: *Self) !void {
         try self.tickConnections();
-        try self.processInboundConnectionMessages();
-        // try self.processOutboundConnectionMessages();
-
+        try self.processInboundMessages();
+        try self.processOutboundMessages();
     }
 
     pub fn tickConnections(self: *Self) !void {
@@ -240,7 +239,7 @@ pub const Worker = struct {
         }
     }
 
-    pub fn processInboundConnectionMessages(self: *Self) !void {
+    pub fn processInboundMessages(self: *Self) !void {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
@@ -248,7 +247,7 @@ pub const Worker = struct {
         var connections_iter = self.connections.iterator();
         while (connections_iter.next()) |entry| {
             const conn = entry.value_ptr.*;
-            const session_id_opt = self.conn_session_map.get(conn.connection_id);
+            const session_id_opt = self.conns_sessions.get(conn.connection_id);
 
             defer assert(conn.inbox.count == 0);
 
@@ -285,6 +284,12 @@ pub const Worker = struct {
                 }
             }
         }
+    }
+
+    fn processOutboundMessages(self: *Self) !void {
+        _ = self;
+        // at this point the worker should only have messages that are specifically for connections that THIS
+        // worker actually manages.
     }
 
     pub fn addInboundConnection(self: *Self, socket: posix.socket_t, config: InboundConnectionConfig) !void {
@@ -350,7 +355,7 @@ pub const Worker = struct {
         const conn_id = conn.connection_id;
         defer log.info("worker: {} removed connection {}", .{ self.id, conn_id });
 
-        if (self.conn_session_map.fetchRemove(conn_id)) |kv_entry| {
+        if (self.conns_sessions.fetchRemove(conn_id)) |kv_entry| {
             const session_id = kv_entry.value;
 
             _ = self.node.removeConnectionFromSession(session_id, conn_id);
@@ -418,8 +423,8 @@ pub const Worker = struct {
                     reply.extension_headers.auth_success.session_id = session.session_id;
                     reply.setBody(session.session_token);
 
-                    try self.conn_session_map.put(self.allocator, conn.connection_id, session.session_id);
-                    errdefer _ = self.conn_session_map.remove(conn.connection_id);
+                    try self.conns_sessions.put(self.allocator, conn.connection_id, session.session_id);
+                    errdefer _ = self.conns_sessions.remove(conn.connection_id);
 
                     try conn.outbox.enqueue(reply);
                 } else {
@@ -468,8 +473,8 @@ pub const Worker = struct {
                     reply.extension_headers.auth_success.peer_id = session_join_headers.peer_id;
                     reply.extension_headers.auth_success.session_id = session_join_headers.session_id;
 
-                    try self.conn_session_map.put(self.allocator, conn.connection_id, session_join_headers.session_id);
-                    errdefer _ = self.conn_session_map.remove(conn.connection_id);
+                    try self.conns_sessions.put(self.allocator, conn.connection_id, session_join_headers.session_id);
+                    errdefer _ = self.conns_sessions.remove(conn.connection_id);
 
                     try conn.outbox.enqueue(reply);
                 } else {

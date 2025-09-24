@@ -22,9 +22,9 @@ const Message = @import("../protocol/message2.zig").Message;
 const Connection = @import("../protocol/connection2.zig").Connection;
 const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
 
-const Topic = @import("../pubsub/topic.zig").Topic;
-const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
-const SubscriberCallback = *const fn (message: *Message) void;
+const ClientTopic = @import("../pubsub/client_topic.zig").ClientTopic;
+// const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
+// const SubscriberCallback = *const fn (message: *Message) void;
 
 const Service = @import("../services/service.zig").Service;
 const Advertiser = @import("../services/advertiser.zig").Advertiser;
@@ -98,9 +98,8 @@ pub const Client = struct {
     session_mutex: std.Thread.Mutex,
     session: ?*Session = null,
     state: ClientState,
-    subscriber_callbacks: std.AutoHashMap(u128, SubscriberCallback),
     topics_mutex: std.Thread.Mutex,
-    topics: std.StringHashMap(*Topic),
+    topics: std.StringHashMap(*ClientTopic),
     transactions_mutex: std.Thread.Mutex,
     transactions: std.AutoHashMap(uuid.Uuid, *Signal(*Message)),
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
@@ -165,9 +164,8 @@ pub const Client = struct {
             .session_mutex = std.Thread.Mutex{},
             .session = null,
             .state = .closed,
-            .subscriber_callbacks = std.AutoHashMap(u128, SubscriberCallback).init(allocator),
             .topics_mutex = std.Thread.Mutex{},
-            .topics = std.StringHashMap(*Topic).init(allocator),
+            .topics = std.StringHashMap(*ClientTopic).init(allocator),
             .transactions_mutex = std.Thread.Mutex{},
             .transactions = std.AutoHashMap(uuid.Uuid, *Signal(*Message)).init(allocator),
             .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
@@ -234,7 +232,6 @@ pub const Client = struct {
         self.uninitialized_connections.deinit();
         self.transactions.deinit();
         self.topics.deinit();
-        self.subscriber_callbacks.deinit();
         self.services.deinit();
         self.advertiser_callbacks.deinit();
         self.inbox.deinit();
@@ -759,25 +756,30 @@ pub const Client = struct {
         try self.outbox.enqueue(message);
     }
 
-    pub fn subscribe(self: *Self, topic_name: []const u8, callback: SubscriberCallback, _: SubscribeOptions) !u64 {
+    pub fn subscribe(self: *Self, topic_name: []const u8, callback: ClientTopic.Callback, _: SubscribeOptions) !u64 {
         if (!self.isConnected()) return error.NotConnected;
 
-        const subscription_id = self.kid.generate();
-        try self.subscriber_callbacks.put(subscription_id, callback);
-        errdefer _ = self.subscriber_callbacks.remove(subscription_id);
+        // create a subscription callback entry
 
-        var topic: *Topic = undefined;
+        self.topics_mutex.lock();
+        defer self.topics_mutex.unlock();
+
+        var topic: *ClientTopic = undefined;
         if (self.topics.get(topic_name)) |t| {
             topic = t;
         } else {
-            topic = try self.allocator.create(Topic);
+            topic = try self.allocator.create(ClientTopic);
             errdefer self.allocator.destroy(topic);
 
-            topic.* = try Topic.init(self.allocator, self.memory_pool, topic_name, .{});
+            topic.* = try ClientTopic.init(self.allocator, self.memory_pool, topic_name, .{});
             errdefer topic.deinit();
 
             try self.topics.put(topic_name, topic);
         }
+
+        const callback_id = self.kid.generate();
+        try topic.addCallback(callback_id, callback);
+        errdefer _ = topic.removeCallback(callback_id);
 
         const subscribe_message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(subscribe_message);
@@ -792,6 +794,8 @@ pub const Client = struct {
         defer self.outbox_mutex.unlock();
 
         try self.outbox.enqueue(subscribe_message);
+
+        return callback_id;
     }
 };
 

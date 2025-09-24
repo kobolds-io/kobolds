@@ -99,7 +99,8 @@ pub const Node = struct {
     authenticator: *Authenticator,
     close_channel: *UnbufferedChannel(bool),
     config: NodeConfig,
-    session_outboxes: std.AutoHashMap(u64, *RingBuffer(Envelope)),
+    session_outboxes: std.AutoHashMapUnmanaged(u64, *RingBuffer(Envelope)),
+    connection_outboxes: std.AutoHashMapUnmanaged(u64, *RingBuffer(Envelope)),
     done_channel: *UnbufferedChannel(bool),
     inbox: *RingBuffer(Envelope),
     io: *IO,
@@ -177,7 +178,8 @@ pub const Node = struct {
             .authenticator = authenticator,
             .close_channel = close_channel,
             .config = config,
-            .session_outboxes = std.AutoHashMap(u64, *RingBuffer(Envelope)).init(allocator),
+            .session_outboxes = .empty,
+            .connection_outboxes = .empty,
             .done_channel = done_channel,
             .inbox = inbox,
             .io = io,
@@ -254,17 +256,18 @@ pub const Node = struct {
 
         self.listeners.deinit();
         self.workers.deinit();
-        switch (self.workers_load_balancer) {
-            .round_robin => |*lb| lb.deinit(self.allocator),
-        }
         self.memory_pool.deinit();
         self.io.deinit();
         self.topics.deinit();
         self.services.deinit();
         self.inbox.deinit();
-        self.session_outboxes.deinit();
+        self.session_outboxes.deinit(self.allocator);
+        self.connection_outboxes.deinit(self.allocator);
         self.authenticator.deinit();
         self.sessions.deinit(self.allocator);
+        switch (self.workers_load_balancer) {
+            .round_robin => |*lb| lb.deinit(self.allocator),
+        }
 
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
@@ -452,6 +455,8 @@ pub const Node = struct {
     }
 
     fn aggregateMessages(self: *Self) !void {
+
+        // aggregate all topic messages to the subscriber's session_outboxes
         var topics_iter = self.topics.valueIterator();
         while (topics_iter.next()) |topic_entry| {
             const topic: *Topic = topic_entry.*;
@@ -460,10 +465,44 @@ pub const Node = struct {
             var subscribers_iter = topic.subscribers.valueIterator();
             while (subscribers_iter.next()) |subscriber_entry| {
                 const subscriber: *Subscriber = subscriber_entry.*;
+
                 const session_outbox = try self.findOrCreateSessionOutbox(subscriber.session_id);
 
                 session_outbox.concatenateAvailable(subscriber.queue);
             }
+        }
+
+        var session_outboxes_iter = self.session_outboxes.iterator();
+        while (session_outboxes_iter.next()) |entry| {
+            _ = entry;
+            // const session_id = entry.key_ptr.*;
+            // const session_outbox = entry.value_ptr.*;
+            // if (session_outbox.dequeue()) |prev_envelope| {
+
+            //     // if there is nothing in the session_outbox then skip
+            //     if (session_outbox.count == 0) continue;
+
+            //     if (self.getSession(session_id)) |session| {
+            //         const session_outbox_count = session_outbox.count;
+
+            //         var iter: usize = 0;
+            //         while (iter < session_outbox_count) : (iter += 1) {
+            //             const conn_id = session.getNextConnection().connection_id;
+            //             if (self.connection_outboxes.get(conn_id)) |conn_outbox| {
+            //                 if (conn_outbox.count() ==  0) continue;
+            //                 const envelope = Envelope{
+            //                     .message =  prev_envelope.message,
+            //                     .message_id =  prev_envelope.message_id,
+            //                     .conn_id = conn_id,
+            //                     .session_id =  prev_envelope.session_id,
+            //                 };
+
+            //                 try self.connection_outboxes
+
+            //             } else unreachable;
+            //         }
+            //     }
+            // }
         }
 
         // var services_iter = self.services.valueIterator();
@@ -510,36 +549,42 @@ pub const Node = struct {
         // }
     }
 
-    // fn distributeMessages(self: *Self) !void {
-    //     var workers_iter = self.workers.valueIterator();
-    //     while (workers_iter.next()) |worker_entry| {
-    //         const worker = worker_entry.*;
+    fn distributeMessages(self: *Self) !void {
+        var workers_iter = self.workers.valueIterator();
+        while (workers_iter.next()) |worker_entry| {
+            const worker = worker_entry.*;
 
-    //         worker.outbox_mutex.lock();
-    //         defer worker.outbox_mutex.unlock();
+            worker.outbox_mutex.lock();
+            defer worker.outbox_mutex.unlock();
 
-    //         if (worker.outbox.isFull()) continue;
+            if (worker.outbox.isFull()) continue;
 
-    //         worker.connections_mutex.lock();
-    //         defer worker.connections_mutex.unlock();
+            var conn_sessions_iter = worker.conns_sessions.valueIterator();
+            while (conn_sessions_iter.next()) |entry| {
+                const session_id = entry.*;
 
-    //         // FIX: this is pretty inefficient as we are re looking up the connections for each worker every single
-    //         // time. A better would be to already know the worker the messages were destined for before we even get to
-    //         // this loop.
-    //         var worker_connections_iter = worker.connections.keyIterator();
-    //         while (worker_connections_iter.next()) |connection_id_entry| {
-    //             const conn_id: uuid.Uuid = connection_id_entry.*;
+                if (self.session_outboxes.get(session_id)) |outbox| {
+                    worker.outbox.concatenateAvailable(outbox);
+                }
+            }
 
-    //             if (self.session_outboxes.get(conn_id)) |connection_outbox| {
-    //                 worker.outbox.concatenateAvailable(connection_outbox);
-    //             } else {
-    //                 // this connection doesn't have an outbox.
-    //                 const connection_outbox = try self.findOrCreateSessionOutbox(conn_id);
-    //                 worker.outbox.concatenateAvailable(connection_outbox);
-    //             }
-    //         }
-    //     }
-    // }
+            // // FIX: this is pretty inefficient as we are re looking up the connections for each worker every single
+            // // time. A better would be to already know the worker the messages were destined for before we even get to
+            // // this loop.
+            // var worker_connections_iter = worker.connections.keyIterator();
+            // while (worker_connections_iter.next()) |connection_id_entry| {
+            //     const conn_id: uuid.Uuid = connection_id_entry.*;
+
+            //     if (self.session_outboxes.get(conn_id)) |connection_outbox| {
+            //         worker.outbox.concatenateAvailable(connection_outbox);
+            //     } else {
+            //         // this connection doesn't have an outbox.
+            //         const connection_outbox = try self.findOrCreateSessionOutbox(conn_id);
+            //         worker.outbox.concatenateAvailable(connection_outbox);
+            //     }
+            // }
+        }
+    }
 
     fn pruneEmptySessions(self: *Self) void {
         self.sessions_mutex.lock();
@@ -635,11 +680,29 @@ pub const Node = struct {
             queue.* = try RingBuffer(Envelope).init(self.allocator, 1_000);
             errdefer queue.deinit();
 
-            try self.session_outboxes.put(session_id, queue);
+            try self.session_outboxes.put(self.allocator, session_id, queue);
             session_outbox = queue;
         }
 
         return session_outbox;
+    }
+
+    fn findOrCreateConnectionOutbox(self: *Self, conn_id: u64) !*RingBuffer(Envelope) {
+        var connection_outbox: *RingBuffer(Envelope) = undefined;
+        if (self.connection_outboxes.get(conn_id)) |queue| {
+            connection_outbox = queue;
+        } else {
+            const queue = try self.allocator.create(RingBuffer(Envelope));
+            errdefer self.allocator.destroy(queue);
+
+            queue.* = try RingBuffer(Envelope).init(self.allocator, 1_000);
+            errdefer queue.deinit();
+
+            try self.connection_outboxes.put(self.allocator, conn_id, queue);
+            connection_outbox = queue;
+        }
+
+        return connection_outbox;
     }
 
     fn initializeWorkers(self: *Self) !void {

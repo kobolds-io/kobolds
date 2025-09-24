@@ -10,7 +10,6 @@ const MemoryPool = @import("stdx").MemoryPool;
 const Message = @import("../protocol/message2.zig").Message;
 const Envelope = @import("../node/envelope.zig").Envelope;
 
-// const Publisher = @import("./publisher.zig").Publisher;
 const Subscriber = @import("./subscriber.zig").Subscriber;
 
 pub const TopicOptions = struct {
@@ -80,13 +79,6 @@ pub const Topic = struct {
             self.allocator.destroy(subscriber);
         }
 
-        // var publishers_iter = self.publishers.valueIterator();
-        // while (publishers_iter.next()) |entry| {
-        //     const publisher = entry.*;
-        //     self.allocator.destroy(publisher);
-        // }
-
-        // self.publishers.deinit();
         self.queue.deinit();
         self.subscriber_queues.deinit(self.allocator);
         self.subscribers.deinit(self.allocator);
@@ -168,9 +160,8 @@ pub const Topic = struct {
             const subscriber = entry.value;
 
             while (subscriber.queue.dequeue()) |envelope| {
-                const message = envelope.message;
-                message.deref();
-                if (message.refs() == 0) self.memory_pool.destroy(message);
+                envelope.message.deref();
+                if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
             }
 
             subscriber.deinit();
@@ -184,11 +175,10 @@ pub const Topic = struct {
 
     fn clearQueue(self: *Self) void {
         while (self.queue.dequeue()) |envelope| {
-            const message = envelope.message;
+            assert(envelope.message.refs() == 1);
 
-            assert(message.refs() == 1);
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
+            envelope.message.deref();
+            if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
         }
     }
 };

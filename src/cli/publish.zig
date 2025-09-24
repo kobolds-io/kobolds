@@ -26,16 +26,16 @@ pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
     );
 
     const listen_parsers = .{
-        .host = clap.parsers.string,
-        .port = clap.parsers.int(u16, 10),
+        .body = clap.parsers.string,
         .client_id = clap.parsers.int(u11, 10),
-        .token = clap.parsers.string,
+        .count = clap.parsers.int(u32, 10),
+        .host = clap.parsers.string,
         .max_connections = clap.parsers.int(u16, 10),
         .min_connections = clap.parsers.int(u16, 10),
-        .topic_name = clap.parsers.string,
-        .body = clap.parsers.string,
+        .port = clap.parsers.int(u16, 10),
         .rate = clap.parsers.int(u32, 10),
-        .count = clap.parsers.int(u32, 10),
+        .token = clap.parsers.string,
+        .topic_name = clap.parsers.string,
     };
 
     // Here we pass the partially parsed argument iterator.
@@ -56,16 +56,16 @@ pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
     if (parsed_args.positionals.len != 2) return error.MissingParams;
 
     const args = PublishArgs{
-        .host = parsed_args.args.host orelse "127.0.0.1",
-        .port = parsed_args.args.port orelse 8000,
-        .client_id = parsed_args.args.@"client-id" orelse 1,
-        .topic_name = parsed_args.positionals[0].?,
         .body = parsed_args.positionals[1].?,
-        .token = parsed_args.args.token orelse "",
+        .client_id = parsed_args.args.@"client-id" orelse 1,
+        .count = parsed_args.args.count orelse 0,
+        .host = parsed_args.args.host orelse "127.0.0.1",
         .max_connections = parsed_args.args.@"max-connections" orelse 1,
         .min_connections = parsed_args.args.@"min-connections" orelse 1,
+        .port = parsed_args.args.port orelse 8000,
         .rate = parsed_args.args.rate orelse 0,
-        .count = parsed_args.args.count orelse 0,
+        .token = parsed_args.args.token orelse "",
+        .topic_name = parsed_args.positionals[0].?,
     };
 
     // validate
@@ -77,16 +77,16 @@ pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
 }
 
 const PublishArgs = struct {
-    host: []const u8,
-    port: u16,
+    body: []const u8,
     client_id: u11,
-    token: []const u8,
+    count: u32,
+    host: []const u8,
     max_connections: u16,
     min_connections: u16,
-    topic_name: []const u8,
-    body: []const u8,
+    port: u16,
     rate: u32,
-    count: u32,
+    token: []const u8,
+    topic_name: []const u8,
 };
 
 fn publish(args: PublishArgs) !void {

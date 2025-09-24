@@ -747,18 +747,10 @@ pub const AuthChallengeHeaders = struct {
 
         if (data.len < Self.minimumSize()) return error.Truncated;
 
-        const challenge_method: ChallengeMethod = switch (data[i]) {
-            0 => .none,
-            1 => .token,
-            else => unreachable, // should probably fail more gracefully
-        };
+        const challenge_method = ChallengeMethod.fromByte(data[i]);
         i += 1;
 
-        const algorithm: ChallengeAlgorithm = switch (data[i]) {
-            0 => .unsupported,
-            1 => .hmac256,
-            else => unreachable, // should probably fail more gracefully
-        };
+        const challenge_algorithm = ChallengeAlgorithm.fromByte(data[i]);
         i += 1;
 
         const connection_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
@@ -769,7 +761,7 @@ pub const AuthChallengeHeaders = struct {
 
         return Self{
             .challenge_method = challenge_method,
-            .algorithm = algorithm,
+            .algorithm = challenge_algorithm,
             .connection_id = connection_id,
             .nonce = nonce,
         };
