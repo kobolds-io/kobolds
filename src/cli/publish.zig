@@ -120,7 +120,7 @@ fn publish(args: PublishArgs) !void {
     client.awaitConnected(5_000 * std.time.ns_per_ms);
     const connect_end = timer.read();
 
-    std.debug.print("established connection took {}us\n", .{(connect_end - connect_start) / std.time.ns_per_us});
+    std.debug.print("established connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
 
     if (args.count > 0) {
         signal_handler.registerSigintHandler();
@@ -143,8 +143,8 @@ fn publish(args: PublishArgs) !void {
             const now = publish_count_timer.read();
             if (now - last_report >= std.time.ns_per_s) {
                 const remaining = args.count - published - 1;
-                std.debug.print("elapsed: {d}us, published {d}, remaining {d}\n", .{
-                    publish_count_timer.read() / std.time.ns_per_us,
+                std.debug.print("elapsed: {d}ms, published {d}, remaining {d}\n", .{
+                    publish_count_timer.read() / std.time.ns_per_ms,
                     published + 1,
                     remaining,
                 });
@@ -153,8 +153,8 @@ fn publish(args: PublishArgs) !void {
         }
 
         const elapsed = publish_count_timer.read();
-        std.debug.print("took {d}us to publish {d} messages\n", .{
-            elapsed / std.time.ns_per_us,
+        std.debug.print("took {d}ms to publish {d} messages\n", .{
+            elapsed / std.time.ns_per_ms,
             args.count,
         });
 

@@ -333,7 +333,6 @@ pub const Message = struct {
             @sizeOf(u64);
 
         if (data.len < total_message_size) return error.Truncated;
-
         if (fixed_headers.body_length > constants.message_max_body_size) return error.InvalidMessage;
         if (data[read_offset..].len < fixed_headers.body_length) return error.Truncated;
 
@@ -428,7 +427,12 @@ pub const FixedHeaders = packed struct {
         i += 2;
 
         const message_type = MessageType.fromByte(data[i]);
-        if (message_type == .unsupported) return error.InvalidMessageType;
+        if (message_type == .unsupported) {
+            // log.err("invalid message type {}", .{data[i]});
+            // log.err("data slice {any}", .{data});
+            // @panic("ahhhhh");
+            return error.InvalidMessageType;
+        }
         i += 1;
 
         const protocol_version_flags = data[i];

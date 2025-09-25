@@ -380,8 +380,6 @@ pub const Client = struct {
         try self.initializeOutboundConnections();
         try self.processInboundMessages();
         try self.processOutboundMessages();
-        // try self.processClientMessages();
-        // try self.aggregateOutboundMessages();
     }
 
     fn tickConnections(self: *Self) !void {
