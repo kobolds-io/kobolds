@@ -436,6 +436,7 @@ pub const Client = struct {
 
             if (conn.inbox.count == 0) continue;
             while (conn.inbox.dequeue()) |message| {
+
                 // if this message has more than a single ref, something has not been initialized or deinitialized correctly.
                 assert(message.refs() == 1);
 
@@ -443,14 +444,19 @@ pub const Client = struct {
                     .auth_challenge => {
                         // NOTE: we do some swapping of the connections hashmap in this function
                         // as we swap the temporary id to the actual conn.connection_id from the node
-                        try self.handleAuthChallengeMessage(conn, message);
+                        try self.handleAuthChallenge(conn, message);
 
                         // reset the connections_iter
                         connections_iter = self.connections.valueIterator();
                     },
-                    .auth_success => try self.handleAuthSuccessMessage(conn, message),
-                    .auth_failure => try self.handleAuthFailureMessage(conn, message),
-                    else => unreachable,
+                    .auth_success => try self.handleAuthSuccess(conn, message),
+                    .auth_failure => try self.handleAuthFailure(conn, message),
+                    .publish => try self.handlePublish(conn, message),
+                    .subscribe_ack => try self.handleSubscribeAck(conn, message),
+                    else => {
+                        log.info("message.fixed_headers.message_type {any}", .{message.fixed_headers.message_type});
+                    },
+                    // else => unreachable,
                 }
             }
         }
@@ -481,7 +487,7 @@ pub const Client = struct {
         }
     }
 
-    fn handleAuthSuccessMessage(self: *Self, conn: *Connection, message: *Message) !void {
+    fn handleAuthSuccess(self: *Self, conn: *Connection, message: *Message) !void {
         defer {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
@@ -517,7 +523,7 @@ pub const Client = struct {
         }
     }
 
-    fn handleAuthFailureMessage(self: *Self, conn: *Connection, message: *Message) !void {
+    fn handleAuthFailure(self: *Self, conn: *Connection, message: *Message) !void {
         defer {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
@@ -532,7 +538,7 @@ pub const Client = struct {
         conn.protocol_state = .terminating;
     }
 
-    fn handleAuthChallengeMessage(self: *Self, conn: *Connection, message: *Message) !void {
+    fn handleAuthChallenge(self: *Self, conn: *Connection, message: *Message) !void {
         // we should totally crash because this is a sequencing issue
         assert(conn.protocol_state == .authenticating);
 
@@ -623,6 +629,24 @@ pub const Client = struct {
         errdefer session_message.deref();
 
         try conn.outbox.enqueue(session_message);
+    }
+
+    fn handleSubscribeAck(self: *Self, conn: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        log.info("handleSubscribeAck: conn_id {}", .{conn.connection_id});
+    }
+
+    fn handlePublish(self: *Self, conn: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        log.info("handlePublish: conn_id {}", .{conn.connection_id});
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {

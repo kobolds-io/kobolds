@@ -50,16 +50,13 @@ pub const Topic = struct {
         const tmp_copy_buffer = try allocator.alloc(Envelope, options.subscriber_queue_capacity);
         errdefer allocator.free(tmp_copy_buffer);
 
-        const name = try allocator.dupe(u8, topic_name);
-        errdefer allocator.free(name);
-
         return Self{
             .allocator = allocator,
             .memory_pool = memory_pool,
             .queue = queue,
             .subscriber_queues = .empty,
             .subscribers = .empty,
-            .topic_name = name,
+            .topic_name = topic_name,
             .tmp_copy_buffer = tmp_copy_buffer,
         };
     }
@@ -86,11 +83,10 @@ pub const Topic = struct {
 
         self.allocator.destroy(self.queue);
         self.allocator.free(self.tmp_copy_buffer);
-        self.allocator.free(self.topic_name);
     }
 
     pub fn tick(self: *Self) !void {
-        log.info("topic subscriers: {}, queue: {}", .{ self.subscribers.count(), self.queue.count });
+        // log.info("topic subscriers: {}, queue: {}", .{ self.subscribers.count(), self.queue.count });
         // There are no messages needing to be distributed to subscribers
         if (self.queue.count == 0) return;
 

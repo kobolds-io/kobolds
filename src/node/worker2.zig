@@ -251,7 +251,7 @@ pub const Worker = struct {
 
             defer assert(conn.inbox.count == 0);
 
-            while (conn.inbox.dequeue()) |message| {
+            dequeue_loop: while (conn.inbox.dequeue()) |message| {
                 switch (message.fixed_headers.message_type) {
                     .session_init => try self.handleSessionInit(conn, message),
                     .session_join => try self.handleSessionJoin(conn, message),
@@ -268,8 +268,8 @@ pub const Worker = struct {
                             defer self.inbox_mutex.unlock();
 
                             self.inbox.enqueue(envelope) catch {
-                                // log.err("could not enqueue message", .{});
                                 conn.inbox.prepend(message) catch unreachable;
+                                break :dequeue_loop;
                             };
                         } else {
                             // message was received but is not associated with a session. Dropping this message
@@ -287,9 +287,19 @@ pub const Worker = struct {
     }
 
     fn processOutboundMessages(self: *Self) !void {
-        _ = self;
-        // at this point the worker should only have messages that are specifically for connections that THIS
-        // worker actually manages.
+        self.outbox_mutex.lock();
+        defer self.outbox_mutex.unlock();
+
+        while (self.outbox.dequeue()) |envelope| {
+            assert(envelope.message.refs() >= 1);
+            if (self.connections.get(envelope.conn_id)) |conn| {
+                try conn.outbox.enqueue(envelope.message);
+            } else {
+                log.warn("could not get conn: {}, session: {}", .{ envelope.conn_id, envelope.session_id });
+                envelope.message.deref();
+                if (envelope.message.refs() == 0) self.node.memory_pool.destroy(envelope.message);
+            }
+        }
     }
 
     pub fn addInboundConnection(self: *Self, socket: posix.socket_t, config: InboundConnectionConfig) !void {

@@ -793,11 +793,11 @@ pub const SessionInitHeaders = struct {
         assert(buf.len >= self.packedSize());
         var i: usize = 0;
 
-        buf[i] = @intFromEnum(self.peer_type);
-        i += 1;
-
         std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.peer_id, .big);
         i += @sizeOf(u64);
+
+        buf[i] = @intFromEnum(self.peer_type);
+        i += 1;
 
         return i;
     }
@@ -807,15 +807,15 @@ pub const SessionInitHeaders = struct {
 
         if (data.len < Self.minimumSize()) return error.Truncated;
 
+        const peer_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
         const peer_type: PeerType = switch (data[i]) {
             0 => .client,
             1 => .node,
             else => unreachable,
         };
         i += 1;
-
-        const peer_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
-        i += @sizeOf(u64);
 
         return Self{
             .peer_id = peer_id,

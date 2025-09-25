@@ -41,7 +41,7 @@ pub const io_uring_entries: u16 = 256;
 pub const verify: bool = true;
 
 pub const default_node_memory_pool_capacity: usize = 100_000;
-pub const default_client_memory_pool_capacity: usize = 10_000;
+pub const default_client_memory_pool_capacity: usize = 100_000;
 pub const default_client_outbox_capacity: usize = default_client_memory_pool_capacity;
 pub const default_client_inbox_capacity: usize = default_client_memory_pool_capacity;
 
@@ -52,8 +52,8 @@ pub const connection_outbox_capacity: usize = 5_000;
 pub const connection_inbox_capacity: usize = 5_000;
 
 pub const topic_max_queue_capacity: usize = 5_000;
-pub const publisher_max_queue_capacity: usize = 1_000;
-pub const subscriber_max_queue_capacity: usize = 1_000;
+pub const publisher_max_queue_capacity: usize = 5_000;
+pub const subscriber_max_queue_capacity: usize = 5_000;
 
 pub const service_max_requests_queue_capacity: usize = 1_000;
 pub const service_max_replies_queue_capacity: usize = 1_000;
