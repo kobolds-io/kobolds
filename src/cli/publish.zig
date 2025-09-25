@@ -120,7 +120,7 @@ fn publish(args: PublishArgs) !void {
     client.awaitConnected(5_000 * std.time.ns_per_ms);
     const connect_end = timer.read();
 
-    std.debug.print("connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
+    std.debug.print("established connection took {}us\n", .{(connect_end - connect_start) / std.time.ns_per_us});
 
     if (args.count > 0) {
         signal_handler.registerSigintHandler();
@@ -132,7 +132,9 @@ fn publish(args: PublishArgs) !void {
         while (published < args.count) : (published += 1) {
             if (signal_handler.sigint_triggered) return;
 
-            client.publish(args.topic_name, args.body, .{}) catch {
+            const body = "a" ** constants.message_max_body_size;
+            client.publish(args.topic_name, body, .{}) catch {
+                // client.publish(args.topic_name, args.body, .{}) catch {
                 published -= 1;
                 continue;
                 // std.Thread.sleep(1 * std.time.ns_per_ms);
@@ -141,8 +143,8 @@ fn publish(args: PublishArgs) !void {
             const now = publish_count_timer.read();
             if (now - last_report >= std.time.ns_per_s) {
                 const remaining = args.count - published - 1;
-                std.debug.print("elapsed: {d}ms, published {d}, remaining {d}\n", .{
-                    publish_count_timer.read() / std.time.ns_per_ms,
+                std.debug.print("elapsed: {d}us, published {d}, remaining {d}\n", .{
+                    publish_count_timer.read() / std.time.ns_per_us,
                     published + 1,
                     remaining,
                 });
@@ -151,8 +153,8 @@ fn publish(args: PublishArgs) !void {
         }
 
         const elapsed = publish_count_timer.read();
-        std.debug.print("took {d}ms to publish {d} messages\n", .{
-            elapsed / std.time.ns_per_ms,
+        std.debug.print("took {d}us to publish {d} messages\n", .{
+            elapsed / std.time.ns_per_us,
             args.count,
         });
 
@@ -182,7 +184,7 @@ fn publish(args: PublishArgs) !void {
 
             // try publish
             client.publish(args.topic_name, args.body, .{}) catch {
-                std.Thread.sleep(100 * std.time.ns_per_ms);
+                std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;
             };
 

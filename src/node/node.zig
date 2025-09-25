@@ -823,12 +823,7 @@ pub const Node = struct {
         assert(envelope.message.refs() == 1);
 
         const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
-        if (topic.queue.available() == 0) {
-            // Try and push messages to subscribers to free up slots in the topic
-            try topic.tick();
-        }
-
-        // log.info("handlePublish conn_id: {}, session_id: {}", .{ envelope.conn_id, envelope.session_id });
+        if (topic.queue.available() == 0) try topic.tick(); // if there is no space, try to advance the topic
 
         envelope.message.ref();
         topic.queue.enqueue(envelope) catch envelope.message.deref();

@@ -369,7 +369,7 @@ pub const Client = struct {
 
             if (all_messages_sent) {
                 // JUST BE SURE :P
-                std.Thread.sleep(10 * std.time.ns_per_ms);
+                std.Thread.sleep(5 * std.time.ns_per_ms);
                 return;
             }
         }
@@ -646,7 +646,7 @@ pub const Client = struct {
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
-        log.info("handlePublish: conn_id {}", .{conn.connection_id});
+        log.err("handlePublish: conn_id {}", .{conn.connection_id});
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {
