@@ -369,7 +369,7 @@ pub const Client = struct {
 
             if (all_messages_sent) {
                 // JUST BE SURE :P
-                std.Thread.sleep(5 * std.time.ns_per_ms);
+                std.Thread.sleep(500 * std.time.ns_per_ms);
                 return;
             }
         }

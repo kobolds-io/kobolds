@@ -207,7 +207,7 @@ pub const Message = struct {
         self.fixed_headers.body_length = @intCast(v.len);
     }
 
-    pub fn packedSize(self: Self) usize {
+    pub fn packedSize(self: *Self) usize {
         var sum: usize = 0;
         sum += FixedHeaders.packedSize();
         sum += self.extension_headers.packedSize();

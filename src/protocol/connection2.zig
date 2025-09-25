@@ -316,8 +316,8 @@ pub const Connection = struct {
     fn handleRecv(self: *Self) void {
         if (self.recv_submitted) return;
 
-        self.processInboundMessages2();
-        // self.processInboundMessages();
+        // self.processInboundMessages2();
+        self.processInboundMessages();
 
         self.io.recv(
             *Connection,
@@ -517,46 +517,9 @@ pub const Connection = struct {
         self.metrics.bytes_recv_total += self.recv_bytes;
         defer self.recv_bytes = 0;
 
-        // // First handle any overflow bytes from last time
-        // if (self.recv_buffer_overflow_count > 0) {
-        //     const parser_buffer_available_bytes = self.parser.buffer.capacity - self.parser.buffer.items.len;
-        //     if (parser_buffer_available_bytes > 0) {
-        //         const remaining_bytes = @min(parser_buffer_available_bytes, self.recv_buffer_overflow_count);
-        //         self.parser.buffer.appendSliceAssumeCapacity(self.recv_buffer_overflow[0..remaining_bytes]);
-        //         self.recv_buffer_overflow_count -= remaining_bytes;
-
-        //         if (self.recv_buffer_overflow_count > 0) {
-        //             // Still not enough space for everything, bail out until next call
-        //             @panic("i don't think i can do much in this situation :'(");
-        //         }
-        //     }
-        // }
-
-        // var recv_buffer_index: usize = 0;
-
-        // While we still have unread data
-        // while (recv_buffer_index < self.recv_bytes) {
-        // const parser_buffer_available_bytes = self.parser.buffer.capacity - self.parser.buffer.items.len;
-        // if (parser_buffer_available_bytes == 0) {
-        //     // Parser buffer full, stash remaining bytes into overflow
-        //     const remaining_bytes = self.recv_bytes - recv_buffer_index;
-        //     @memcpy(
-        //         self.recv_buffer_overflow[self.recv_buffer_overflow_count .. self.recv_buffer_overflow_count + remaining_bytes],
-        //         self.recv_buffer[recv_buffer_index .. recv_buffer_index + remaining_bytes],
-        //     );
-        //     self.recv_buffer_overflow_count += remaining_bytes;
-        //     break;
-        // }
-
-        // const remaining_bytes = @min(self.recv_bytes - recv_buffer_index, parser_buffer_available_bytes);
-        // self.parser.buffer.appendSliceAssumeCapacity(
-        // self.recv_buffer[recv_buffer_index .. recv_buffer_index + remaining_bytes],
-        // );
-        // recv_buffer_index += remaining_bytes;
-
         // Now parse until parser can’t produce more messages
         var remaining_bytes = self.recv_bytes;
-        while (remaining_bytes > 0) {
+        while (remaining_bytes + self.parser.buffer.items.len > 0) {
             const parsed_count = self.parser.parse(&self.messages_buffer, self.recv_buffer[0..remaining_bytes]) catch unreachable;
             if (parsed_count == 0) return;
 
@@ -564,14 +527,16 @@ pub const Connection = struct {
 
             const parsed_messages = self.messages_buffer[0..parsed_count];
 
-            for (parsed_messages) |message| {
+            for (parsed_messages) |*message| {
                 if (message.validate()) |reason| {
                     self.connection_state = .closing;
                     log.err("invalid message: {s}", .{reason});
                     return;
                 }
 
-                // log.info("remaining_bytes: {} message packed size {}", .{ remaining_bytes, message.packedSize() });
+                if (message.packedSize() > remaining_bytes) {
+                    log.info("remaining_bytes: {} message packed size {}", .{ remaining_bytes, message.packedSize() });
+                }
                 remaining_bytes -|= message.packedSize();
             }
 
