@@ -511,66 +511,91 @@ pub const Connection = struct {
         }
     }
 
-    fn processInboundMessages2(self: *Self) void {
-        assert(!self.recv_submitted);
+    // fn processInboundMessages2(self: *Self) void {
+    //     assert(!self.recv_submitted);
 
-        self.metrics.bytes_recv_total += self.recv_bytes;
-        defer self.recv_bytes = 0;
+    //     self.metrics.bytes_recv_total += self.recv_bytes;
+    //     defer self.recv_bytes = 0;
 
-        // Now parse until parser can’t produce more messages
-        var remaining_bytes = self.recv_bytes;
-        while (remaining_bytes + self.parser.buffer.items.len > 0) {
-            const parsed_count = self.parser.parse(&self.messages_buffer, self.recv_buffer[0..remaining_bytes]) catch unreachable;
-            if (parsed_count == 0) return;
+    //     // Now parse until parser can’t produce more messages
+    //     var remaining_bytes = self.recv_bytes + self.parser.buffer.items.len;
 
-            self.metrics.messages_recv_total += parsed_count;
+    //     var tmp_buffer: [10 * @sizeOf(Message)]u8 = undefined;
+    //     var tmp_buffer_index: usize = 0;
 
-            const parsed_messages = self.messages_buffer[0..parsed_count];
+    //     while (remaining_bytes > 0) {
+    //         var parsed_count: usize = 0;
+    //         if (tmp_buffer_index > 0) {
+    //             parsed_count = self.parser.parse(
+    //                 &self.messages_buffer,
+    //                 tmp_buffer[0..tmp_buffer_index],
+    //             ) catch unreachable;
+    //         } else {
+    //             parsed_count = self.parser.parse(&self.messages_buffer, self.recv_buffer[0..remaining_bytes]) catch |err| switch (err) {
+    //                 error.BufferOverflow => {
+    //                     const available = self.parser.buffer.capacity - self.parser.buffer.items.len;
+    //                     if (available == 0) @panic("we failed!!!");
 
-            for (parsed_messages) |*message| {
-                if (message.validate()) |reason| {
-                    self.connection_state = .closing;
-                    log.err("invalid message: {s}", .{reason});
-                    return;
-                }
+    //                     // copy a number of bytes to free up
 
-                if (message.packedSize() > remaining_bytes) {
-                    log.info("remaining_bytes: {} message packed size {}", .{ remaining_bytes, message.packedSize() });
-                }
-                remaining_bytes -|= message.packedSize();
-            }
+    //                     // we are keeping the
 
-            const message_ptrs = self.memory_pool.createN(self.allocator, parsed_count) catch |err| {
-                log.err("inbox memory_pool.createN() returned err: {any}", .{err});
-                return;
-            };
-            defer self.allocator.free(message_ptrs);
+    //                     //
 
-            if (message_ptrs.len != parsed_count) {
-                log.err("not enough node ptrs {d} for parsed_messages {d}", .{
-                    message_ptrs.len,
-                    parsed_count,
-                });
-                for (message_ptrs) |message_ptr| self.memory_pool.destroy(message_ptr);
-                return;
-            }
+    //                 },
+    //                 else => unreachable,
+    //             };
+    //         }
+    //         if (parsed_count == 0) return;
 
-            for (message_ptrs, parsed_messages) |message_ptr, message| {
-                message_ptr.* = message;
-                message_ptr.ref();
-                assert(message_ptr.refs() == 1);
-            }
+    //         self.metrics.messages_recv_total += parsed_count;
 
-            const messages_enqueued = self.inbox.enqueueMany(message_ptrs);
-            if (messages_enqueued < message_ptrs.len) {
-                log.err("could not enqueue all message ptrs. dropping {d} messages", .{message_ptrs[messages_enqueued..].len});
-                for (message_ptrs[messages_enqueued..]) |message_ptr| {
-                    message_ptr.deref();
-                    self.memory_pool.destroy(message_ptr);
-                }
-            }
-        }
-    }
+    //         const parsed_messages = self.messages_buffer[0..parsed_count];
+
+    //         for (parsed_messages) |*message| {
+    //             if (message.validate()) |reason| {
+    //                 self.connection_state = .closing;
+    //                 log.err("invalid message: {s}", .{reason});
+    //                 return;
+    //             }
+
+    //             if (message.packedSize() > remaining_bytes) {
+    //                 log.info("remaining_bytes: {} message packed size {}", .{ remaining_bytes, message.packedSize() });
+    //             }
+    //             remaining_bytes -|= message.packedSize();
+    //         }
+
+    //         const message_ptrs = self.memory_pool.createN(self.allocator, parsed_count) catch |err| {
+    //             log.err("inbox memory_pool.createN() returned err: {any}", .{err});
+    //             return;
+    //         };
+    //         defer self.allocator.free(message_ptrs);
+
+    //         if (message_ptrs.len != parsed_count) {
+    //             log.err("not enough node ptrs {d} for parsed_messages {d}", .{
+    //                 message_ptrs.len,
+    //                 parsed_count,
+    //             });
+    //             for (message_ptrs) |message_ptr| self.memory_pool.destroy(message_ptr);
+    //             return;
+    //         }
+
+    //         for (message_ptrs, parsed_messages) |message_ptr, message| {
+    //             message_ptr.* = message;
+    //             message_ptr.ref();
+    //             assert(message_ptr.refs() == 1);
+    //         }
+
+    //         const messages_enqueued = self.inbox.enqueueMany(message_ptrs);
+    //         if (messages_enqueued < message_ptrs.len) {
+    //             log.err("could not enqueue all message ptrs. dropping {d} messages", .{message_ptrs[messages_enqueued..].len});
+    //             for (message_ptrs[messages_enqueued..]) |message_ptr| {
+    //                 message_ptr.deref();
+    //                 self.memory_pool.destroy(message_ptr);
+    //             }
+    //         }
+    //     }
+    // }
     // }
 
     // fn processInboundMessages(self: *Self) void {
@@ -733,107 +758,217 @@ test "init/deinit" {
 }
 
 test "processing inbound messages" {
-    return error.SkipZigTest;
-    // const allocator = testing.allocator;
-    // var kid = KID.init(0, .{});
+    const allocator = testing.allocator;
+    var kid = KID.init(0, .{});
 
-    // var io = try IO.init(16, 0);
-    // defer io.deinit();
+    var io = try IO.init(16, 0);
+    defer io.deinit();
 
-    // const socket: posix.socket_t = undefined;
+    const socket: posix.socket_t = undefined;
 
-    // var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_inbox_capacity);
-    // defer memory_pool.deinit();
+    var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_inbox_capacity);
+    defer memory_pool.deinit();
 
-    // const config = ConnectionConfig{ .inbound = .{} };
+    const config = ConnectionConfig{ .inbound = .{} };
 
-    // var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
-    // defer conn.deinit();
+    var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
+    defer conn.deinit();
 
-    // // serailize the message
-    // var buf: [@sizeOf(Message)]u8 = undefined;
+    // serailize the message
+    var buf: [@sizeOf(Message)]u8 = undefined;
 
-    // // fill up the recv buffer with some messages
-    // var current_index: usize = 0;
-    // var recv_bytes: usize = 0;
-    // var messages_count: usize = 0;
-    // while (true) {
-    //     if (messages_count == conn.inbox.capacity) break;
+    // fill up the recv buffer with some messages
+    var current_index: usize = 0;
+    var recv_bytes: usize = 0;
+    var messages_count: usize = 0;
 
-    //     var message = Message.new(.publish);
-    //     message.setTopicName("a");
-    //     const bytes = message.serialize(&buf);
+    const topic_name = "a" ** constants.message_max_topic_name_size;
+    const body = "a" ** constants.message_max_body_size;
 
-    //     if (bytes > conn.recv_buffer[current_index..].len) break;
-    //     recv_bytes = current_index + bytes;
+    while (true) {
+        if (messages_count == conn.inbox.capacity) break;
 
-    //     // copy the bytes to the recv buffer
-    //     @memcpy(conn.recv_buffer[current_index..recv_bytes], buf[0..bytes]);
-    //     conn.recv_bytes = recv_bytes;
-    //     current_index = recv_bytes;
-    //     messages_count += 1;
-    // }
+        var message = Message.new(.publish);
+        message.setTopicName(topic_name);
+        message.setBody(body);
 
-    // try testing.expectEqual(0, conn.metrics.messages_recv_total);
-    // try testing.expectEqual(0, conn.metrics.bytes_recv_total);
+        const bytes = message.serialize(&buf);
 
-    // // loop over calling process inbound messages until all messages are parsed
-    // var safety: usize = 0;
-    // while (conn.metrics.messages_recv_total < messages_count) : (safety += 1) {
-    //     // it should take less that 100 iterations to fully parse all messages
-    //     if (safety > 100) break;
-    //     conn.processInboundMessages();
-    // }
+        // we are only testing for a single receive buffer and ensuring that all the
+        // messages can fit neatly into this buffer.
+        if (bytes > conn.recv_buffer[current_index..].len) break;
+        recv_bytes = current_index + bytes;
 
-    // try testing.expectEqual(messages_count, conn.metrics.messages_recv_total);
-    // try testing.expectEqual(recv_bytes, conn.metrics.bytes_recv_total);
+        // copy the bytes to the recv buffer
+        @memcpy(conn.recv_buffer[current_index..recv_bytes], buf[0..bytes]);
+        conn.recv_bytes = recv_bytes;
+        current_index = recv_bytes;
+        messages_count += 1;
+    }
+
+    try testing.expectEqual(0, conn.metrics.messages_recv_total);
+    try testing.expectEqual(0, conn.metrics.bytes_recv_total);
+
+    // loop over calling process inbound messages until all messages are parsed
+    var safety: usize = 0;
+    while (conn.metrics.messages_recv_total < messages_count) : (safety += 1) {
+        // it should take less that 100 iterations to fully parse all messages
+        if (safety > 100) break;
+
+        // log.err("safety {}", .{safety});
+        conn.processInboundMessages();
+    }
+
+    try testing.expectEqual(messages_count, conn.metrics.messages_recv_total);
+    try testing.expectEqual(recv_bytes, conn.metrics.bytes_recv_total);
+}
+
+test "processing inbound messages with mutliple recv_buffers" {
+    const allocator = testing.allocator;
+    var kid = KID.init(0, .{});
+
+    var io = try IO.init(16, 0);
+    defer io.deinit();
+
+    const socket: posix.socket_t = undefined;
+
+    var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_inbox_capacity);
+    defer memory_pool.deinit();
+
+    const config = ConnectionConfig{ .inbound = .{} };
+
+    var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
+    defer conn.deinit();
+
+    // serailize the message
+    var buf: [@sizeOf(Message)]u8 = undefined;
+
+    // fill up the recv buffer with some messages
+    var current_index: usize = 0;
+    var recv_bytes: usize = 0;
+    var messages_count: usize = 0;
+
+    const topic_name = "a" ** constants.message_max_topic_name_size;
+    const body = "a" ** constants.message_max_body_size;
+
+    while (true) {
+        if (messages_count == conn.inbox.capacity) break;
+
+        var message = Message.new(.publish);
+        message.setTopicName(topic_name);
+        message.setBody(body);
+
+        const bytes = message.serialize(&buf);
+
+        // we are only testing for a single receive buffer and ensuring that all the
+        // messages can fit neatly into this buffer.
+        if (bytes > conn.recv_buffer[current_index..].len) break;
+        recv_bytes = current_index + bytes;
+
+        // copy the bytes to the recv buffer
+        @memcpy(conn.recv_buffer[current_index..recv_bytes], buf[0..bytes]);
+        conn.recv_bytes = recv_bytes;
+        current_index = recv_bytes;
+        messages_count += 1;
+    }
+
+    var recv_buffer_2: [constants.connection_recv_buffer_size]u8 = undefined;
+    var recv_bytes_2: usize = recv_bytes;
+
+    // copy the bytes to the recv buffer
+    @memcpy(recv_buffer_2[0..recv_bytes], conn.recv_buffer[0..recv_bytes]);
+
+    // figure out how many bytes are in the first recv_buffer
+    const remaining_bytes = constants.connection_recv_buffer_size - recv_bytes;
+
+    // log.err("remaining bytes {}", .{remaining_bytes});
+    // log.err("recv_bytes {}", .{recv_bytes});
+    // log.err("recv_bytes_2 {}", .{recv_bytes_2});
+
+    // this would be pretty hard to hit but just in case
+    assert(remaining_bytes >= 0);
+
+    // copy the remaining bytes from the next recv_buffer
+    @memcpy(conn.recv_buffer[recv_bytes .. recv_bytes + remaining_bytes], recv_buffer_2[0..remaining_bytes]);
+    recv_bytes += remaining_bytes;
+
+    // copy the bytes forward
+    std.mem.copyForwards(u8, recv_buffer_2[0..], recv_buffer_2[remaining_bytes..]);
+    recv_bytes_2 -= remaining_bytes;
+
+    assert(recv_bytes == constants.connection_recv_buffer_size);
+
+    try testing.expect(remaining_bytes > 0);
+
+    try testing.expectEqual(0, conn.metrics.messages_recv_total);
+    try testing.expectEqual(0, conn.metrics.bytes_recv_total);
+
+    // loop over calling process inbound messages until all messages are parsed
+    var safety: usize = 0;
+    var trigger_second_recv: bool = true;
+    while (conn.metrics.messages_recv_total < messages_count * 2) : (safety += 1) {
+        // it should take less that 100 iterations to fully parse all messages
+        if (safety > 100) break;
+
+        if (conn.recv_bytes == 0 and trigger_second_recv) {
+            @memcpy(conn.recv_buffer[0..recv_bytes_2], recv_buffer_2[0..recv_bytes_2]);
+            conn.recv_bytes = recv_bytes_2;
+            trigger_second_recv = false;
+        }
+
+        // log.err("safety {}", .{safety});
+        conn.processInboundMessages();
+    }
+
+    try testing.expectEqual(messages_count * 2, conn.metrics.messages_recv_total);
+    try testing.expectEqual(recv_bytes + recv_bytes_2, conn.metrics.bytes_recv_total);
 }
 
 test "processing outbound messages" {
-    return error.SkipZigTest;
-    // const allocator = testing.allocator;
-    // var kid = KID.init(0, .{});
+    // return error.SkipZigTest;
+    const allocator = testing.allocator;
+    var kid = KID.init(0, .{});
 
-    // var io = try IO.init(16, 0);
-    // defer io.deinit();
+    var io = try IO.init(16, 0);
+    defer io.deinit();
 
-    // const socket: posix.socket_t = undefined;
+    const socket: posix.socket_t = undefined;
 
-    // var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_outbox_capacity);
-    // defer memory_pool.deinit();
+    var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_outbox_capacity);
+    defer memory_pool.deinit();
 
-    // const config = ConnectionConfig{ .inbound = .{} };
+    const config = ConnectionConfig{ .inbound = .{} };
 
-    // var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
-    // defer conn.deinit();
+    var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
+    defer conn.deinit();
 
-    // // enqueue a bunch of messages in the outbox
-    // var messages_count: usize = 0;
-    // var packed_message_size: usize = 0;
-    // while (messages_count < conn.outbox.capacity) : (messages_count += 1) {
-    //     const message = try memory_pool.create();
-    //     errdefer memory_pool.destroy(message);
+    // enqueue a bunch of messages in the outbox
+    var messages_count: usize = 0;
+    var packed_message_size: usize = 0;
+    while (messages_count < conn.outbox.capacity) : (messages_count += 1) {
+        const message = try memory_pool.create();
+        errdefer memory_pool.destroy(message);
 
-    //     message.* = Message.new(.publish);
-    //     message.setTopicName("a");
-    //     message.ref();
+        message.* = Message.new(.publish);
+        message.setTopicName("a");
+        message.ref();
 
-    //     packed_message_size = message.packedSize();
+        packed_message_size = message.packedSize();
 
-    //     try conn.outbox.enqueue(message);
-    // }
+        try conn.outbox.enqueue(message);
+    }
 
-    // try testing.expectEqual(0, conn.metrics.messages_recv_total);
-    // try testing.expectEqual(0, conn.metrics.bytes_recv_total);
+    try testing.expectEqual(0, conn.metrics.messages_recv_total);
+    try testing.expectEqual(0, conn.metrics.bytes_recv_total);
 
-    // // loop over calling process inbound messages until all messages are parsed
-    // var safety: usize = 0;
-    // while (conn.metrics.messages_send_total < messages_count) : (safety += 1) {
-    //     // it should take less that 100 iterations to fully parse all messages
-    //     if (safety > 3) break;
-    //     conn.processOutboundMessages();
-    // }
+    // loop over calling process inbound messages until all messages are parsed
+    var safety: usize = 0;
+    while (conn.metrics.messages_send_total < messages_count) : (safety += 1) {
+        // it should take less that 100 iterations to fully parse all messages
+        if (safety > 3) break;
+        conn.processOutboundMessages();
+    }
 
-    // try testing.expectEqual(messages_count, conn.metrics.messages_send_total);
-    // try testing.expectEqual(packed_message_size * messages_count, conn.metrics.bytes_send_total);
+    try testing.expectEqual(messages_count, conn.metrics.messages_send_total);
+    try testing.expectEqual(packed_message_size * messages_count, conn.metrics.bytes_send_total);
 }
