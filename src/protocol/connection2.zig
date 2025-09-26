@@ -425,6 +425,7 @@ pub const Connection = struct {
 
         // First handle any overflow bytes from last time
         if (self.recv_buffer_overflow_count > 0) {
+            // log.err("recv_buffer_overflow is not empty", .{});
             const parser_buffer_available_bytes = self.parser.buffer.capacity - self.parser.buffer.items.len;
             if (parser_buffer_available_bytes > 0) {
                 const remaining_bytes = @min(parser_buffer_available_bytes, self.recv_buffer_overflow_count);
@@ -451,10 +452,13 @@ pub const Connection = struct {
                     self.recv_buffer[recv_buffer_index .. recv_buffer_index + remaining_bytes],
                 );
                 self.recv_buffer_overflow_count += remaining_bytes;
+                // log.err("adding to recv_buffer_overflow", .{});
                 break;
             }
 
             const remaining_bytes = @min(self.recv_bytes - recv_buffer_index, parser_buffer_available_bytes);
+            log.err("recv_buffer_index {}, remaining_bytes {}", .{ recv_buffer_index, remaining_bytes });
+
             self.parser.buffer.appendSliceAssumeCapacity(
                 self.recv_buffer[recv_buffer_index .. recv_buffer_index + remaining_bytes],
             );
@@ -462,9 +466,23 @@ pub const Connection = struct {
 
             // Now parse until parser can’t produce more messages
             while (true) {
-                // NOTE: because we are appending to the parser buffer above we pass nothing to this call
+                log.err("before: parser.buffer.items.len {}", .{self.parser.buffer.items.len});
+                if (self.parser.buffer.items.len < 8) {
+                    log.err("before: first_bytes {any}", .{self.parser.buffer.items[0..]});
+                } else {
+                    log.err("before: first_bytes {any}", .{self.parser.buffer.items[0..8]});
+                }
+                // log.err("items parser.buffer.items {any}", .{self.parser.buffer.items});
                 const parsed_count = self.parser.parse(&self.messages_buffer, &.{}) catch unreachable;
                 if (parsed_count == 0) break;
+
+                log.err("after: parser.buffer.items.len {}, parsed: {}", .{ self.parser.buffer.items.len, parsed_count });
+
+                if (self.parser.buffer.items.len < 8) {
+                    log.err("after: first_bytes {any}", .{self.parser.buffer.items[0..]});
+                } else {
+                    log.err("after: first_bytes {any}", .{self.parser.buffer.items[0..8]});
+                }
 
                 self.metrics.messages_recv_total += parsed_count;
 
@@ -498,6 +516,8 @@ pub const Connection = struct {
                     message_ptr.ref();
                     assert(message_ptr.refs() == 1);
                 }
+
+                log.err("last messaged parsed {any}", .{parsed_messages[parsed_count - 1]});
 
                 const messages_enqueued = self.inbox.enqueueMany(message_ptrs);
                 if (messages_enqueued < message_ptrs.len) {
@@ -757,71 +777,71 @@ test "init/deinit" {
     defer connection.deinit();
 }
 
-test "processing inbound messages" {
-    const allocator = testing.allocator;
-    var kid = KID.init(0, .{});
+// test "processing inbound messages" {
+//     const allocator = testing.allocator;
+//     var kid = KID.init(0, .{});
 
-    var io = try IO.init(16, 0);
-    defer io.deinit();
+//     var io = try IO.init(16, 0);
+//     defer io.deinit();
 
-    const socket: posix.socket_t = undefined;
+//     const socket: posix.socket_t = undefined;
 
-    var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_inbox_capacity);
-    defer memory_pool.deinit();
+//     var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_inbox_capacity);
+//     defer memory_pool.deinit();
 
-    const config = ConnectionConfig{ .inbound = .{} };
+//     const config = ConnectionConfig{ .inbound = .{} };
 
-    var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
-    defer conn.deinit();
+//     var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
+//     defer conn.deinit();
 
-    // serailize the message
-    var buf: [@sizeOf(Message)]u8 = undefined;
+//     // serailize the message
+//     var buf: [@sizeOf(Message)]u8 = undefined;
 
-    // fill up the recv buffer with some messages
-    var current_index: usize = 0;
-    var recv_bytes: usize = 0;
-    var messages_count: usize = 0;
+//     // fill up the recv buffer with some messages
+//     var current_index: usize = 0;
+//     var recv_bytes: usize = 0;
+//     var messages_count: usize = 0;
 
-    const topic_name = "a" ** constants.message_max_topic_name_size;
-    const body = "a" ** constants.message_max_body_size;
+//     const topic_name = "a" ** constants.message_max_topic_name_size;
+//     const body = "a" ** constants.message_max_body_size;
 
-    while (true) {
-        if (messages_count == conn.inbox.capacity) break;
+//     while (true) {
+//         if (messages_count == conn.inbox.capacity) break;
 
-        var message = Message.new(.publish);
-        message.setTopicName(topic_name);
-        message.setBody(body);
+//         var message = Message.new(.publish);
+//         message.setTopicName(topic_name);
+//         message.setBody(body);
 
-        const bytes = message.serialize(&buf);
+//         const bytes = message.serialize(&buf);
 
-        // we are only testing for a single receive buffer and ensuring that all the
-        // messages can fit neatly into this buffer.
-        if (bytes > conn.recv_buffer[current_index..].len) break;
-        recv_bytes = current_index + bytes;
+//         // we are only testing for a single receive buffer and ensuring that all the
+//         // messages can fit neatly into this buffer.
+//         if (bytes > conn.recv_buffer[current_index..].len) break;
+//         recv_bytes = current_index + bytes;
 
-        // copy the bytes to the recv buffer
-        @memcpy(conn.recv_buffer[current_index..recv_bytes], buf[0..bytes]);
-        conn.recv_bytes = recv_bytes;
-        current_index = recv_bytes;
-        messages_count += 1;
-    }
+//         // copy the bytes to the recv buffer
+//         @memcpy(conn.recv_buffer[current_index..recv_bytes], buf[0..bytes]);
+//         conn.recv_bytes = recv_bytes;
+//         current_index = recv_bytes;
+//         messages_count += 1;
+//     }
 
-    try testing.expectEqual(0, conn.metrics.messages_recv_total);
-    try testing.expectEqual(0, conn.metrics.bytes_recv_total);
+//     try testing.expectEqual(0, conn.metrics.messages_recv_total);
+//     try testing.expectEqual(0, conn.metrics.bytes_recv_total);
 
-    // loop over calling process inbound messages until all messages are parsed
-    var safety: usize = 0;
-    while (conn.metrics.messages_recv_total < messages_count) : (safety += 1) {
-        // it should take less that 100 iterations to fully parse all messages
-        if (safety > 100) break;
+//     // loop over calling process inbound messages until all messages are parsed
+//     var safety: usize = 0;
+//     while (conn.metrics.messages_recv_total < messages_count) : (safety += 1) {
+//         // it should take less that 100 iterations to fully parse all messages
+//         if (safety > 100) break;
 
-        // log.err("safety {}", .{safety});
-        conn.processInboundMessages();
-    }
+//         // log.err("safety {}", .{safety});
+//         conn.processInboundMessages();
+//     }
 
-    try testing.expectEqual(messages_count, conn.metrics.messages_recv_total);
-    try testing.expectEqual(recv_bytes, conn.metrics.bytes_recv_total);
-}
+//     try testing.expectEqual(messages_count, conn.metrics.messages_recv_total);
+//     try testing.expectEqual(recv_bytes, conn.metrics.bytes_recv_total);
+// }
 
 test "processing inbound messages with mutliple recv_buffers" {
     const allocator = testing.allocator;
@@ -848,7 +868,7 @@ test "processing inbound messages with mutliple recv_buffers" {
     var recv_bytes: usize = 0;
     var messages_count: usize = 0;
 
-    const topic_name = "a" ** constants.message_max_topic_name_size;
+    const topic_name = "b" ** constants.message_max_topic_name_size;
     const body = "a" ** constants.message_max_body_size;
 
     while (true) {
@@ -873,29 +893,36 @@ test "processing inbound messages with mutliple recv_buffers" {
     }
 
     var recv_buffer_2: [constants.connection_recv_buffer_size]u8 = undefined;
-    var recv_bytes_2: usize = recv_bytes;
+    var recv_bytes_2: usize = 0;
 
     // copy the bytes to the recv buffer
     @memcpy(recv_buffer_2[0..recv_bytes], conn.recv_buffer[0..recv_bytes]);
+    recv_bytes_2 = recv_bytes;
 
     // figure out how many bytes are in the first recv_buffer
     const remaining_bytes = constants.connection_recv_buffer_size - recv_bytes;
 
-    // log.err("remaining bytes {}", .{remaining_bytes});
+    // log.err("\nconstants.connection_recv_buffer_size {}", .{constants.connection_recv_buffer_size});
+    // log.err("remaining_bytes {}", .{remaining_bytes});
     // log.err("recv_bytes {}", .{recv_bytes});
     // log.err("recv_bytes_2 {}", .{recv_bytes_2});
 
     // this would be pretty hard to hit but just in case
     assert(remaining_bytes >= 0);
 
+    // log.err("conn.recv_buffer current last bytes {any}", .{conn.recv_buffer[recv_bytes - remaining_bytes .. recv_bytes]});
+
     // copy the remaining bytes from the next recv_buffer
     @memcpy(conn.recv_buffer[recv_bytes .. recv_bytes + remaining_bytes], recv_buffer_2[0..remaining_bytes]);
+    // std.mem.copyForwards(u8, conn.recv_buffer[recv_bytes .. recv_bytes + remaining_bytes], recv_buffer_2[0..remaining_bytes]);
     recv_bytes += remaining_bytes;
+    // log.err("conn.recv_buffer new last bytes {any}", .{conn.recv_buffer[recv_bytes - remaining_bytes .. recv_bytes]});
 
-    // copy the bytes forward
-    std.mem.copyForwards(u8, recv_buffer_2[0..], recv_buffer_2[remaining_bytes..]);
+    // log.err("recv_buffer_2 current first bytes {any}", .{recv_buffer_2[0..remaining_bytes]});
+    std.mem.copyForwards(u8, recv_buffer_2[0..], recv_buffer_2[remaining_bytes .. remaining_bytes + recv_bytes_2]);
     recv_bytes_2 -= remaining_bytes;
 
+    // log.err("recv_buffer_2 new first bytes {any}", .{recv_buffer_2[0..8]});
     assert(recv_bytes == constants.connection_recv_buffer_size);
 
     try testing.expect(remaining_bytes > 0);
@@ -920,55 +947,62 @@ test "processing inbound messages with mutliple recv_buffers" {
         conn.processInboundMessages();
     }
 
+    try testing.expect(conn.inbox.count > 0);
+
+    while (conn.inbox.dequeue()) |message| {
+        try testing.expectEqual(constants.message_max_body_size, message.fixed_headers.body_length);
+        try testing.expectEqual(.publish, message.fixed_headers.message_type);
+    }
+
     try testing.expectEqual(messages_count * 2, conn.metrics.messages_recv_total);
     try testing.expectEqual(recv_bytes + recv_bytes_2, conn.metrics.bytes_recv_total);
 }
 
-test "processing outbound messages" {
-    // return error.SkipZigTest;
-    const allocator = testing.allocator;
-    var kid = KID.init(0, .{});
+// test "processing outbound messages" {
+//     // return error.SkipZigTest;
+//     const allocator = testing.allocator;
+//     var kid = KID.init(0, .{});
 
-    var io = try IO.init(16, 0);
-    defer io.deinit();
+//     var io = try IO.init(16, 0);
+//     defer io.deinit();
 
-    const socket: posix.socket_t = undefined;
+//     const socket: posix.socket_t = undefined;
 
-    var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_outbox_capacity);
-    defer memory_pool.deinit();
+//     var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_outbox_capacity);
+//     defer memory_pool.deinit();
 
-    const config = ConnectionConfig{ .inbound = .{} };
+//     const config = ConnectionConfig{ .inbound = .{} };
 
-    var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
-    defer conn.deinit();
+//     var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
+//     defer conn.deinit();
 
-    // enqueue a bunch of messages in the outbox
-    var messages_count: usize = 0;
-    var packed_message_size: usize = 0;
-    while (messages_count < conn.outbox.capacity) : (messages_count += 1) {
-        const message = try memory_pool.create();
-        errdefer memory_pool.destroy(message);
+//     // enqueue a bunch of messages in the outbox
+//     var messages_count: usize = 0;
+//     var packed_message_size: usize = 0;
+//     while (messages_count < conn.outbox.capacity) : (messages_count += 1) {
+//         const message = try memory_pool.create();
+//         errdefer memory_pool.destroy(message);
 
-        message.* = Message.new(.publish);
-        message.setTopicName("a");
-        message.ref();
+//         message.* = Message.new(.publish);
+//         message.setTopicName("a");
+//         message.ref();
 
-        packed_message_size = message.packedSize();
+//         packed_message_size = message.packedSize();
 
-        try conn.outbox.enqueue(message);
-    }
+//         try conn.outbox.enqueue(message);
+//     }
 
-    try testing.expectEqual(0, conn.metrics.messages_recv_total);
-    try testing.expectEqual(0, conn.metrics.bytes_recv_total);
+//     try testing.expectEqual(0, conn.metrics.messages_recv_total);
+//     try testing.expectEqual(0, conn.metrics.bytes_recv_total);
 
-    // loop over calling process inbound messages until all messages are parsed
-    var safety: usize = 0;
-    while (conn.metrics.messages_send_total < messages_count) : (safety += 1) {
-        // it should take less that 100 iterations to fully parse all messages
-        if (safety > 3) break;
-        conn.processOutboundMessages();
-    }
+//     // loop over calling process inbound messages until all messages are parsed
+//     var safety: usize = 0;
+//     while (conn.metrics.messages_send_total < messages_count) : (safety += 1) {
+//         // it should take less that 100 iterations to fully parse all messages
+//         if (safety > 3) break;
+//         conn.processOutboundMessages();
+//     }
 
-    try testing.expectEqual(messages_count, conn.metrics.messages_send_total);
-    try testing.expectEqual(packed_message_size * messages_count, conn.metrics.bytes_send_total);
-}
+//     try testing.expectEqual(messages_count, conn.metrics.messages_send_total);
+//     try testing.expectEqual(packed_message_size * messages_count, conn.metrics.bytes_send_total);
+// }

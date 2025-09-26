@@ -354,25 +354,8 @@ pub const Client = struct {
     }
 
     pub fn flush(self: *Self) void {
-        while (true) {
-            var all_messages_sent: bool = true;
-
-            var connections_iter = self.connections.valueIterator();
-            while (connections_iter.next()) |entry| {
-                const conn = entry.*;
-
-                if (conn.send_buffer_list.items.len > 0 or conn.send_submitted or conn.send_buffer_overflow_count > 0) {
-                    all_messages_sent = false;
-                    break;
-                }
-            }
-
-            if (all_messages_sent) {
-                // JUST BE SURE :P
-                std.Thread.sleep(500 * std.time.ns_per_ms);
-                return;
-            }
-        }
+        while (self.memory_pool.available() != self.memory_pool.capacity) {}
+        std.Thread.sleep(1000 * std.time.ns_per_ms);
     }
 
     fn tick(self: *Self) !void {
