@@ -322,6 +322,11 @@ pub const Message = struct {
         const fixed_headers = try FixedHeaders.fromBytes(data[0..FixedHeaders.packedSize()]);
         read_offset += FixedHeaders.packedSize();
 
+        if (data.len < fixed_headers.body_length + FixedHeaders.packedSize()) {
+            log.err("error: {any}, reason: not enough bytes", .{error.Truncated});
+            return error.Truncated;
+        }
+
         const extension_headers = try ExtensionHeaders.fromBytes(
             fixed_headers.message_type,
             data[FixedHeaders.packedSize()..],
@@ -336,9 +341,6 @@ pub const Message = struct {
             @sizeOf(u64);
 
         if (total_message_size > @sizeOf(Message)) {
-            // log.err("data remaining {any}", .{data});
-            // log.err("total_message_size {}, data.len {}", .{ total_message_size, data.len });
-            // log.err("extension_headers_size {}, body_length {}", .{ extension_headers_size, fixed_headers.body_length });
             log.err("fixed_headers {any}", .{fixed_headers});
             log.err("extension_headers {any}", .{extension_headers});
 

@@ -46,7 +46,7 @@ pub const Parser = struct {
                 error.Truncated => break,
                 error.InvalidMessageType, error.InvalidTopicName, error.InvalidMessage, error.InvalidChecksum => {
                     read_offset += 1; // skip bad byte
-                    // log.err("parse err {any}", .{err});
+                    log.err("parse err {any}", .{err});
                     continue;
                 },
             };

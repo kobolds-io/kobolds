@@ -26,13 +26,13 @@ pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, @sizeO
 // pub const connection_recv_buffer_size = (1024 * 256);
 // pub const connection_recv_buffer_size = (1024 * 64);
 // pub const connection_recv_buffer_size = (1024 * 32);
-pub const connection_recv_buffer_size = 32;
+pub const connection_recv_buffer_size = 30;
 
 /// The number of bytes used as the send buffer in each connection
 // pub const connection_send_buffer_size = (1024 * 256);
 // pub const connection_send_buffer_size = (1024 * 64);
 // pub const connection_send_buffer_size = (1024 * 32);
-pub const connection_send_buffer_size = 32;
+pub const connection_send_buffer_size = 30;
 
 /// The number of microseconds the IO instance will wait until it flushes
 /// submissions and completions.
