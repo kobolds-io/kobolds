@@ -312,7 +312,7 @@ pub const Message = struct {
     pub fn deserialize(data: []const u8) !DeserializeResult {
         // ensure that the buffer is at least the minimum size that a message could possibly be.
         if (data.len < FixedHeaders.packedSize()) {
-            log.err("error: {any}, reason: fixed_headers size", .{error.Truncated});
+            // log.err("error: {any}, reason: fixed_headers size", .{error.Truncated});
             return error.Truncated;
         }
 
@@ -323,7 +323,7 @@ pub const Message = struct {
         read_offset += FixedHeaders.packedSize();
 
         if (data.len < fixed_headers.body_length + FixedHeaders.packedSize()) {
-            log.err("error: {any}, reason: not enough bytes", .{error.Truncated});
+            // log.err("error: {any}, reason: not enough bytes", .{error.Truncated});
             return error.Truncated;
         }
 
@@ -341,24 +341,23 @@ pub const Message = struct {
             @sizeOf(u64);
 
         if (total_message_size > @sizeOf(Message)) {
-            log.err("fixed_headers {any}", .{fixed_headers});
-            log.err("extension_headers {any}", .{extension_headers});
-
-            log.err("error: {any}, reason: total_message_size exceeds max message size", .{error.InvalidMessage});
+            // log.err("fixed_headers {any}", .{fixed_headers});
+            // log.err("extension_headers {any}", .{extension_headers});
+            // log.err("error: {any}, reason: total_message_size exceeds max message size", .{error.InvalidMessage});
             return error.InvalidMessage;
         }
 
         if (data.len < total_message_size) {
-            log.err("error: {any}, reason: total_message_size", .{error.Truncated});
+            // log.err("error: {any}, reason: total_message_size", .{error.Truncated});
             return error.Truncated;
         }
 
         if (fixed_headers.body_length > constants.message_max_body_size) {
-            log.err("error: {any}, reason: fixed_headers.body_length", .{error.InvalidMessage});
+            // log.err("error: {any}, reason: fixed_headers.body_length", .{error.InvalidMessage});
             return error.InvalidMessage;
         }
         if (data[read_offset..].len < fixed_headers.body_length) {
-            log.err("error: {any}, reason: not enough bytes for body", .{error.Truncated});
+            // log.err("error: {any}, reason: not enough bytes for body", .{error.Truncated});
             return error.Truncated;
         }
 
@@ -367,13 +366,13 @@ pub const Message = struct {
         read_offset += fixed_headers.body_length;
 
         if (data[read_offset..].len < @sizeOf(u64)) {
-            log.err("error: {any}, reason: not enough bytes for checksum", .{error.Truncated});
+            // log.err("error: {any}, reason: not enough bytes for checksum", .{error.Truncated});
             return error.Truncated;
         }
         const checksum = std.mem.readInt(u64, data[read_offset .. read_offset + @sizeOf(u64)][0..@sizeOf(u64)], .big);
 
         if (!hash.xxHash64Verify(checksum, data[0..read_offset])) {
-            log.err("error: {any}, reason: invalid checksum", .{error.InvalidChecksum});
+            // log.err("error: {any}, reason: invalid checksum", .{error.InvalidChecksum});
             return error.InvalidChecksum;
         }
         read_offset += @sizeOf(u64);
@@ -463,7 +462,7 @@ pub const FixedHeaders = packed struct {
             // log.err("invalid message type {}", .{data[i]});
             // log.err("data slice {any}", .{data});
             // @panic("ahhhhh");
-            log.err("error: {any}, reason: unsupported message_type", .{error.InvalidMessageType});
+            // log.err("error: {any}, reason: unsupported message_type", .{error.InvalidMessageType});
             return error.InvalidMessageType;
         }
         i += 1;

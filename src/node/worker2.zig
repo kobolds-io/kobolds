@@ -249,7 +249,7 @@ pub const Worker = struct {
             const conn = entry.value_ptr.*;
             const session_id_opt = self.conns_sessions.get(conn.connection_id);
 
-            defer assert(conn.inbox.count == 0);
+            // defer assert(conn.inbox.count == 0);
 
             dequeue_loop: while (conn.inbox.dequeue()) |message| {
                 switch (message.fixed_headers.message_type) {

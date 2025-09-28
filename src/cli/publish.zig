@@ -119,6 +119,7 @@ fn publish(args: PublishArgs) !void {
     // wait for the client to be connected
     client.awaitConnected(5_000 * std.time.ns_per_ms);
     const connect_end = timer.read();
+    defer client.drain();
 
     std.debug.print("established connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
 
@@ -160,7 +161,6 @@ fn publish(args: PublishArgs) !void {
 
         // this just keeps the connections open for a bit longer
         // std.Thread.sleep(50 * std.time.ns_per_ms);
-        client.flush();
         return;
     }
 

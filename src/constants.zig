@@ -3,12 +3,12 @@ const Message = @import("./protocol/message2.zig").Message;
 const Headers = @import("./protocol/message.zig").Headers;
 
 /// the maximum size of a message body
-// pub const message_max_body_size = 1024 * 8; // 8kb
-pub const message_max_body_size = 3; // testing only
+pub const message_max_body_size = 1024 * 8; // 8kb
+// pub const message_max_body_size = 3; // testing only
 
 /// The maximum size of a topic.
-// pub const message_max_topic_name_size = 32; // 32 bytes
-pub const message_max_topic_name_size = 3; // testing only
+pub const message_max_topic_name_size = 32; // 32 bytes
+// pub const message_max_topic_name_size = 3; // testing only
 
 /// The maximum size of a message, inluding headers
 pub const message_max_size = @sizeOf(Headers) + message_max_body_size;
@@ -18,21 +18,21 @@ pub const message_min_size = @sizeOf(Headers);
 /// over multiple parse calls.
 // pub const parser_max_buffer_size = (1024 * 256) * 2; // TODO: this number needs to be adjusted
 // pub const parser_max_buffer_size = (1024 * 64) * 2; // TODO: this number needs to be adjusted
-// pub const parser_max_buffer_size = (1024 * 32) * 2; // TODO: this number needs to be adjusted
-pub const parser_max_buffer_size = @sizeOf(Message) * 2; // TODO: this number needs to be adjusted
+pub const parser_max_buffer_size = (1024 * 32) * 2; // TODO: this number needs to be adjusted
+// pub const parser_max_buffer_size = @sizeOf(Message) * 2; // TODO: this number needs to be adjusted
 pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, @sizeOf(Message));
 
 /// The number of bytes used as the recv buffer in each connection
 // pub const connection_recv_buffer_size = (1024 * 256);
 // pub const connection_recv_buffer_size = (1024 * 64);
-// pub const connection_recv_buffer_size = (1024 * 32);
-pub const connection_recv_buffer_size = 30;
+pub const connection_recv_buffer_size = (1024 * 32);
+// pub const connection_recv_buffer_size = 30;
 
 /// The number of bytes used as the send buffer in each connection
 // pub const connection_send_buffer_size = (1024 * 256);
 // pub const connection_send_buffer_size = (1024 * 64);
-// pub const connection_send_buffer_size = (1024 * 32);
-pub const connection_send_buffer_size = 30;
+pub const connection_send_buffer_size = (1024 * 32);
+// pub const connection_send_buffer_size = 30;
 
 /// The number of microseconds the IO instance will wait until it flushes
 /// submissions and completions.

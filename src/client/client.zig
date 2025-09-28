@@ -353,9 +353,9 @@ pub const Client = struct {
         }
     }
 
-    pub fn flush(self: *Self) void {
+    pub fn drain(self: *Self) void {
         while (self.memory_pool.available() != self.memory_pool.capacity) {}
-        std.Thread.sleep(1000 * std.time.ns_per_ms);
+        std.Thread.sleep(100 * std.time.ns_per_ms);
     }
 
     fn tick(self: *Self) !void {
