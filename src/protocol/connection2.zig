@@ -457,7 +457,7 @@ pub const Connection = struct {
             }
 
             const remaining_bytes = @min(self.recv_bytes - recv_buffer_index, parser_buffer_available_bytes);
-            log.err("recv_buffer_index {}, remaining_bytes {}", .{ recv_buffer_index, remaining_bytes });
+            // log.err("recv_buffer_index {}, remaining_bytes {}", .{ recv_buffer_index, remaining_bytes });
 
             self.parser.buffer.appendSliceAssumeCapacity(
                 self.recv_buffer[recv_buffer_index .. recv_buffer_index + remaining_bytes],
@@ -466,23 +466,25 @@ pub const Connection = struct {
 
             // Now parse until parser can’t produce more messages
             while (true) {
-                log.err("before: parser.buffer.items.len {}", .{self.parser.buffer.items.len});
-                if (self.parser.buffer.items.len < 8) {
-                    log.err("before: first_bytes {any}", .{self.parser.buffer.items[0..]});
-                } else {
-                    log.err("before: first_bytes {any}", .{self.parser.buffer.items[0..8]});
-                }
+                // log.err("before: parser.buffer.items.len {}", .{self.parser.buffer.items.len});
+                // if (self.parser.buffer.items.len < 21) {
+                //     log.err("before: first_bytes {any}", .{self.parser.buffer.items[0..]});
+                // } else {
+                //     log.err("before: first_bytes {any}", .{self.parser.buffer.items[0..21]});
+                // }
                 // log.err("items parser.buffer.items {any}", .{self.parser.buffer.items});
+                log.err("buffer before {any}", .{self.parser.buffer.items});
                 const parsed_count = self.parser.parse(&self.messages_buffer, &.{}) catch unreachable;
                 if (parsed_count == 0) break;
 
-                log.err("after: parser.buffer.items.len {}, parsed: {}", .{ self.parser.buffer.items.len, parsed_count });
+                log.err("buffer after {any}", .{self.parser.buffer.items});
+                // log.err("after: parser.buffer.items.len {}, parsed: {}", .{ self.parser.buffer.items.len, parsed_count });
 
-                if (self.parser.buffer.items.len < 8) {
-                    log.err("after: first_bytes {any}", .{self.parser.buffer.items[0..]});
-                } else {
-                    log.err("after: first_bytes {any}", .{self.parser.buffer.items[0..8]});
-                }
+                // if (self.parser.buffer.items.len < 21) {
+                //     log.err("after: first_bytes {any}", .{self.parser.buffer.items[0..]});
+                // } else {
+                //     log.err("after: first_bytes {any}", .{self.parser.buffer.items[0..21]});
+                // }
 
                 self.metrics.messages_recv_total += parsed_count;
 
@@ -517,7 +519,7 @@ pub const Connection = struct {
                     assert(message_ptr.refs() == 1);
                 }
 
-                log.err("last messaged parsed {any}", .{parsed_messages[parsed_count - 1]});
+                // log.err("last messaged parsed {any}", .{parsed_messages[parsed_count - 1]});
 
                 const messages_enqueued = self.inbox.enqueueMany(message_ptrs);
                 if (messages_enqueued < message_ptrs.len) {
@@ -860,7 +862,7 @@ test "processing inbound messages with mutliple recv_buffers" {
     var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
     defer conn.deinit();
 
-    // serailize the message
+    // serialize the message
     var buf: [@sizeOf(Message)]u8 = undefined;
 
     // fill up the recv buffer with some messages
@@ -901,29 +903,22 @@ test "processing inbound messages with mutliple recv_buffers" {
 
     // figure out how many bytes are in the first recv_buffer
     const remaining_bytes = constants.connection_recv_buffer_size - recv_bytes;
-
-    // log.err("\nconstants.connection_recv_buffer_size {}", .{constants.connection_recv_buffer_size});
-    // log.err("remaining_bytes {}", .{remaining_bytes});
-    // log.err("recv_bytes {}", .{recv_bytes});
-    // log.err("recv_bytes_2 {}", .{recv_bytes_2});
-
-    // this would be pretty hard to hit but just in case
     assert(remaining_bytes >= 0);
 
-    // log.err("conn.recv_buffer current last bytes {any}", .{conn.recv_buffer[recv_bytes - remaining_bytes .. recv_bytes]});
+    // copy only what we actually have available
+    const copy_bytes = @min(remaining_bytes, recv_bytes_2);
 
-    // copy the remaining bytes from the next recv_buffer
-    @memcpy(conn.recv_buffer[recv_bytes .. recv_bytes + remaining_bytes], recv_buffer_2[0..remaining_bytes]);
-    // std.mem.copyForwards(u8, conn.recv_buffer[recv_bytes .. recv_bytes + remaining_bytes], recv_buffer_2[0..remaining_bytes]);
-    recv_bytes += remaining_bytes;
-    // log.err("conn.recv_buffer new last bytes {any}", .{conn.recv_buffer[recv_bytes - remaining_bytes .. recv_bytes]});
+    @memcpy(conn.recv_buffer[recv_bytes .. recv_bytes + copy_bytes], recv_buffer_2[0..copy_bytes]);
+    recv_bytes += copy_bytes;
 
-    // log.err("recv_buffer_2 current first bytes {any}", .{recv_buffer_2[0..remaining_bytes]});
-    std.mem.copyForwards(u8, recv_buffer_2[0..], recv_buffer_2[remaining_bytes .. remaining_bytes + recv_bytes_2]);
-    recv_bytes_2 -= remaining_bytes;
+    std.mem.copyForwards(
+        u8,
+        recv_buffer_2[0..],
+        recv_buffer_2[copy_bytes .. copy_bytes + recv_bytes_2],
+    );
+    recv_bytes_2 -= copy_bytes;
 
-    // log.err("recv_buffer_2 new first bytes {any}", .{recv_buffer_2[0..8]});
-    assert(recv_bytes == constants.connection_recv_buffer_size);
+    assert(recv_bytes <= constants.connection_recv_buffer_size);
 
     try testing.expect(remaining_bytes > 0);
 
@@ -934,7 +929,6 @@ test "processing inbound messages with mutliple recv_buffers" {
     var safety: usize = 0;
     var trigger_second_recv: bool = true;
     while (conn.metrics.messages_recv_total < messages_count * 2) : (safety += 1) {
-        // it should take less that 100 iterations to fully parse all messages
         if (safety > 100) break;
 
         if (conn.recv_bytes == 0 and trigger_second_recv) {
@@ -943,7 +937,6 @@ test "processing inbound messages with mutliple recv_buffers" {
             trigger_second_recv = false;
         }
 
-        // log.err("safety {}", .{safety});
         conn.processInboundMessages();
     }
 

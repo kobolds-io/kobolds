@@ -17,11 +17,6 @@ pub const ParseError = error{
 pub const Parser = struct {
     const Self = @This();
 
-    const ParseResult = struct {
-        count: usize = 0,
-        truncated: bool = false,
-    };
-
     buffer: std.ArrayList(u8),
 
     pub fn init(allocator: std.mem.Allocator) !Parser {
@@ -51,7 +46,7 @@ pub const Parser = struct {
                 error.Truncated => break,
                 error.InvalidMessageType, error.InvalidTopicName, error.InvalidMessage, error.InvalidChecksum => {
                     read_offset += 1; // skip bad byte
-                    log.err("parse err {any}", .{err});
+                    // log.err("parse err {any}", .{err});
                     continue;
                 },
             };
