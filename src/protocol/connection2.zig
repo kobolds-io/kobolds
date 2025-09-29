@@ -503,12 +503,10 @@ pub const Connection = struct {
                     message_ptr.* = message;
                     message_ptr.ref();
 
-                    if (message.fixed_headers.message_type == .publish) {
-                        log.info("connection message.topicName(): {any}", .{message_ptr.topicName()});
-                    }
-                    if (message.fixed_headers.message_type == .publish) {
-                        log.info("connection message.body(): {any}", .{message_ptr.body()});
-                    }
+                    // if (message.fixed_headers.message_type == .publish) {
+                    //     log.info("connection message.topicName(): {any}", .{message_ptr.topicName()});
+                    //     log.info("connection message.body(): {any}", .{message_ptr.body()});
+                    // }
 
                     assert(message_ptr.refs() == 1);
                 }

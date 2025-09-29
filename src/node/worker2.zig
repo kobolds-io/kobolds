@@ -258,10 +258,10 @@ pub const Worker = struct {
                     .session_join => try self.handleSessionJoin(conn, message),
                     else => {
                         if (session_id_opt) |session_id| {
-                            if (message.fixed_headers.message_type == .publish) {
-                                log.info("worker message.topicName(): {any}", .{message.topicName()});
-                                log.info("worker message.body(): {any}", .{message.body()});
-                            }
+                            // if (message.fixed_headers.message_type == .publish) {
+                            //     log.info("worker message.topicName(): {any}", .{message.topicName()});
+                            //     log.info("worker message.body(): {any}", .{message.body()});
+                            // }
 
                             const envelope = Envelope{
                                 .message = message,

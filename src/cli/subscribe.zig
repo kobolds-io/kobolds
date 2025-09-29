@@ -110,7 +110,15 @@ fn subscribe(args: SubscribeArgs) !void {
 
     const callback = struct {
         pub fn callback(message: *Message) void {
-            std.debug.print("recv message {any}\n", .{message.body()});
+            const end = std.time.nanoTimestamp();
+            const start = std.fmt.parseInt(i128, message.body(), 10) catch 0;
+
+            const diff = @divFloor(end - start, std.time.ns_per_us);
+            if (diff < 500) {
+                std.debug.print("took: {d}us\n", .{diff});
+            }
+
+            // std.debug.print("recv message {any}\n", .{message.body()});
         }
     }.callback;
 

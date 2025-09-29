@@ -825,8 +825,8 @@ pub const Node = struct {
         const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
         if (topic.queue.available() == 0) try topic.tick(); // if there is no space, try to advance the topic
 
-        log.info("node message.topicName(): {any}", .{envelope.message.topicName()});
-        log.info("node message.body(): {any}", .{envelope.message.body()});
+        // log.info("node message.topicName(): {any}", .{envelope.message.topicName()});
+        // log.info("node message.body(): {any}", .{envelope.message.body()});
 
         envelope.message.ref();
         topic.queue.enqueue(envelope) catch envelope.message.deref();
