@@ -199,6 +199,8 @@ pub const Client = struct {
         while (topics_iterator.next()) |entry| {
             const topic = entry.*;
 
+            self.allocator.free(topic.topic_name);
+
             topic.deinit();
             self.allocator.destroy(topic);
         }
@@ -622,12 +624,26 @@ pub const Client = struct {
     }
 
     fn handlePublish(self: *Self, conn: *Connection, message: *Message) !void {
+        _ = conn;
         defer {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
-        log.err("handlePublish: conn_id {}", .{conn.connection_id});
+        self.topics_mutex.lock();
+        defer self.topics_mutex.unlock();
+        log.info("here {s}, topic_count: {}", .{ message.topicName(), self.topics.count() });
+
+        if (self.topics.get(message.topicName())) |topic| {
+            var callbacks_iter = topic.callbacks.valueIterator();
+            while (callbacks_iter.next()) |callback| {
+                callback.*(message);
+            }
+        } else {
+            log.warn("topic not found", .{});
+        }
+
+        // log.err("handlePublish: conn_id {}", .{conn.connection_id});
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {
@@ -764,8 +780,6 @@ pub const Client = struct {
     pub fn subscribe(self: *Self, topic_name: []const u8, callback: ClientTopic.Callback, _: SubscribeOptions) !u64 {
         if (!self.isConnected()) return error.NotConnected;
 
-        // create a subscription callback entry
-
         self.topics_mutex.lock();
         defer self.topics_mutex.unlock();
 
@@ -776,10 +790,15 @@ pub const Client = struct {
             topic = try self.allocator.create(ClientTopic);
             errdefer self.allocator.destroy(topic);
 
-            topic.* = try ClientTopic.init(self.allocator, self.memory_pool, topic_name, .{});
+            const t_name = try self.allocator.alloc(u8, topic_name.len);
+            errdefer self.allocator.free(t_name);
+
+            @memcpy(t_name, topic_name);
+
+            topic.* = try ClientTopic.init(self.allocator, self.memory_pool, t_name, .{});
             errdefer topic.deinit();
 
-            try self.topics.put(topic_name, topic);
+            try self.topics.put(t_name, topic);
         }
 
         const callback_id = self.kid.generate();
@@ -790,7 +809,7 @@ pub const Client = struct {
         errdefer self.memory_pool.destroy(subscribe_message);
 
         subscribe_message.* = Message.new(.subscribe);
-        subscribe_message.setTopicName(topic_name);
+        subscribe_message.setTopicName(topic.topic_name);
         subscribe_message.extension_headers.subscribe.transaction_id = self.kid.generate();
         subscribe_message.ref();
         errdefer subscribe_message.deref();
