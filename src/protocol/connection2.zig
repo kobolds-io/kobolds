@@ -384,9 +384,9 @@ pub const Connection = struct {
                     if (message.refs() == 0) self.memory_pool.destroy(message);
                 }
 
-                if (message.fixed_headers.message_type == .publish) {
-                    log.info("message {s}", .{message.topicName()});
-                }
+                // if (message.fixed_headers.message_type == .publish) {
+                //     log.info("message {s}", .{message.topicName()});
+                // }
 
                 assert(self.tmp_serialization_buffer.len > message.packedSize());
                 const bytes = message.serialize(self.tmp_serialization_buffer);

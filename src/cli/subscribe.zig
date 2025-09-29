@@ -114,8 +114,12 @@ fn subscribe(args: SubscribeArgs) !void {
             const start = std.fmt.parseInt(i128, message.body(), 10) catch 0;
 
             const diff = @divFloor(end - start, std.time.ns_per_us);
-            if (diff < 500) {
-                std.debug.print("took: {d}us\n", .{diff});
+            if (diff > 1_000) {
+                std.debug.print("slow - took: {d}us\n", .{diff});
+            } else if (diff > 500) {
+                std.debug.print("med - took: {d}us\n", .{diff});
+            } else {
+                std.debug.print("fast - took: {d}us\n", .{diff});
             }
 
             // std.debug.print("recv message {any}\n", .{message.body()});
