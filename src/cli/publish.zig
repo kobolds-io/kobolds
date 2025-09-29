@@ -121,6 +121,9 @@ fn publish(args: PublishArgs) !void {
     const connect_end = timer.read();
     defer client.drain();
 
+    const t_name = try allocator.dupe(u8, args.topic_name);
+    defer allocator.free(t_name);
+
     std.debug.print("established connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
 
     if (args.count > 0) {
@@ -133,12 +136,11 @@ fn publish(args: PublishArgs) !void {
         while (published < args.count) : (published += 1) {
             if (signal_handler.sigint_triggered) return;
 
-            const body = "a" ** constants.message_max_body_size;
-            client.publish(args.topic_name, body, .{}) catch {
-                // client.publish(args.topic_name, args.body, .{}) catch {
+            // const body = "a" ** constants.message_max_body_size;
+            // client.publish(args.topic_name, body, .{}) catch {
+            client.publish(args.topic_name, args.body, .{}) catch {
                 published -= 1;
                 continue;
-                // std.Thread.sleep(1 * std.time.ns_per_ms);
             };
 
             const now = publish_count_timer.read();
@@ -165,7 +167,7 @@ fn publish(args: PublishArgs) !void {
     }
 
     if (args.rate == 0) {
-        try client.publish(args.topic_name, args.body, .{});
+        try client.publish(t_name, args.body, .{});
     } else {
         signal_handler.registerSigintHandler();
 
@@ -183,9 +185,9 @@ fn publish(args: PublishArgs) !void {
             next_deadline += period_ns;
 
             // try publish
-            const body = "a" ** constants.message_max_body_size;
-            client.publish(args.topic_name, body, .{}) catch {
-                // client.publish(args.topic_name, args.body, .{}) catch {
+            // const body = "a" ** constants.message_max_body_size;
+            // client.publish(args.topic_name, body, .{}) catch {
+            client.publish(args.topic_name, args.body, .{}) catch {
                 std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;
             };

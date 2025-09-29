@@ -252,11 +252,17 @@ pub const Worker = struct {
             // defer assert(conn.inbox.count == 0);
 
             dequeue_loop: while (conn.inbox.dequeue()) |message| {
+                assert(message.refs() == 1);
                 switch (message.fixed_headers.message_type) {
                     .session_init => try self.handleSessionInit(conn, message),
                     .session_join => try self.handleSessionJoin(conn, message),
                     else => {
                         if (session_id_opt) |session_id| {
+                            if (message.fixed_headers.message_type == .publish) {
+                                log.info("worker message.topicName(): {any}", .{message.topicName()});
+                                log.info("worker message.body(): {any}", .{message.body()});
+                            }
+
                             const envelope = Envelope{
                                 .message = message,
                                 .session_id = session_id,

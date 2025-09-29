@@ -237,8 +237,8 @@ pub const Message = struct {
 
     pub fn topicName(self: *Self) []const u8 {
         switch (self.extension_headers) {
-            .publish => |headers| return headers.topic_name[0..headers.topic_name_length],
-            .subscribe => |headers| return headers.topic_name[0..headers.topic_name_length],
+            .publish => |*headers| return headers.topic_name[0..headers.topic_name_length],
+            .subscribe => |*headers| return headers.topic_name[0..headers.topic_name_length],
             else => unreachable,
         }
     }

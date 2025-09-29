@@ -632,7 +632,7 @@ pub const Client = struct {
 
         self.topics_mutex.lock();
         defer self.topics_mutex.unlock();
-        log.info("here {s}, topic_count: {}", .{ message.topicName(), self.topics.count() });
+        log.info("here {any}, topic_count: {}", .{ message.topicName(), self.topics.count() });
 
         if (self.topics.get(message.topicName())) |topic| {
             var callbacks_iter = topic.callbacks.valueIterator();
@@ -774,6 +774,9 @@ pub const Client = struct {
         self.outbox_mutex.lock();
         defer self.outbox_mutex.unlock();
 
+        log.info("publish message.topicName(): {any}", .{message.topicName()});
+        log.info("publish message.body(): {any}", .{message.body()});
+
         try self.outbox.enqueue(message);
     }
 
@@ -818,6 +821,8 @@ pub const Client = struct {
         defer self.outbox_mutex.unlock();
 
         try self.outbox.enqueue(subscribe_message);
+
+        log.info("subscribing to topic {s}", .{topic.topic_name});
 
         return callback_id;
     }

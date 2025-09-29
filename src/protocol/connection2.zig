@@ -384,6 +384,10 @@ pub const Connection = struct {
                     if (message.refs() == 0) self.memory_pool.destroy(message);
                 }
 
+                if (message.fixed_headers.message_type == .publish) {
+                    log.info("message {s}", .{message.topicName()});
+                }
+
                 assert(self.tmp_serialization_buffer.len > message.packedSize());
                 const bytes = message.serialize(self.tmp_serialization_buffer);
 
@@ -472,7 +476,7 @@ pub const Connection = struct {
 
                 const parsed_messages = self.messages_buffer[0..parsed_count];
 
-                for (parsed_messages) |message| {
+                for (parsed_messages) |*message| {
                     if (message.validate()) |reason| {
                         self.connection_state = .closing;
                         log.err("invalid message: {s}", .{reason});
@@ -498,6 +502,14 @@ pub const Connection = struct {
                 for (message_ptrs, parsed_messages) |message_ptr, message| {
                     message_ptr.* = message;
                     message_ptr.ref();
+
+                    if (message.fixed_headers.message_type == .publish) {
+                        log.info("connection message.topicName(): {any}", .{message_ptr.topicName()});
+                    }
+                    if (message.fixed_headers.message_type == .publish) {
+                        log.info("connection message.body(): {any}", .{message_ptr.body()});
+                    }
+
                     assert(message_ptr.refs() == 1);
                 }
 
