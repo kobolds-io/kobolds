@@ -73,6 +73,8 @@ const SubscribeArgs = struct {
     topic_name: []const u8,
 };
 
+var messages_recv_count: u128 = 0;
+
 fn subscribe(args: SubscribeArgs) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
@@ -110,17 +112,24 @@ fn subscribe(args: SubscribeArgs) !void {
 
     const callback = struct {
         pub fn callback(message: *Message) void {
-            const end = std.time.nanoTimestamp();
-            const start = std.fmt.parseInt(i128, message.body(), 10) catch 0;
+            _ = message;
+            messages_recv_count += 1;
 
-            const diff = @divFloor(end - start, std.time.ns_per_us);
-            if (diff > 1_000) {
-                std.debug.print("slow - took: {d}us\n", .{diff});
-            } else if (diff > 500) {
-                std.debug.print("med - took: {d}us\n", .{diff});
-            } else {
-                std.debug.print("fast - took: {d}us\n", .{diff});
+            if (messages_recv_count % 1_000 == 0) {
+                std.debug.print("messages_recv_count: {d}\n", .{messages_recv_count});
             }
+            // const end = std.time.nanoTimestamp();
+            // const start = std.fmt.parseInt(i128, message.body(), 10) catch 0;
+
+            // const diff = @divFloor(end - start, std.time.ns_per_us);
+
+            // if (diff > 1_000) {
+            //     std.debug.print("slow - took: {d}us\n", .{diff});
+            // } else if (diff > 500) {
+            //     std.debug.print("med - took: {d}us\n", .{diff});
+            // } else {
+            //     std.debug.print("fast - took: {d}us\n", .{diff});
+            // }
 
             // std.debug.print("recv message {any}\n", .{message.body()});
         }

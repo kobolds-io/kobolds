@@ -166,11 +166,12 @@ fn publish(args: PublishArgs) !void {
         return;
     }
 
-    var buf: [1024]u8 = undefined;
+    // var buf: [16]u8 = undefined;
     if (args.rate == 0) {
-        const ts = std.time.nanoTimestamp();
-        const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
-        try client.publish(t_name, str, .{});
+        // const ts = std.time.nanoTimestamp();
+        // const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
+        // try client.publish(t_name, str, .{});
+        try client.publish(t_name, args.body, .{});
     } else {
         signal_handler.registerSigintHandler();
 
@@ -186,13 +187,13 @@ fn publish(args: PublishArgs) !void {
 
             // schedule next slot
             next_deadline += period_ns;
-            const ts = std.time.nanoTimestamp();
-            const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
+            // const ts = std.time.nanoTimestamp();
+            // const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
 
             // try publish
-            // const body = "a" ** constants.message_max_body_size;
-            // client.publish(args.topic_name, body, .{}) catch {
-            client.publish(args.topic_name, str, .{}) catch {
+            const body = "a" ** constants.message_max_body_size;
+            client.publish(args.topic_name, body, .{}) catch {
+                // client.publish(args.topic_name, str, .{}) catch {
                 // client.publish(args.topic_name, args.body, .{}) catch {
                 std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;

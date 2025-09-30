@@ -370,7 +370,6 @@ pub const Node = struct {
 
     fn tick(self: *Self) !void {
         self.handlePrintingIntervalMetrics();
-        // log.info("memory pool remaining {}", .{self.memory_pool.available()});
 
         self.pruneEmptySessions();
         // try self.pruneDeadConnections();

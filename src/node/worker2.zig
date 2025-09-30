@@ -270,6 +270,12 @@ pub const Worker = struct {
                                 .message_id = self.node.kid.generate(),
                             };
 
+                            // const end = std.time.nanoTimestamp();
+                            // const start = std.fmt.parseInt(i128, message.body(), 10) catch 0;
+                            // const diff = @divFloor(end - start, std.time.ns_per_us);
+
+                            // log.info("took {}us to reach the node", .{diff});
+
                             self.inbox_mutex.lock();
                             defer self.inbox_mutex.unlock();
 
@@ -299,6 +305,12 @@ pub const Worker = struct {
         while (self.outbox.dequeue()) |envelope| {
             assert(envelope.message.refs() >= 1);
             if (self.connections.get(envelope.conn_id)) |conn| {
+                // const end = std.time.nanoTimestamp();
+                // const start = std.fmt.parseInt(i128, envelope.message.body(), 10) catch 0;
+                // const diff = @divFloor(end - start, std.time.ns_per_us);
+
+                // log.info("took {}us to leave the node", .{diff});
+
                 try conn.outbox.enqueue(envelope.message);
             } else {
                 log.warn("could not get conn: {}, session: {}", .{ envelope.conn_id, envelope.session_id });
