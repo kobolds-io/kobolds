@@ -74,6 +74,7 @@ const SubscribeArgs = struct {
 };
 
 var messages_recv_count: u128 = 0;
+var bytes_recv_count: u128 = 0;
 
 fn subscribe(args: SubscribeArgs) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
@@ -110,20 +111,27 @@ fn subscribe(args: SubscribeArgs) !void {
 
     signal_handler.registerSigintHandler();
 
-    const callback = struct {
+    const callback_1 = struct {
         pub fn callback(message: *Message) void {
             _ = message;
             messages_recv_count += 1;
 
-            if (messages_recv_count % 1_000 == 0) {
-                std.debug.print("messages_recv_count: {d}\n", .{messages_recv_count});
-            }
+            std.debug.print("callback_1: messages_recv_count: {d}\n", .{messages_recv_count});
         }
     }.callback;
 
-    const callback_id = try client.subscribe(args.topic_name, callback, .{});
+    const callback_2 = struct {
+        pub fn callback(message: *Message) void {
+            bytes_recv_count += message.packedSize();
+            std.debug.print("callback_2: bytes_recv_count {d}\n", .{bytes_recv_count});
+        }
+    }.callback;
+
+    const callback_1_id = try client.subscribe(args.topic_name, callback_1, .{});
+    const callback_2_id = try client.subscribe(args.topic_name, callback_2, .{});
     // defer client.unsubscribe(args.topic_name, callback_id);
-    _ = callback_id;
+    _ = callback_1_id;
+    _ = callback_2_id;
 
     while (!signal_handler.sigint_triggered) {
         std.Thread.sleep(100 * std.time.ns_per_ms);

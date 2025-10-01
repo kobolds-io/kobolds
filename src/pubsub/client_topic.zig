@@ -9,7 +9,7 @@ const MemoryPool = @import("stdx").MemoryPool;
 
 const Message = @import("../protocol/message2.zig").Message;
 
-pub const TopicOptions = struct {
+pub const ClientTopicOptions = struct {
     queue_capacity: usize = constants.topic_max_queue_capacity,
 };
 
@@ -33,7 +33,7 @@ pub const ClientTopic = struct {
         allocator: std.mem.Allocator,
         memory_pool: *MemoryPool(Message),
         topic_name: []const u8,
-        options: TopicOptions,
+        options: ClientTopicOptions,
     ) !Self {
         const queue = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(queue);

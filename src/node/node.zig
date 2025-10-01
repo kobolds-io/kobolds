@@ -864,8 +864,6 @@ pub const Node = struct {
             .conn_id = envelope.conn_id,
         };
 
-        std.Thread.sleep(10_000 * std.time.ns_per_ms);
-
         try session_outbox.enqueue(subscribe_ack_envelope);
     }
 

@@ -21,6 +21,7 @@ const Connection = @import("../protocol/connection2.zig").Connection;
 const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
 
 const ClientTopic = @import("../pubsub/client_topic.zig").ClientTopic;
+const ClientTopicOptions = @import("../pubsub/client_topic.zig").ClientTopicOptions;
 
 const Service = @import("../services/service.zig").Service;
 const Advertiser = @import("../services/advertiser.zig").Advertiser;
@@ -31,8 +32,12 @@ const Session = @import("../node/session.zig").Session;
 
 const PingOptions = struct {};
 const PublishOptions = struct {};
-const SubscribeOptions = struct {};
-const RequestOptions = struct {};
+const SubscribeOptions = struct {
+    timeout_ms: u64 = 5_000,
+};
+const RequestOptions = struct {
+    timeout_ms: u64 = 5_000,
+};
 const AdvertiseOptions = struct {};
 
 pub const AuthenticationConfig = struct {
@@ -318,51 +323,6 @@ pub const Client = struct {
         }
     }
 
-    pub fn awaitReply(self: *Self, transaction_id: u64) !*Message {
-        while (true) {
-            self.transactions_mutex.lock();
-            defer self.transactions_mutex.unlock();
-
-            const transaction_opt = self.transactions.get(transaction_id);
-            if (transaction_opt == null) @panic("something went terribly wrong");
-
-            const tx = transaction_opt.?;
-
-            defer {
-                std.Thread.sleep(1 * std.time.ns_per_us);
-            }
-            const now = std.time.milliTimestamp();
-
-            switch (tx.state) {
-                .submitted => {},
-                .completed => {
-                    log.info("transaction was completed!", .{});
-                    _ = self.transactions.remove(tx.id);
-                    self.allocator.destroy(tx);
-
-                    const diff = now - tx.created_at;
-
-                    log.info("took {}ms to subscribe", .{diff});
-
-                    assert(tx.reply != null);
-                    return tx.reply.?;
-                },
-                .timed_out => {
-                    log.info("transaction was timed_out!", .{});
-                    _ = self.transactions.remove(tx.id);
-                    self.allocator.destroy(tx);
-                    return error.TimedOut;
-                },
-                .failed => {
-                    log.info("transaction failed!", .{});
-                    _ = self.transactions.remove(tx.id);
-                    self.allocator.destroy(tx);
-                    return error.Failure;
-                },
-            }
-        }
-    }
-
     pub fn drain(self: *Self) void {
         while (self.memory_pool.available() != self.memory_pool.capacity) {}
         std.Thread.sleep(100 * std.time.ns_per_ms);
@@ -372,7 +332,6 @@ pub const Client = struct {
         try self.tickConnections();
         try self.initializeOutboundConnections();
         try self.processInboundMessages();
-        // try self.resolveTransactions();
         try self.processOutboundMessages();
     }
 
@@ -624,9 +583,7 @@ pub const Client = struct {
         try conn.outbox.enqueue(session_message);
     }
 
-    fn handleSubscribeAck(self: *Self, conn: *Connection, message: *Message) !void {
-        _ = conn;
-
+    fn handleSubscribeAck(self: *Self, _: *Connection, message: *Message) !void {
         defer {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
@@ -638,26 +595,11 @@ pub const Client = struct {
         defer self.transactions_mutex.unlock();
 
         if (self.transactions.get(message.extension_headers.subscribe_ack.transaction_id)) |transaction| {
-            if (transaction.state == .timed_out) {
-                _ = self.transactions.remove(transaction.id);
-                return;
-            }
-
-            // we have an actual message that can be consumed.
             message.ref();
 
-            if (message.extension_headers.subscribe_ack.error_code != .ok) {
-                transaction.state = .failed;
-            } else {
-                transaction.state = .completed;
-            }
-
-            message.ref();
-            transaction.reply = message;
-
-            transaction.signal.send({});
+            transaction.signal.send(message);
         } else {
-            log.warn("received reply for unhandled transaction {}", .{message.extension_headers.subscribe_ack.transaction_id});
+            log.warn("received reply for unhandled transaction {}. discarding message", .{message.extension_headers.subscribe_ack.transaction_id});
             return;
         }
     }
@@ -680,41 +622,6 @@ pub const Client = struct {
             }
         } else {
             log.warn("topic not found", .{});
-        }
-    }
-
-    fn resolveTransactions(self: *Self) !void {
-        self.transactions_mutex.lock();
-        defer self.transactions_mutex.unlock();
-
-        const now = std.time.milliTimestamp();
-
-        var transactions_iter = self.transactions.valueIterator();
-        while (transactions_iter.next()) |entry| {
-            const transaction = entry.*;
-
-            switch (transaction.state) {
-                .submitted => {
-                    const deadline = transaction.created_at + transaction.timeout_ms;
-
-                    if (now >= deadline) {
-                        transaction.state = .timed_out;
-                        continue;
-                    }
-
-                    log.info("submitted", .{});
-                },
-                .completed => {
-                    log.info("completed", .{});
-                    // transaction.signal.send(value: *Message)
-                },
-                .timed_out => {
-                    log.info("timed_out", .{});
-                },
-                .failed => {
-                    log.info("failed", .{});
-                },
-            }
         }
     }
 
@@ -852,11 +759,109 @@ pub const Client = struct {
         try self.outbox.enqueue(message);
     }
 
-    pub fn subscribe(self: *Self, topic_name: []const u8, callback: ClientTopic.Callback, _: SubscribeOptions) !u64 {
+    pub fn subscribe(self: *Self, topic_name: []const u8, callback: ClientTopic.Callback, options: SubscribeOptions) !u64 {
         if (!self.isConnected()) return error.NotConnected;
+
+        var timer = try std.time.Timer.start();
+        const subscribe_start = timer.read();
 
         self.topics_mutex.lock();
         defer self.topics_mutex.unlock();
+
+        const topic = try self.findOrCreateClientTopic(topic_name, .{});
+
+        const callback_id = self.kid.generate();
+        try topic.addCallback(callback_id, callback);
+        errdefer _ = topic.removeCallback(callback_id);
+
+        // this topic is already subscribed on the node. Therefore we are just adding a callback to this
+        // existing topic and no extra work needs to be done.
+        if (topic.callbacks.count() > 1) {
+            const diff = (timer.read() - subscribe_start) / std.time.ns_per_us;
+            log.info("subscribed to topic {s}. took {}us", .{ topic_name, diff });
+            return callback_id;
+        }
+
+        const transaction_id = self.kid.generate();
+
+        const subscribe_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(subscribe_message);
+
+        subscribe_message.* = Message.new(.subscribe);
+        subscribe_message.setTopicName(topic.topic_name);
+        subscribe_message.extension_headers.subscribe.transaction_id = transaction_id;
+        subscribe_message.ref();
+        errdefer subscribe_message.deref();
+
+        assert(subscribe_message.validate() == null);
+
+        const reply = try self.request(transaction_id, subscribe_message, .{ .timeout_ms = options.timeout_ms });
+        defer {
+            reply.deref();
+            if (reply.refs() == 0) self.memory_pool.destroy(reply);
+        }
+
+        switch (reply.extension_headers.subscribe_ack.error_code) {
+            .ok => {
+                const diff = (timer.read() - subscribe_start) / std.time.ns_per_us;
+                log.info("subscribed to topic {s}. took {}us", .{ topic_name, diff });
+
+                return callback_id;
+            },
+            else => return error.FailedToSubscribe,
+        }
+    }
+
+    fn request(self: *Self, transaction_id: u64, request_message: *Message, options: RequestOptions) !*Message {
+        // create the signal handler
+        var signal = Signal(*Message).new();
+
+        // create a transaction
+        const transaction = try self.allocator.create(Transaction);
+        errdefer self.allocator.destroy(transaction);
+
+        transaction.* = Transaction{
+            .id = transaction_id,
+            .timeout_ms = options.timeout_ms,
+            .created_at = @intCast(std.time.milliTimestamp()),
+            .signal = &signal,
+        };
+
+        // add this transaction to the transactions map
+        {
+            self.transactions_mutex.lock();
+            defer self.transactions_mutex.unlock();
+
+            try self.transactions.put(self.allocator, transaction.id, transaction);
+            errdefer _ = self.transactions.remove(transaction.id);
+        }
+
+        // add this message the outbox
+        {
+            self.outbox_mutex.lock();
+            defer self.outbox_mutex.unlock();
+
+            // enqueue the request in the outbox
+            try self.outbox.enqueue(request_message);
+        }
+
+        // wait for the transaction to be completed
+        const reply_message = try signal.tryReceive(options.timeout_ms * std.time.ns_per_ms);
+
+        // cleanup
+        {
+            self.transactions_mutex.lock();
+            defer self.transactions_mutex.unlock();
+
+            assert(self.transactions.remove(transaction.id));
+            self.allocator.destroy(transaction);
+        }
+
+        return reply_message;
+    }
+
+    fn findOrCreateClientTopic(self: *Self, topic_name: []const u8, options: ClientTopicOptions) !*ClientTopic {
+        _ = options;
 
         var topic: *ClientTopic = undefined;
         if (self.topics.get(topic_name)) |t| {
@@ -876,79 +881,21 @@ pub const Client = struct {
             try self.topics.put(t_name, topic);
         }
 
-        const callback_id = self.kid.generate();
-        try topic.addCallback(callback_id, callback);
-        errdefer _ = topic.removeCallback(callback_id);
-
-        const subscribe_message = try self.memory_pool.create();
-        errdefer self.memory_pool.destroy(subscribe_message);
-
-        const transaction = try self.allocator.create(Transaction);
-        errdefer self.allocator.destroy(transaction);
-
-        var signal = Signal(void).new();
-
-        transaction.* = Transaction{
-            .id = self.kid.generate(),
-            .state = .submitted,
-            .timeout_ms = 5_000,
-            .created_at = @intCast(std.time.milliTimestamp()),
-            .reply = null,
-            .signal = &signal,
-        };
-
-        {
-            self.transactions_mutex.lock();
-            defer self.transactions_mutex.unlock();
-
-            try self.transactions.put(self.allocator, transaction.id, transaction);
-            errdefer _ = self.transactions.remove(transaction.id);
-            subscribe_message.* = Message.new(.subscribe);
-            subscribe_message.setTopicName(topic.topic_name);
-            subscribe_message.extension_headers.subscribe.transaction_id = transaction.id;
-            subscribe_message.ref();
-            errdefer subscribe_message.deref();
-
-            self.outbox_mutex.lock();
-            defer self.outbox_mutex.unlock();
-
-            try self.outbox.enqueue(subscribe_message);
-        }
-
-        try transaction.signal.tryReceive(transaction.timeout_ms * 1_000_000);
-        switch (transaction.state) {
-            .completed => {
-                log.info("completed", .{});
-
-                const rep = transaction.reply.?;
-                defer {
-                    rep.deref();
-                    if (rep.refs() == 0) self.memory_pool.destroy(rep);
-                }
-
-                return callback_id;
-            },
-            else => {
-                return error.Failed;
-            },
-        }
+        return topic;
     }
 };
 
 pub const Transaction = struct {
     id: u64,
-    state: TransactionState,
     timeout_ms: u64,
     created_at: u64,
-    reply: ?*Message,
-    signal: *Signal(void),
+    signal: *Signal(*Message),
 };
 
 pub const TransactionState = enum {
     submitted,
     completed,
     timed_out,
-    failed,
 };
 
 test "init/deinit" {
