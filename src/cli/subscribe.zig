@@ -118,24 +118,11 @@ fn subscribe(args: SubscribeArgs) !void {
             if (messages_recv_count % 1_000 == 0) {
                 std.debug.print("messages_recv_count: {d}\n", .{messages_recv_count});
             }
-            // const end = std.time.nanoTimestamp();
-            // const start = std.fmt.parseInt(i128, message.body(), 10) catch 0;
-
-            // const diff = @divFloor(end - start, std.time.ns_per_us);
-
-            // if (diff > 1_000) {
-            //     std.debug.print("slow - took: {d}us\n", .{diff});
-            // } else if (diff > 500) {
-            //     std.debug.print("med - took: {d}us\n", .{diff});
-            // } else {
-            //     std.debug.print("fast - took: {d}us\n", .{diff});
-            // }
-
-            // std.debug.print("recv message {any}\n", .{message.body()});
         }
     }.callback;
 
     const callback_id = try client.subscribe(args.topic_name, callback, .{});
+    // defer client.unsubscribe(args.topic_name, callback_id);
     _ = callback_id;
 
     while (!signal_handler.sigint_triggered) {

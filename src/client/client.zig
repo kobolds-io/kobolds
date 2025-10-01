@@ -3,6 +3,7 @@ const testing = std.testing;
 const assert = std.debug.assert;
 const log = std.log.scoped(.Client);
 const posix = std.posix;
+const atomic = std.atomic;
 
 const uuid = @import("uuid");
 const constants = @import("../constants.zig");
@@ -10,9 +11,6 @@ const utils = @import("../utils.zig");
 const KID = @import("kid").KID;
 
 const IO = @import("../io.zig").IO;
-
-const ConnectionMessages = @import("../data_structures/connection_messages.zig").ConnectionMessages;
-
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const Signal = @import("stdx").Signal;
 const MemoryPool = @import("stdx").MemoryPool;
@@ -23,8 +21,6 @@ const Connection = @import("../protocol/connection2.zig").Connection;
 const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
 
 const ClientTopic = @import("../pubsub/client_topic.zig").ClientTopic;
-// const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;
-// const SubscriberCallback = *const fn (message: *Message) void;
 
 const Service = @import("../services/service.zig").Service;
 const Advertiser = @import("../services/advertiser.zig").Advertiser;
@@ -78,21 +74,19 @@ pub const Client = struct {
     allocator: std.mem.Allocator,
     close_channel: *UnbufferedChannel(bool),
     config: ClientConfig,
-    connection_messages: ConnectionMessages,
-    connection_messages_mutex: std.Thread.Mutex,
     connections_mutex: std.Thread.Mutex,
     connections: std.AutoHashMap(u64, *Connection),
     done_channel: *UnbufferedChannel(bool),
     id: u11,
     inbox_mutex: std.Thread.Mutex,
     inbox: *RingBuffer(*Message),
-    outbox_mutex: std.Thread.Mutex,
-    outbox: *RingBuffer(*Message),
     io: *IO,
     kid: KID,
     memory_pool: *MemoryPool(Message),
     metrics: ClientMetrics,
     mutex: std.Thread.Mutex,
+    outbox_mutex: std.Thread.Mutex,
+    outbox: *RingBuffer(*Message),
     services_mutex: std.Thread.Mutex,
     services: std.StringHashMap(*Service),
     session_mutex: std.Thread.Mutex,
@@ -101,7 +95,7 @@ pub const Client = struct {
     topics_mutex: std.Thread.Mutex,
     topics: std.StringHashMap(*ClientTopic),
     transactions_mutex: std.Thread.Mutex,
-    transactions: std.AutoHashMap(uuid.Uuid, *Signal(*Message)),
+    transactions: std.AutoHashMapUnmanaged(u64, *Transaction),
     uninitialized_connections: std.AutoHashMap(uuid.Uuid, *Connection),
 
     pub fn init(allocator: std.mem.Allocator, config: ClientConfig) !Self {
@@ -144,8 +138,6 @@ pub const Client = struct {
             .allocator = allocator,
             .close_channel = close_channel,
             .config = config,
-            .connection_messages = ConnectionMessages.init(allocator, memory_pool),
-            .connection_messages_mutex = std.Thread.Mutex{},
             .connections_mutex = std.Thread.Mutex{},
             .connections = std.AutoHashMap(u64, *Connection).init(allocator),
             .done_channel = done_channel,
@@ -167,14 +159,12 @@ pub const Client = struct {
             .topics_mutex = std.Thread.Mutex{},
             .topics = std.StringHashMap(*ClientTopic).init(allocator),
             .transactions_mutex = std.Thread.Mutex{},
-            .transactions = std.AutoHashMap(uuid.Uuid, *Signal(*Message)).init(allocator),
+            .transactions = .empty,
             .uninitialized_connections = std.AutoHashMap(uuid.Uuid, *Connection).init(allocator),
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.connection_messages.deinit();
-
         var connections_iterator = self.connections.valueIterator();
         while (connections_iterator.next()) |entry| {
             const connection = entry.*;
@@ -205,6 +195,14 @@ pub const Client = struct {
             self.allocator.destroy(topic);
         }
 
+        var transactions_iterator = self.transactions.valueIterator();
+        while (transactions_iterator.next()) |entry| {
+            const transaction = entry.*;
+
+            self.allocator.destroy(transaction.signal);
+            self.allocator.destroy(transaction);
+        }
+
         var services_iterator = self.services.valueIterator();
         while (services_iterator.next()) |entry| {
             const service = entry.*;
@@ -232,7 +230,7 @@ pub const Client = struct {
         self.memory_pool.deinit();
         self.connections.deinit();
         self.uninitialized_connections.deinit();
-        self.transactions.deinit();
+        self.transactions.deinit(self.allocator);
         self.topics.deinit();
         self.services.deinit();
         self.advertiser_callbacks.deinit();
@@ -306,41 +304,6 @@ pub const Client = struct {
         _ = self.done_channel.receive();
     }
 
-    /// initialize a session with the node. The client will handle scaling connections up to the maximum
-    pub fn connect2(self: *Self, timeout_ns: u64) !void {
-        _ = timeout_ns;
-        _ = self;
-
-        // We need to be able to create a session
-
-        // // TODO: check if we have a session
-        // if (self.session) |session| {
-        //     self.session_mutex.lock();
-        //     defer self.session_mutex.unlock();
-
-        //     // we already have a session with an active connection, we should do nothing.
-        //     if (session.connections.count() > 0) return;
-
-        //     // we are in a transition state where the session hasn't been deinitialized. Let's do that now.
-        //     session.deinit(self.allocator);
-        //     self.allocator.destroy(session);
-        //     self.session = null;
-        // }
-
-        // const ready_signal = try self.initiateOutboundConnection();
-        // defer self.allocator.destroy(ready_signal);
-
-        // ready_channel.tryReceive(timeout_ns: u64)
-
-        // try self.spawnConnection();
-
-        // self.connections_mutex.lock();
-        // defer self.connections_mutex.unlock();
-
-        // Try to create a session!
-
-    }
-
     pub fn awaitConnected(self: *Self, timeout_ns: u64) void {
         // if we are already connected, do nothing
         if (self.isConnected()) return;
@@ -355,6 +318,51 @@ pub const Client = struct {
         }
     }
 
+    pub fn awaitReply(self: *Self, transaction_id: u64) !*Message {
+        while (true) {
+            self.transactions_mutex.lock();
+            defer self.transactions_mutex.unlock();
+
+            const transaction_opt = self.transactions.get(transaction_id);
+            if (transaction_opt == null) @panic("something went terribly wrong");
+
+            const tx = transaction_opt.?;
+
+            defer {
+                std.Thread.sleep(1 * std.time.ns_per_us);
+            }
+            const now = std.time.milliTimestamp();
+
+            switch (tx.state) {
+                .submitted => {},
+                .completed => {
+                    log.info("transaction was completed!", .{});
+                    _ = self.transactions.remove(tx.id);
+                    self.allocator.destroy(tx);
+
+                    const diff = now - tx.created_at;
+
+                    log.info("took {}ms to subscribe", .{diff});
+
+                    assert(tx.reply != null);
+                    return tx.reply.?;
+                },
+                .timed_out => {
+                    log.info("transaction was timed_out!", .{});
+                    _ = self.transactions.remove(tx.id);
+                    self.allocator.destroy(tx);
+                    return error.TimedOut;
+                },
+                .failed => {
+                    log.info("transaction failed!", .{});
+                    _ = self.transactions.remove(tx.id);
+                    self.allocator.destroy(tx);
+                    return error.Failure;
+                },
+            }
+        }
+    }
+
     pub fn drain(self: *Self) void {
         while (self.memory_pool.available() != self.memory_pool.capacity) {}
         std.Thread.sleep(100 * std.time.ns_per_ms);
@@ -364,6 +372,7 @@ pub const Client = struct {
         try self.tickConnections();
         try self.initializeOutboundConnections();
         try self.processInboundMessages();
+        // try self.resolveTransactions();
         try self.processOutboundMessages();
     }
 
@@ -436,6 +445,7 @@ pub const Client = struct {
                     .auth_failure => try self.handleAuthFailure(conn, message),
                     .publish => try self.handlePublish(conn, message),
                     .subscribe_ack => try self.handleSubscribeAck(conn, message),
+                    // .unsubscribe_ack => try self.handleUnsubscribeAck(conn, message),
                     else => {
                         log.info("message.fixed_headers.message_type {any}", .{message.fixed_headers.message_type});
                     },
@@ -615,12 +625,41 @@ pub const Client = struct {
     }
 
     fn handleSubscribeAck(self: *Self, conn: *Connection, message: *Message) !void {
+        _ = conn;
+
         defer {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
-        log.info("handleSubscribeAck: conn_id {}", .{conn.connection_id});
+        assert(message.refs() == 1);
+
+        self.transactions_mutex.lock();
+        defer self.transactions_mutex.unlock();
+
+        if (self.transactions.get(message.extension_headers.subscribe_ack.transaction_id)) |transaction| {
+            if (transaction.state == .timed_out) {
+                _ = self.transactions.remove(transaction.id);
+                return;
+            }
+
+            // we have an actual message that can be consumed.
+            message.ref();
+
+            if (message.extension_headers.subscribe_ack.error_code != .ok) {
+                transaction.state = .failed;
+            } else {
+                transaction.state = .completed;
+            }
+
+            message.ref();
+            transaction.reply = message;
+
+            transaction.signal.send({});
+        } else {
+            log.warn("received reply for unhandled transaction {}", .{message.extension_headers.subscribe_ack.transaction_id});
+            return;
+        }
     }
 
     fn handlePublish(self: *Self, conn: *Connection, message: *Message) !void {
@@ -642,8 +681,41 @@ pub const Client = struct {
         } else {
             log.warn("topic not found", .{});
         }
+    }
 
-        // log.err("handlePublish: conn_id {}", .{conn.connection_id});
+    fn resolveTransactions(self: *Self) !void {
+        self.transactions_mutex.lock();
+        defer self.transactions_mutex.unlock();
+
+        const now = std.time.milliTimestamp();
+
+        var transactions_iter = self.transactions.valueIterator();
+        while (transactions_iter.next()) |entry| {
+            const transaction = entry.*;
+
+            switch (transaction.state) {
+                .submitted => {
+                    const deadline = transaction.created_at + transaction.timeout_ms;
+
+                    if (now >= deadline) {
+                        transaction.state = .timed_out;
+                        continue;
+                    }
+
+                    log.info("submitted", .{});
+                },
+                .completed => {
+                    log.info("completed", .{});
+                    // transaction.signal.send(value: *Message)
+                },
+                .timed_out => {
+                    log.info("timed_out", .{});
+                },
+                .failed => {
+                    log.info("failed", .{});
+                },
+            }
+        }
     }
 
     fn cleanupConnection(self: *Self, conn: *Connection) !void {
@@ -811,21 +883,72 @@ pub const Client = struct {
         const subscribe_message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(subscribe_message);
 
-        subscribe_message.* = Message.new(.subscribe);
-        subscribe_message.setTopicName(topic.topic_name);
-        subscribe_message.extension_headers.subscribe.transaction_id = self.kid.generate();
-        subscribe_message.ref();
-        errdefer subscribe_message.deref();
+        const transaction = try self.allocator.create(Transaction);
+        errdefer self.allocator.destroy(transaction);
 
-        self.outbox_mutex.lock();
-        defer self.outbox_mutex.unlock();
+        var signal = Signal(void).new();
 
-        try self.outbox.enqueue(subscribe_message);
+        transaction.* = Transaction{
+            .id = self.kid.generate(),
+            .state = .submitted,
+            .timeout_ms = 5_000,
+            .created_at = @intCast(std.time.milliTimestamp()),
+            .reply = null,
+            .signal = &signal,
+        };
 
-        log.info("subscribing to topic {s}", .{topic.topic_name});
+        {
+            self.transactions_mutex.lock();
+            defer self.transactions_mutex.unlock();
 
-        return callback_id;
+            try self.transactions.put(self.allocator, transaction.id, transaction);
+            errdefer _ = self.transactions.remove(transaction.id);
+            subscribe_message.* = Message.new(.subscribe);
+            subscribe_message.setTopicName(topic.topic_name);
+            subscribe_message.extension_headers.subscribe.transaction_id = transaction.id;
+            subscribe_message.ref();
+            errdefer subscribe_message.deref();
+
+            self.outbox_mutex.lock();
+            defer self.outbox_mutex.unlock();
+
+            try self.outbox.enqueue(subscribe_message);
+        }
+
+        try transaction.signal.tryReceive(transaction.timeout_ms * 1_000_000);
+        switch (transaction.state) {
+            .completed => {
+                log.info("completed", .{});
+
+                const rep = transaction.reply.?;
+                defer {
+                    rep.deref();
+                    if (rep.refs() == 0) self.memory_pool.destroy(rep);
+                }
+
+                return callback_id;
+            },
+            else => {
+                return error.Failed;
+            },
+        }
     }
+};
+
+pub const Transaction = struct {
+    id: u64,
+    state: TransactionState,
+    timeout_ms: u64,
+    created_at: u64,
+    reply: ?*Message,
+    signal: *Signal(void),
+};
+
+pub const TransactionState = enum {
+    submitted,
+    completed,
+    timed_out,
+    failed,
 };
 
 test "init/deinit" {

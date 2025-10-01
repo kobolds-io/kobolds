@@ -63,6 +63,8 @@ pub const MessageType = enum(u8) {
     publish,
     subscribe,
     subscribe_ack,
+    unsubscribe,
+    unsubscribe_ack,
 
     pub fn fromByte(byte: u8) MessageType {
         return switch (byte) {
@@ -74,6 +76,8 @@ pub const MessageType = enum(u8) {
             6 => .publish,
             7 => .subscribe,
             8 => .subscribe_ack,
+            9 => .unsubscribe,
+            10 => .unsubscribe_ack,
             else => .unsupported,
         };
     }
@@ -127,6 +131,20 @@ pub const Message = struct {
             .subscribe_ack => Self{
                 .fixed_headers = .{ .message_type = message_type },
                 .extension_headers = .{ .subscribe_ack = SubscribeAckHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .unsubscribe => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .unsubscribe = UnsubscribeHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .unsubscribe_ack => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .unsubscribe_ack = UnsubscribeAckHeaders{} },
                 .body_buffer = undefined,
                 .checksum = 0,
                 .ref_count = atomic.Value(u32).init(0),
@@ -243,22 +261,6 @@ pub const Message = struct {
         }
     }
 
-    pub fn setMessageId(self: *Self, v: u64) void {
-        switch (self.extension_headers) {
-            .publish => |*headers| headers.message_id = v,
-            .subscribe => |*headers| headers.message_id = v,
-            else => unreachable,
-        }
-    }
-
-    pub fn messageId(self: *Self) []const u8 {
-        switch (self.extension_headers) {
-            .publish => |headers| return headers.message_id,
-            .subscribe => |headers| return headers.message_id,
-            else => unreachable,
-        }
-    }
-
     /// Calculate the size of the unserialized message.
     pub fn size(self: Self) usize {
         const extension_size: usize = switch (self.fixed_headers.message_type) {
@@ -266,6 +268,8 @@ pub const Message = struct {
             .publish => @sizeOf(PublishHeaders),
             .subscribe => @sizeOf(SubscribeHeaders),
             .subscribe_ack => @sizeOf(SubscribeAckHeaders),
+            .unsubscribe => @sizeOf(UnsubscribeHeaders),
+            .unsubscribe_ack => @sizeOf(UnsubscribeAckHeaders),
             .auth_challenge => @sizeOf(AuthChallengeHeaders),
             .session_init => @sizeOf(SessionInitHeaders),
             .session_join => @sizeOf(SessionJoinHeaders),
@@ -402,6 +406,8 @@ pub const Message = struct {
             .publish => |headers| if (headers.validate()) |e| return e,
             .subscribe => |headers| if (headers.validate()) |e| return e,
             .subscribe_ack => |headers| if (headers.validate()) |e| return e,
+            .unsubscribe => |headers| if (headers.validate()) |e| return e,
+            .unsubscribe_ack => |headers| if (headers.validate()) |e| return e,
             else => return "invalid headers",
         }
 
@@ -512,6 +518,8 @@ pub const ExtensionHeaders = union(MessageType) {
     publish: PublishHeaders,
     subscribe: SubscribeHeaders,
     subscribe_ack: SubscribeAckHeaders,
+    unsubscribe: UnsubscribeHeaders,
+    unsubscribe_ack: UnsubscribeAckHeaders,
 
     pub fn packedSize(self: *const Self) usize {
         return switch (self.*) {
@@ -566,6 +574,14 @@ pub const ExtensionHeaders = union(MessageType) {
             .subscribe_ack => blk: {
                 const headers = try SubscribeAckHeaders.fromBytes(data);
                 break :blk ExtensionHeaders{ .subscribe_ack = headers };
+            },
+            .unsubscribe => blk: {
+                const headers = try UnsubscribeHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .unsubscribe = headers };
+            },
+            .unsubscribe_ack => blk: {
+                const headers = try UnsubscribeAckHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .unsubscribe_ack = headers };
             },
         };
     }
@@ -725,6 +741,120 @@ pub const SubscribeAckHeaders = struct {
 
         const error_code = ErrorCode.fromByte(data[i]);
         // TODO: should we return an error if this is an unsupported error code?
+        i += 1;
+
+        return Self{
+            .transaction_id = transaction_id,
+            .error_code = error_code,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.error_code == .unsupported) return "invalid error_code";
+
+        return null;
+    }
+};
+
+pub const UnsubscribeHeaders = struct {
+    const Self = @This();
+
+    transaction_id: u64 = 0,
+    topic_name_length: u8 = 0,
+    topic_name: [constants.message_max_topic_name_size]u8 = undefined,
+
+    pub fn packedSize(self: Self) usize {
+        return Self.minimumSize() + self.topic_name_length;
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(u64) + 1;
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        var i: usize = 0;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.transaction_id, .big);
+        i += @sizeOf(u64);
+
+        buf[i] = self.topic_name_length;
+        i += 1;
+
+        @memcpy(buf[i .. i + self.topic_name_length], self.topic_name[0..self.topic_name_length]);
+        i += @intCast(self.topic_name_length);
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const topic_name_length = data[i];
+        i += 1;
+
+        if (topic_name_length > constants.message_max_topic_name_size) return error.InvalidTopicName;
+        if (i + topic_name_length > data.len) return error.Truncated;
+
+        var topic_name: [constants.message_max_topic_name_size]u8 = undefined;
+        @memcpy(topic_name[0..topic_name_length], data[i .. i + topic_name_length]);
+
+        return Self{
+            .transaction_id = transaction_id,
+            .topic_name_length = topic_name_length,
+            .topic_name = topic_name,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+        if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
+
+        return null;
+    }
+};
+
+pub const UnsubscribeAckHeaders = struct {
+    const Self = @This();
+
+    transaction_id: u64 = 0,
+    error_code: ErrorCode = .ok,
+
+    pub fn packedSize(_: Self) usize {
+        return Self.minimumSize();
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(u64) + 1;
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        var i: usize = 0;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.transaction_id, .big);
+        i += @sizeOf(u64);
+
+        buf[i] = @intFromEnum(self.error_code);
+        i += 1;
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const error_code = ErrorCode.fromByte(data[i]);
         i += 1;
 
         return Self{
