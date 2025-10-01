@@ -5,9 +5,9 @@ const testing = std.testing;
 
 const constants = @import("../constants.zig");
 
-const Message = @import("./message2.zig").Message;
-const FixedHeaders = @import("./message2.zig").FixedHeaders;
-const ExtensionHeaders = @import("./message2.zig").ExtensionHeaders;
+const Message = @import("./message.zig").Message;
+const FixedHeaders = @import("./message.zig").FixedHeaders;
+const ExtensionHeaders = @import("./message.zig").ExtensionHeaders;
 
 pub const ParseError = error{
     BufferOverflow,
