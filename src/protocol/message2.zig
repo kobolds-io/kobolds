@@ -249,6 +249,12 @@ pub const Message = struct {
                 @memcpy(headers.topic_name[0..v.len], v);
                 headers.topic_name_length = @intCast(v.len);
             },
+            .unsubscribe => |*headers| {
+                if (v.len > constants.message_max_topic_name_size) unreachable;
+
+                @memcpy(headers.topic_name[0..v.len], v);
+                headers.topic_name_length = @intCast(v.len);
+            },
             else => unreachable,
         }
     }
@@ -257,6 +263,7 @@ pub const Message = struct {
         switch (self.extension_headers) {
             .publish => |*headers| return headers.topic_name[0..headers.topic_name_length],
             .subscribe => |*headers| return headers.topic_name[0..headers.topic_name_length],
+            .unsubscribe => |*headers| return headers.topic_name[0..headers.topic_name_length],
             else => unreachable,
         }
     }

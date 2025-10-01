@@ -35,6 +35,9 @@ const PublishOptions = struct {};
 const SubscribeOptions = struct {
     timeout_ms: u64 = 5_000,
 };
+const UnsubscribeOptions = struct {
+    timeout_ms: u64 = 5_000,
+};
 const RequestOptions = struct {
     timeout_ms: u64 = 5_000,
 };
@@ -404,7 +407,7 @@ pub const Client = struct {
                     .auth_failure => try self.handleAuthFailure(conn, message),
                     .publish => try self.handlePublish(conn, message),
                     .subscribe_ack => try self.handleSubscribeAck(conn, message),
-                    // .unsubscribe_ack => try self.handleUnsubscribeAck(conn, message),
+                    .unsubscribe_ack => try self.handleUnsubscribeAck(conn, message),
                     else => {
                         log.info("message.fixed_headers.message_type {any}", .{message.fixed_headers.message_type});
                     },
@@ -604,6 +607,27 @@ pub const Client = struct {
         }
     }
 
+    fn handleUnsubscribeAck(self: *Self, _: *Connection, message: *Message) !void {
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
+        }
+
+        assert(message.refs() == 1);
+
+        self.transactions_mutex.lock();
+        defer self.transactions_mutex.unlock();
+
+        if (self.transactions.get(message.extension_headers.unsubscribe_ack.transaction_id)) |transaction| {
+            message.ref();
+
+            transaction.signal.send(message);
+        } else {
+            log.warn("received reply for unhandled transaction {}. discarding message", .{message.extension_headers.subscribe_ack.transaction_id});
+            return;
+        }
+    }
+
     fn handlePublish(self: *Self, conn: *Connection, message: *Message) !void {
         _ = conn;
         defer {
@@ -763,21 +787,21 @@ pub const Client = struct {
         if (!self.isConnected()) return error.NotConnected;
 
         var timer = try std.time.Timer.start();
-        const subscribe_start = timer.read();
+        const timer_start = timer.read();
 
         self.topics_mutex.lock();
         defer self.topics_mutex.unlock();
 
-        const topic = try self.findOrCreateClientTopic(topic_name, .{});
+        const client_topic = try self.findOrCreateClientTopic(topic_name, .{});
 
         const callback_id = self.kid.generate();
-        try topic.addCallback(callback_id, callback);
-        errdefer _ = topic.removeCallback(callback_id);
+        try client_topic.addCallback(callback_id, callback);
+        errdefer _ = client_topic.removeCallback(callback_id);
 
         // this topic is already subscribed on the node. Therefore we are just adding a callback to this
         // existing topic and no extra work needs to be done.
-        if (topic.callbacks.count() > 1) {
-            const diff = (timer.read() - subscribe_start) / std.time.ns_per_us;
+        if (client_topic.callbacks.count() > 1) {
+            const diff = (timer.read() - timer_start) / std.time.ns_per_us;
             log.info("subscribed to topic {s}. took {}us", .{ topic_name, diff });
             return callback_id;
         }
@@ -788,7 +812,7 @@ pub const Client = struct {
         errdefer self.memory_pool.destroy(subscribe_message);
 
         subscribe_message.* = Message.new(.subscribe);
-        subscribe_message.setTopicName(topic.topic_name);
+        subscribe_message.setTopicName(client_topic.topic_name);
         subscribe_message.extension_headers.subscribe.transaction_id = transaction_id;
         subscribe_message.ref();
         errdefer subscribe_message.deref();
@@ -803,12 +827,61 @@ pub const Client = struct {
 
         switch (reply.extension_headers.subscribe_ack.error_code) {
             .ok => {
-                const diff = (timer.read() - subscribe_start) / std.time.ns_per_us;
+                const diff = (timer.read() - timer_start) / std.time.ns_per_us;
                 log.info("subscribed to topic {s}. took {}us", .{ topic_name, diff });
 
                 return callback_id;
             },
             else => return error.FailedToSubscribe,
+        }
+    }
+
+    pub fn unsubscribe(self: *Self, topic_name: []const u8, callback_id: u64, options: UnsubscribeOptions) !void {
+        var timer = try std.time.Timer.start();
+        const timer_start = timer.read();
+
+        self.topics_mutex.lock();
+        defer self.topics_mutex.unlock();
+        const client_topic = try self.findOrCreateClientTopic(topic_name, .{});
+
+        if (!client_topic.removeCallback(callback_id)) {
+            return error.CallbackMissing;
+        }
+
+        // there is no more work to be done if this is the case
+        if (client_topic.callbacks.count() > 0) {
+            const diff = (timer.read() - timer_start) / std.time.ns_per_us;
+            log.info("unsubscribed from topic {s}. took {}us", .{ topic_name, diff });
+            return;
+        }
+
+        const transaction_id = self.kid.generate();
+
+        const unsubscribe_message = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(unsubscribe_message);
+
+        unsubscribe_message.* = Message.new(.unsubscribe);
+        unsubscribe_message.setTopicName(client_topic.topic_name);
+        unsubscribe_message.extension_headers.unsubscribe.transaction_id = transaction_id;
+        unsubscribe_message.ref();
+        errdefer unsubscribe_message.deref();
+
+        assert(unsubscribe_message.validate() == null);
+
+        const reply = try self.request(transaction_id, unsubscribe_message, .{ .timeout_ms = options.timeout_ms });
+        defer {
+            reply.deref();
+            if (reply.refs() == 0) self.memory_pool.destroy(reply);
+        }
+
+        switch (reply.extension_headers.unsubscribe_ack.error_code) {
+            .ok => {
+                const diff = (timer.read() - timer_start) / std.time.ns_per_us;
+                log.info("unsubscribed from topic {s}. took {}us", .{ topic_name, diff });
+
+                return;
+            },
+            else => return error.FailedToUnsubscribe,
         }
     }
 
@@ -890,12 +963,6 @@ pub const Transaction = struct {
     timeout_ms: u64,
     created_at: u64,
     signal: *Signal(*Message),
-};
-
-pub const TransactionState = enum {
-    submitted,
-    completed,
-    timed_out,
 };
 
 test "init/deinit" {

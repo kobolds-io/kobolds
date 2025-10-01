@@ -441,6 +441,7 @@ pub const Node = struct {
             switch (envelope.message.fixed_headers.message_type) {
                 .publish => try self.handlePublish(envelope),
                 .subscribe => try self.handleSubscribe(envelope),
+                .unsubscribe => try self.handleUnsubscribe(envelope),
                 else => {},
             }
         }
@@ -867,41 +868,39 @@ pub const Node = struct {
         try session_outbox.enqueue(subscribe_ack_envelope);
     }
 
-    // fn handleSubscribe(self: *Self, message: *Message) !void {
-    //     const reply = try self.memory_pool.create();
-    //     errdefer self.memory_pool.destroy(reply);
+    fn handleUnsubscribe(self: *Self, envelope: Envelope) !void {
+        log.info("--------------------------------------", .{});
+        log.info("handleUnsubscribe: conn_id: {}, session_id: {}", .{ envelope.conn_id, envelope.session_id });
+        assert(envelope.message.refs() == 1);
 
-    //     reply.* = Message.new();
-    //     reply.headers.message_type = .reply;
-    //     reply.setTopicName(message.topicName());
-    //     reply.setTransactionId(message.transactionId());
-    //     reply.setErrorCode(.ok);
-    //     reply.ref();
-    //     errdefer reply.deref();
+        const unsubscribe_ack = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(unsubscribe_ack);
 
-    //     const connection_outbox = try self.findOrCreateSessionOutbox(message.headers.connection_id);
-    //     if (connection_outbox.isFull()) {
-    //         return error.ConnectionOutboxFull;
-    //     }
+        unsubscribe_ack.* = Message.new(.unsubscribe_ack);
+        unsubscribe_ack.extension_headers.unsubscribe_ack.transaction_id =
+            envelope.message.extension_headers.unsubscribe.transaction_id;
+        unsubscribe_ack.extension_headers.unsubscribe_ack.error_code = .ok;
+        unsubscribe_ack.ref();
+        errdefer unsubscribe_ack.deref();
 
-    //     const topic = try self.findOrCreateTopic(message.topicName(), .{});
+        const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
+        const subscriber_key = utils.generateKey64(envelope.message.topicName(), envelope.session_id);
 
-    //     // QUESTION: A connection can only be subscribed to a topic ONCE. Is this good behavior???
-    //     const subscriber_key = utils.generateKey(message.topicName(), message.headers.connection_id);
+        if (!topic.removeSubscriber(subscriber_key)) {
+            unsubscribe_ack.extension_headers.unsubscribe_ack.error_code = .failure;
+        }
 
-    //     topic.addSubscriber(subscriber_key, message.headers.connection_id) catch |err| {
-    //         log.err("error adding subscriber: {any}", .{err});
-    //         reply.setErrorCode(.err);
-    //     };
-    //     errdefer _ = topic.removeSubscriber(subscriber_key);
+        const session_outbox = try self.findOrCreateSessionOutbox(envelope.session_id);
 
-    //     const envelope = Envelope{
-    //         .connection_id = message.headers.connection_id,
-    //         .message = reply,
-    //     };
+        const unsubscribe_ack_envelope = Envelope{
+            .message = unsubscribe_ack,
+            .message_id = self.kid.generate(),
+            .session_id = envelope.session_id,
+            .conn_id = envelope.conn_id,
+        };
 
-    //     try connection_outbox.enqueue(envelope);
-    // }
+        try session_outbox.enqueue(unsubscribe_ack_envelope);
+    }
 
     // fn handleAdvertise(self: *Self, message: *Message) !void {
     //     const reply = try self.memory_pool.create();

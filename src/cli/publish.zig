@@ -191,10 +191,10 @@ fn publish(args: PublishArgs) !void {
             // const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
 
             // try publish
-            const body = "a" ** constants.message_max_body_size;
-            client.publish(args.topic_name, body, .{}) catch {
-                // client.publish(args.topic_name, str, .{}) catch {
-                // client.publish(args.topic_name, args.body, .{}) catch {
+            // const body = "a" ** constants.message_max_body_size;
+            // client.publish(args.topic_name, body, .{}) catch {
+            // client.publish(args.topic_name, str, .{}) catch {
+            client.publish(args.topic_name, args.body, .{}) catch {
                 std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;
             };
