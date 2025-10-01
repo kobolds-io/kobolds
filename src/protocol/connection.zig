@@ -3,14 +3,14 @@ const net = std.net;
 const posix = std.posix;
 const assert = std.debug.assert;
 const log = std.log.scoped(.Connection);
+const testing = std.testing;
 
 const uuid = @import("uuid");
-
+const KID = @import("kid").KID;
 const constants = @import("../constants.zig");
 
 const Message = @import("../protocol/message.zig").Message;
 const Parser = @import("../protocol/parser.zig").Parser;
-const Accept = @import("../protocol/message.zig").Accept;
 
 const IO = @import("../io.zig").IO;
 const ProtocolError = @import("../errors.zig").ProtocolError;
@@ -18,13 +18,11 @@ const ProtocolError = @import("../errors.zig").ProtocolError;
 // data structures
 const RingBuffer = @import("stdx").RingBuffer;
 const MemoryPool = @import("stdx").MemoryPool;
-const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 
 pub const InboundConnectionConfig = struct {
     host: []const u8 = "0.0.0.0",
     port: u16 = 0,
     transport: Transport = .tcp,
-    peer_type: PeerType = .client,
 };
 
 // TODO: a user should be able to provide a token/key for authentication to remotes
@@ -32,7 +30,6 @@ pub const OutboundConnectionConfig = struct {
     host: []const u8,
     port: u16,
     transport: Transport = .tcp,
-    peer_type: PeerType = .node,
     /// If `null`, no reconnection attempts will be performed.
     reconnect_config: ?ReconnectionConfig = null,
     /// If `null`, no keep alive messages will be performed.
@@ -121,7 +118,6 @@ const ConnectionState = enum {
 
 const ProtocolState = enum {
     inactive,
-    accepting,
     authenticating,
     ready,
     terminating,
@@ -132,6 +128,7 @@ const ConnectionConfig = union(ConnectionType) {
     inbound: InboundConnectionConfig,
     outbound: OutboundConnectionConfig,
 };
+
 const ConnectionMetrics = struct {
     bytes_recv_total: u128 = 0,
     bytes_send_total: u128 = 0,
@@ -150,43 +147,38 @@ pub const Connection = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
-    bytes_recv: u128,
-    bytes_sent: u128,
     close_completion: *IO.Completion,
     close_submitted: bool,
     config: ConnectionConfig,
     connect_completion: *IO.Completion,
-    connection_id: uuid.Uuid,
+    connection_id: u64,
+    connection_state: ConnectionState,
     connect_submitted: bool,
     inbox: *RingBuffer(*Message),
     io: *IO,
     memory_pool: *MemoryPool(Message),
-    messages_recv: u128,
-    messages_sent: u128,
+    messages_buffer: [constants.parser_messages_buffer_size]Message,
     metrics: ConnectionMetrics,
-    origin_id: uuid.Uuid,
     outbox: *RingBuffer(*Message),
-    parsed_message_ptrs: std.array_list.Managed(*Message),
-    parsed_messages: std.array_list.Managed(Message),
     parser: Parser,
     peer_id: uuid.Uuid,
     protocol_state: ProtocolState,
     recv_buffer: []u8,
     recv_bytes: usize,
+    recv_buffer_overflow: []u8,
+    recv_buffer_overflow_count: usize,
     recv_completion: *IO.Completion,
     recv_submitted: bool,
-    send_buffer_list: *std.array_list.Managed(u8),
-    send_buffer_overflow: [constants.message_max_size]u8,
+    send_buffer_list: *std.ArrayList(u8),
+    send_buffer_overflow: [@sizeOf(Message)]u8,
     send_buffer_overflow_count: usize,
     send_completion: *IO.Completion,
     send_submitted: bool,
     socket: posix.socket_t,
-    connection_state: ConnectionState,
-    tmp_encoding_buffer: []u8,
+    tmp_serialization_buffer: []u8,
 
     pub fn init(
-        id: uuid.Uuid,
-        origin_id: uuid.Uuid,
+        id: u64,
         io: *IO,
         socket: posix.socket_t,
         allocator: std.mem.Allocator,
@@ -208,14 +200,14 @@ pub const Connection = struct {
         const recv_buffer = try allocator.alloc(u8, constants.connection_recv_buffer_size);
         errdefer allocator.free(recv_buffer);
 
-        const tmp_encoding_buffer = try allocator.alloc(u8, constants.message_max_size);
-        errdefer allocator.free(tmp_encoding_buffer);
+        const tmp_serialization_buffer = try allocator.alloc(u8, @sizeOf(Message));
+        errdefer allocator.free(tmp_serialization_buffer);
 
-        const send_buffer_list = try allocator.create(std.array_list.Managed(u8));
+        const send_buffer_list = try allocator.create(std.ArrayList(u8));
         errdefer allocator.destroy(send_buffer_list);
 
-        send_buffer_list.* = try std.array_list.Managed(u8).initCapacity(allocator, constants.connection_send_buffer_size);
-        errdefer send_buffer_list.deinit();
+        send_buffer_list.* = try std.ArrayList(u8).initCapacity(allocator, constants.connection_send_buffer_size);
+        errdefer send_buffer_list.deinit(allocator);
 
         const inbox = try allocator.create(RingBuffer(*Message));
         errdefer allocator.destroy(inbox);
@@ -231,8 +223,6 @@ pub const Connection = struct {
 
         return Self{
             .allocator = allocator,
-            .bytes_recv = 0,
-            .bytes_sent = 0,
             .close_completion = close_completion,
             .close_submitted = false,
             .config = config,
@@ -242,18 +232,16 @@ pub const Connection = struct {
             .inbox = inbox,
             .io = io,
             .memory_pool = memory_pool,
-            .messages_recv = 0,
-            .messages_sent = 0,
             .metrics = ConnectionMetrics{},
-            .origin_id = origin_id,
             .outbox = outbox,
-            .parsed_message_ptrs = try std.array_list.Managed(*Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
-            .parsed_messages = try std.array_list.Managed(Message).initCapacity(allocator, constants.connection_recv_buffer_size / @sizeOf(Message)),
-            .parser = Parser.init(allocator),
+            .messages_buffer = undefined,
+            .parser = try Parser.init(allocator),
             .peer_id = 0,
             .protocol_state = .inactive,
             .recv_buffer = recv_buffer,
             .recv_bytes = 0,
+            .recv_buffer_overflow_count = 0,
+            .recv_buffer_overflow = undefined,
             .recv_completion = recv_completion,
             .recv_submitted = false,
             .send_buffer_list = send_buffer_list,
@@ -263,7 +251,7 @@ pub const Connection = struct {
             .send_submitted = false,
             .socket = socket,
             .connection_state = .closed,
-            .tmp_encoding_buffer = tmp_encoding_buffer,
+            .tmp_serialization_buffer = tmp_serialization_buffer,
         };
     }
 
@@ -283,10 +271,8 @@ pub const Connection = struct {
 
         self.inbox.deinit();
         self.outbox.deinit();
-        self.parsed_messages.deinit();
-        self.parsed_message_ptrs.deinit();
-        self.parser.deinit();
-        self.send_buffer_list.deinit();
+        self.parser.deinit(self.allocator);
+        self.send_buffer_list.deinit(self.allocator);
 
         self.allocator.destroy(self.recv_completion);
         self.allocator.destroy(self.send_completion);
@@ -297,7 +283,7 @@ pub const Connection = struct {
         self.allocator.destroy(self.send_buffer_list);
 
         self.allocator.free(self.recv_buffer);
-        self.allocator.free(self.tmp_encoding_buffer);
+        self.allocator.free(self.tmp_serialization_buffer);
     }
 
     pub fn tick(self: *Connection) !void {
@@ -313,6 +299,7 @@ pub const Connection = struct {
                 }
 
                 self.connection_state = .closed;
+                self.protocol_state = .terminated;
                 posix.close(self.socket);
                 // break out of the tick
                 return;
@@ -368,22 +355,25 @@ pub const Connection = struct {
         // NOTE: reset the send buffer list. This effectively drops all previous bytes
         self.send_buffer_list.items.len = 0;
 
-        // Handle send buffer overflow first
-        if (self.send_buffer_overflow_count > 0) {
-            // if there are more bytes in the overflow, then
-            if (self.send_buffer_overflow_count > self.send_buffer_list.capacity) {
-                // calculate the remaining bytes that can fit into the list
-                const remaining_bytes = self.send_buffer_list.capacity - self.send_buffer_list.items.len;
+        // // Handle send buffer overflow first
+        // if (self.send_buffer_overflow_count > 0) {
+        //     // if there are more bytes in the overflow, then
+        //     if (self.send_buffer_overflow_count > self.send_buffer_list.capacity) {
+        //         // calculate the remaining bytes that can fit into the list
+        //         const remaining_bytes = self.send_buffer_list.capacity - self.send_buffer_list.items.len;
 
-                // append a portion of the remaining bytes
-                self.send_buffer_list.appendSliceAssumeCapacity(self.send_buffer_overflow[0..remaining_bytes]);
-                self.send_buffer_overflow_count -= remaining_bytes;
-            } else {
-                // append all of the overflow bytes to the send buffer list
-                self.send_buffer_list.appendSliceAssumeCapacity(self.send_buffer_overflow[0..self.send_buffer_overflow_count]);
-                self.send_buffer_overflow_count = 0;
-            }
-        }
+        //         // append a portion of the remaining bytes
+        //         self.send_buffer_list.appendSliceAssumeCapacity(self.send_buffer_overflow[0..remaining_bytes]);
+        //         self.send_buffer_overflow_count -= remaining_bytes;
+        //     } else {
+        //         // append all of the overflow bytes to the send buffer list
+        //         self.send_buffer_list.appendSliceAssumeCapacity(self.send_buffer_overflow[0..self.send_buffer_overflow_count]);
+        //         self.send_buffer_overflow_count = 0;
+        //         // self.metrics.messages_send_total += 1;
+        //     }
+
+        //     // log.err("handling overflow! {}bytes remain", .{self.send_buffer_overflow_count});
+        // }
 
         // if there are bytes remaining in the current send_buffer_list and there is a message to send
         if (self.send_buffer_list.capacity - self.send_buffer_list.items.len > 0 and self.outbox.count > 0) {
@@ -393,38 +383,38 @@ pub const Connection = struct {
                     message.deref();
                     if (message.refs() == 0) self.memory_pool.destroy(message);
                 }
-                const message_size = message.size();
 
-                message.headers.origin_id = self.origin_id;
-                message.headers.connection_id = self.connection_id;
+                // if (message.fixed_headers.message_type == .publish) {
+                //     log.info("message {s}", .{message.topicName()});
+                // }
 
-                if (self.tmp_encoding_buffer.len >= message_size) {
-                    message.encode(self.tmp_encoding_buffer[0..message_size]);
-                } else {
-                    log.err("buf len: {d}, message_size: {d}", .{ self.tmp_encoding_buffer.len, message_size });
-                    @panic("buffer was not big enough to hold message");
-                }
+                assert(self.tmp_serialization_buffer.len > message.packedSize());
+                const bytes = message.serialize(self.tmp_serialization_buffer);
 
                 // add the maximum number of bytes possible to the send buffer
                 const bytes_available: usize = self.send_buffer_list.capacity - self.send_buffer_list.items.len;
-                if (bytes_available > self.tmp_encoding_buffer[0..message_size].len) {
-                    self.bytes_sent += message_size;
-                    self.messages_sent += 1;
+                if (bytes_available > self.tmp_serialization_buffer[0..bytes].len) {
+                    self.metrics.bytes_send_total += bytes;
+                    self.metrics.messages_send_total += 1;
 
                     // append the encoded message to the send_buffer
-                    self.send_buffer_list.appendSliceAssumeCapacity(self.tmp_encoding_buffer[0..message_size]);
+                    self.send_buffer_list.appendSliceAssumeCapacity(self.tmp_serialization_buffer[0..bytes]);
                 } else {
-                    self.send_buffer_list.appendSliceAssumeCapacity(self.tmp_encoding_buffer[0..bytes_available]);
-
-                    // save the remaining bytes for the next iteration
-                    const remaining_bytes = message_size - bytes_available;
-
-                    @memcpy(
-                        self.send_buffer_overflow[0..remaining_bytes],
-                        self.tmp_encoding_buffer[bytes_available .. bytes_available + remaining_bytes],
-                    );
-                    self.send_buffer_overflow_count = remaining_bytes;
+                    message.ref();
+                    // instead of dealing with the overflow just prepend and try again
+                    self.outbox.prepend(message) catch unreachable;
                     break;
+                    // self.send_buffer_list.appendSliceAssumeCapacity(self.tmp_serialization_buffer[0..bytes_available]);
+
+                    // // save the remaining bytes for the next iteration
+                    // const remaining_bytes = bytes - bytes_available;
+
+                    // @memcpy(
+                    //     self.send_buffer_overflow[0..remaining_bytes],
+                    //     self.tmp_serialization_buffer[bytes_available .. bytes_available + remaining_bytes],
+                    // );
+                    // self.send_buffer_overflow_count = remaining_bytes;
+                    // break;
                 }
             }
         }
@@ -433,68 +423,104 @@ pub const Connection = struct {
     fn processInboundMessages(self: *Self) void {
         assert(!self.recv_submitted);
 
-        // self.bytes_recv += bytes;
         self.metrics.bytes_recv_total += self.recv_bytes;
         defer self.recv_bytes = 0;
 
-        // FIX: there should be an assert that enforces that the parser is being passed the right amount
-        // of bytes to be parsed
-        assert(self.parsed_message_ptrs.items.len == self.parsed_messages.items.len);
+        // First handle any overflow bytes from last time
+        if (self.recv_buffer_overflow_count > 0) {
+            // log.err("recv_buffer_overflow is not empty", .{});
+            const parser_buffer_available_bytes = self.parser.buffer.capacity - self.parser.buffer.items.len;
+            if (parser_buffer_available_bytes > 0) {
+                const remaining_bytes = @min(parser_buffer_available_bytes, self.recv_buffer_overflow_count);
+                self.parser.buffer.appendSliceAssumeCapacity(self.recv_buffer_overflow[0..remaining_bytes]);
+                self.recv_buffer_overflow_count -= remaining_bytes;
 
-        // Parse received bytes into messages
-        self.parser.parse(&self.parsed_messages, self.recv_buffer[0..self.recv_bytes]) catch unreachable;
-
-        if (self.parsed_messages.items.len == 0) return;
-
-        self.metrics.messages_recv_total += self.parsed_messages.items.len;
-
-        // Validate messages
-        for (self.parsed_messages.items) |message| {
-            // assume that invalid messages are poison and close this connection
-            if (message.validate()) |reason| {
-                self.connection_state = .closing;
-                log.err("invalid message: {s}", .{reason});
-                return;
+                if (self.recv_buffer_overflow_count > 0) {
+                    // Still not enough space for everything, bail out until next call
+                    @panic("i don't think i can do much in this situation :'(");
+                }
             }
         }
 
-        const message_ptrs = self.memory_pool.createN(
-            self.allocator,
-            @intCast(self.parsed_messages.items.len),
-        ) catch |err| {
-            log.err("inbox memory_pool.createN() returned err: {any}", .{err});
-            return;
-        };
-        defer self.allocator.free(message_ptrs);
+        var recv_buffer_index: usize = 0;
 
-        if (message_ptrs.len != self.parsed_messages.items.len) {
-            log.err("not enough node ptrs {d} for parsed_messages {d}", .{
-                message_ptrs.len,
-                self.parsed_messages.items.len,
-            });
-            for (message_ptrs) |message_ptr| {
-                self.memory_pool.destroy(message_ptr);
+        // While we still have unread data
+        while (recv_buffer_index < self.recv_bytes) {
+            const parser_buffer_available_bytes = self.parser.buffer.capacity - self.parser.buffer.items.len;
+            if (parser_buffer_available_bytes == 0) {
+                // Parser buffer full, stash remaining bytes into overflow
+                const remaining_bytes = self.recv_bytes - recv_buffer_index;
+                @memcpy(
+                    self.recv_buffer_overflow[self.recv_buffer_overflow_count .. self.recv_buffer_overflow_count + remaining_bytes],
+                    self.recv_buffer[recv_buffer_index .. recv_buffer_index + remaining_bytes],
+                );
+                self.recv_buffer_overflow_count += remaining_bytes;
+                // log.err("adding to recv_buffer_overflow", .{});
+                break;
             }
-            return;
-        }
 
-        for (message_ptrs, self.parsed_messages.items) |message_ptr, message| {
-            message_ptr.* = message;
-            message_ptr.ref();
+            const remaining_bytes = @min(self.recv_bytes - recv_buffer_index, parser_buffer_available_bytes);
+            // log.err("recv_buffer_index {}, remaining_bytes {}", .{ recv_buffer_index, remaining_bytes });
 
-            // NOTE: this is kind of redundent because the memory_pool should be handling this
-            assert(message_ptr.refs() == 1);
-        }
+            self.parser.buffer.appendSliceAssumeCapacity(
+                self.recv_buffer[recv_buffer_index .. recv_buffer_index + remaining_bytes],
+            );
+            recv_buffer_index += remaining_bytes;
 
-        // Reset the parsed_messages list
-        self.parsed_messages.items.len = 0;
+            // Now parse until parser can’t produce more messages
+            while (true) {
+                const parsed_count = self.parser.parse(&self.messages_buffer, &.{}) catch unreachable;
+                if (parsed_count == 0) break;
 
-        const n = self.inbox.enqueueMany(message_ptrs);
-        if (n < message_ptrs.len) {
-            log.err("could not enqueue all message ptrs. dropping {d} messages", .{message_ptrs[n..].len});
-            for (message_ptrs[n..]) |message_ptr| {
-                message_ptr.deref();
-                self.memory_pool.destroy(message_ptr);
+                self.metrics.messages_recv_total += parsed_count;
+
+                const parsed_messages = self.messages_buffer[0..parsed_count];
+
+                for (parsed_messages) |*message| {
+                    if (message.validate()) |reason| {
+                        self.connection_state = .closing;
+                        log.err("invalid message: {s}", .{reason});
+                        return;
+                    }
+                }
+
+                const message_ptrs = self.memory_pool.createN(self.allocator, parsed_count) catch |err| {
+                    log.err("inbox memory_pool.createN() returned err: {any}", .{err});
+                    return;
+                };
+                defer self.allocator.free(message_ptrs);
+
+                if (message_ptrs.len != parsed_count) {
+                    log.err("not enough node ptrs {d} for parsed_messages {d}", .{
+                        message_ptrs.len,
+                        parsed_count,
+                    });
+                    for (message_ptrs) |message_ptr| self.memory_pool.destroy(message_ptr);
+                    return;
+                }
+
+                for (message_ptrs, parsed_messages) |message_ptr, message| {
+                    message_ptr.* = message;
+                    message_ptr.ref();
+
+                    // if (message.fixed_headers.message_type == .publish) {
+                    //     log.info("connection message.topicName(): {any}", .{message_ptr.topicName()});
+                    //     log.info("connection message.body(): {any}", .{message_ptr.body()});
+                    // }
+
+                    assert(message_ptr.refs() == 1);
+                }
+
+                // log.err("last messaged parsed {any}", .{parsed_messages[parsed_count - 1]});
+
+                const messages_enqueued = self.inbox.enqueueMany(message_ptrs);
+                if (messages_enqueued < message_ptrs.len) {
+                    log.err("could not enqueue all message ptrs. dropping {d} messages", .{message_ptrs[messages_enqueued..].len});
+                    for (message_ptrs[messages_enqueued..]) |message_ptr| {
+                        message_ptr.deref();
+                        self.memory_pool.destroy(message_ptr);
+                    }
+                }
             }
         }
     }
@@ -539,3 +565,243 @@ pub const Connection = struct {
         self.connection_state = .connected;
     }
 };
+
+test "init/deinit" {
+    const allocator = testing.allocator;
+
+    var kid = KID.init(0, .{});
+
+    var io = try IO.init(16, 0);
+    defer io.deinit();
+
+    const socket: posix.socket_t = undefined;
+
+    var memory_pool = try MemoryPool(Message).init(allocator, 10);
+    defer memory_pool.deinit();
+
+    const config = ConnectionConfig{ .inbound = .{} };
+
+    var connection = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
+    defer connection.deinit();
+}
+
+test "processing inbound messages" {
+    const allocator = testing.allocator;
+    var kid = KID.init(0, .{});
+
+    var io = try IO.init(16, 0);
+    defer io.deinit();
+
+    const socket: posix.socket_t = undefined;
+
+    var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_inbox_capacity);
+    defer memory_pool.deinit();
+
+    const config = ConnectionConfig{ .inbound = .{} };
+
+    var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
+    defer conn.deinit();
+
+    // serailize the message
+    var buf: [@sizeOf(Message)]u8 = undefined;
+
+    // fill up the recv buffer with some messages
+    var current_index: usize = 0;
+    var recv_bytes: usize = 0;
+    var messages_count: usize = 0;
+
+    const topic_name = "a" ** constants.message_max_topic_name_size;
+    const body = "a" ** constants.message_max_body_size;
+
+    while (true) {
+        if (messages_count == conn.inbox.capacity) break;
+
+        var message = Message.new(.publish);
+        message.setTopicName(topic_name);
+        message.setBody(body);
+
+        const bytes = message.serialize(&buf);
+
+        // we are only testing for a single receive buffer and ensuring that all the
+        // messages can fit neatly into this buffer.
+        if (bytes > conn.recv_buffer[current_index..].len) break;
+        recv_bytes = current_index + bytes;
+
+        // copy the bytes to the recv buffer
+        @memcpy(conn.recv_buffer[current_index..recv_bytes], buf[0..bytes]);
+        conn.recv_bytes = recv_bytes;
+        current_index = recv_bytes;
+        messages_count += 1;
+    }
+
+    try testing.expectEqual(0, conn.metrics.messages_recv_total);
+    try testing.expectEqual(0, conn.metrics.bytes_recv_total);
+
+    // loop over calling process inbound messages until all messages are parsed
+    var safety: usize = 0;
+    while (conn.metrics.messages_recv_total < messages_count) : (safety += 1) {
+        // it should take less that 100 iterations to fully parse all messages
+        if (safety > 100) break;
+
+        // log.err("safety {}", .{safety});
+        conn.processInboundMessages();
+    }
+
+    try testing.expectEqual(messages_count, conn.metrics.messages_recv_total);
+    try testing.expectEqual(recv_bytes, conn.metrics.bytes_recv_total);
+}
+
+test "processing inbound messages with mutliple recv_buffers" {
+    const allocator = testing.allocator;
+    var kid = KID.init(0, .{});
+
+    var io = try IO.init(16, 0);
+    defer io.deinit();
+
+    const socket: posix.socket_t = undefined;
+
+    var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_inbox_capacity);
+    defer memory_pool.deinit();
+
+    const config = ConnectionConfig{ .inbound = .{} };
+
+    var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
+    defer conn.deinit();
+
+    // serialize the message
+    var buf: [@sizeOf(Message)]u8 = undefined;
+
+    // fill up the recv buffer with some messages
+    var current_index: usize = 0;
+    var recv_bytes: usize = 0;
+    var messages_count: usize = 0;
+
+    const topic_name = "b" ** constants.message_max_topic_name_size;
+    const body = "a" ** constants.message_max_body_size;
+
+    while (true) {
+        if (messages_count == conn.inbox.capacity) break;
+
+        var message = Message.new(.publish);
+        message.setTopicName(topic_name);
+        message.setBody(body);
+
+        const bytes = message.serialize(&buf);
+
+        // we are only testing for a single receive buffer and ensuring that all the
+        // messages can fit neatly into this buffer.
+        if (bytes > conn.recv_buffer[current_index..].len) break;
+        recv_bytes = current_index + bytes;
+
+        // copy the bytes to the recv buffer
+        @memcpy(conn.recv_buffer[current_index..recv_bytes], buf[0..bytes]);
+        conn.recv_bytes = recv_bytes;
+        current_index = recv_bytes;
+        messages_count += 1;
+    }
+
+    var recv_buffer_2: [constants.connection_recv_buffer_size]u8 = undefined;
+    var recv_bytes_2: usize = 0;
+
+    // copy the bytes to the recv buffer
+    @memcpy(recv_buffer_2[0..recv_bytes], conn.recv_buffer[0..recv_bytes]);
+    recv_bytes_2 = recv_bytes;
+
+    // figure out how many bytes are in the first recv_buffer
+    const remaining_bytes = constants.connection_recv_buffer_size - recv_bytes;
+    assert(remaining_bytes >= 0);
+
+    // copy only what we actually have available
+    const copy_bytes = @min(remaining_bytes, recv_bytes_2);
+
+    @memcpy(conn.recv_buffer[recv_bytes .. recv_bytes + copy_bytes], recv_buffer_2[0..copy_bytes]);
+    recv_bytes += copy_bytes;
+
+    std.mem.copyForwards(
+        u8,
+        recv_buffer_2[0..],
+        recv_buffer_2[copy_bytes .. copy_bytes + recv_bytes_2],
+    );
+    recv_bytes_2 -= copy_bytes;
+
+    assert(recv_bytes <= constants.connection_recv_buffer_size);
+
+    try testing.expect(remaining_bytes > 0);
+
+    try testing.expectEqual(0, conn.metrics.messages_recv_total);
+    try testing.expectEqual(0, conn.metrics.bytes_recv_total);
+
+    // loop over calling process inbound messages until all messages are parsed
+    var safety: usize = 0;
+    var trigger_second_recv: bool = true;
+    while (conn.metrics.messages_recv_total < messages_count * 2) : (safety += 1) {
+        if (safety > 100) break;
+
+        if (conn.recv_bytes == 0 and trigger_second_recv) {
+            @memcpy(conn.recv_buffer[0..recv_bytes_2], recv_buffer_2[0..recv_bytes_2]);
+            conn.recv_bytes = recv_bytes_2;
+            trigger_second_recv = false;
+        }
+
+        conn.processInboundMessages();
+    }
+
+    // try testing.expect(conn.inbox.count > 0);
+
+    while (conn.inbox.dequeue()) |message| {
+        try testing.expectEqual(constants.message_max_body_size, message.fixed_headers.body_length);
+        try testing.expectEqual(.publish, message.fixed_headers.message_type);
+    }
+
+    try testing.expectEqual(messages_count * 2, conn.metrics.messages_recv_total);
+    try testing.expectEqual(recv_bytes + recv_bytes_2, conn.metrics.bytes_recv_total);
+}
+
+// test "processing outbound messages" {
+//     // return error.SkipZigTest;
+//     const allocator = testing.allocator;
+//     var kid = KID.init(0, .{});
+
+//     var io = try IO.init(16, 0);
+//     defer io.deinit();
+
+//     const socket: posix.socket_t = undefined;
+
+//     var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_outbox_capacity);
+//     defer memory_pool.deinit();
+
+//     const config = ConnectionConfig{ .inbound = .{} };
+
+//     var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
+//     defer conn.deinit();
+
+//     // enqueue a bunch of messages in the outbox
+//     var messages_count: usize = 0;
+//     var packed_message_size: usize = 0;
+//     while (messages_count < conn.outbox.capacity) : (messages_count += 1) {
+//         const message = try memory_pool.create();
+//         errdefer memory_pool.destroy(message);
+
+//         message.* = Message.new(.publish);
+//         message.setTopicName("a");
+//         message.ref();
+
+//         packed_message_size = message.packedSize();
+
+//         try conn.outbox.enqueue(message);
+//     }
+
+//     try testing.expectEqual(0, conn.metrics.messages_recv_total);
+//     try testing.expectEqual(0, conn.metrics.bytes_recv_total);
+
+//     // loop over calling process inbound messages until all messages are parsed
+//     var safety: usize = 0;
+//     while (conn.metrics.messages_send_total < messages_count) : (safety += 1) {
+//         // it should take less that 100 iterations to fully parse all messages
+//         if (safety > 3) break;
+//         conn.processOutboundMessages();
+//     }
+
+//     try testing.expectEqual(messages_count, conn.metrics.messages_send_total);
+//     try testing.expectEqual(packed_message_size * messages_count, conn.metrics.bytes_send_total);
+// }

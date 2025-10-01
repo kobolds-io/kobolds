@@ -9,7 +9,7 @@ const constants = @import("../constants.zig");
 
 const IO = @import("../io.zig").IO;
 
-const Transport = @import("../protocol/connection2.zig").Transport;
+const Transport = @import("../protocol/connection.zig").Transport;
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 
 const State = enum {

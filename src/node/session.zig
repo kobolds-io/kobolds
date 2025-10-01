@@ -8,9 +8,9 @@ const IO = @import("../io.zig").IO;
 
 const MemoryPool = @import("stdx").MemoryPool;
 
-const Message = @import("../protocol/message2.zig").Message;
-const PeerType = @import("../protocol/connection2.zig").PeerType;
-const Connection = @import("../protocol/connection2.zig").Connection;
+const Message = @import("../protocol/message.zig").Message;
+const PeerType = @import("../protocol/connection.zig").PeerType;
+const Connection = @import("../protocol/connection.zig").Connection;
 
 const LoadBalancer = @import("../load_balancers/load_balancer.zig").LoadBalancer;
 const LoadBalancerStrategy = @import("../load_balancers/load_balancer.zig").LoadBalancerStrategy;

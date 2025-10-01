@@ -1,77 +1,232 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const gzip = std.compress.flate;
+const testing = std.testing;
+const log = std.log.scoped(.Message);
 const atomic = std.atomic;
 
 const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 const hash = @import("../hash.zig");
-const ProtocolError = @import("../errors.zig").ProtocolError;
 
-pub const MessageType = enum(u8) {
-    undefined,
-    request,
-    reply,
-    ping,
-    pong,
-    accept,
-    advertise,
-    unadvertise,
-    publish,
-    subscribe,
-    unsubscribe,
-    auth_response,
-    auth_challenge,
-    auth_result,
-};
+const PeerType = @import("./connection.zig").PeerType;
 
-pub const ErrorCode = enum(u8) {
-    undefined,
-    ok,
-    err,
-    unauthorized,
-    timeout,
-    service_not_found,
-    bad_request,
-};
-
-pub const Compression = enum(u8) {
-    none,
-    gzip,
-};
-
-pub const ProtocolVersion = enum(u8) {
-    unsupported,
-    v1,
+pub const DeserializeResult = struct {
+    message: Message,
+    bytes_consumed: usize,
 };
 
 pub const ChallengeMethod = enum(u8) {
+    unsupported,
     none,
     token,
+
+    pub fn fromByte(byte: u8) ChallengeMethod {
+        return switch (byte) {
+            1 => .none,
+            2 => .token,
+            else => .unsupported,
+        };
+    }
+};
+
+pub const ChallengeAlgorithm = enum(u8) {
+    unsupported,
+    hmac256,
+
+    pub fn fromByte(byte: u8) ChallengeAlgorithm {
+        return switch (byte) {
+            1 => .hmac256,
+            else => .unsupported,
+        };
+    }
+};
+
+pub const ProtocolVersion = enum(u4) {
+    unsupported,
+    v1,
+
+    pub fn fromBits(bits: u4) ProtocolVersion {
+        return switch (bits) {
+            1 => .v1,
+            else => .unsupported,
+        };
+    }
+};
+
+pub const MessageType = enum(u8) {
+    unsupported,
+    auth_challenge,
+    session_init,
+    session_join,
+    auth_failure,
+    auth_success,
+    publish,
+    subscribe,
+    subscribe_ack,
+    unsubscribe,
+    unsubscribe_ack,
+    service_request,
+    service_reply,
+    advertise,
+    advertise_ack,
+
+    pub fn fromByte(byte: u8) MessageType {
+        return switch (byte) {
+            1 => .auth_challenge,
+            2 => .session_init,
+            3 => .session_join,
+            4 => .auth_failure,
+            5 => .auth_success,
+            6 => .publish,
+            7 => .subscribe,
+            8 => .subscribe_ack,
+            9 => .unsubscribe,
+            10 => .unsubscribe_ack,
+            11 => .service_request,
+            12 => .service_reply,
+            13 => .advertise,
+            14 => .advertise_ack,
+            else => .unsupported,
+        };
+    }
+};
+
+pub const ErrorCode = enum(u8) {
+    unsupported,
+    ok,
+    unauthenticated,
+    unauthorized,
+    failure,
+
+    pub fn fromByte(byte: u8) ErrorCode {
+        return switch (byte) {
+            1 => .ok,
+            2 => .unauthenticated,
+            3 => .unauthorized,
+            4 => .failure,
+            else => .unsupported,
+        };
+    }
 };
 
 pub const Message = struct {
     const Self = @This();
-    headers: Headers,
-    body_buffer: [constants.message_max_body_size]u8,
+
+    fixed_headers: FixedHeaders = FixedHeaders{},
+    extension_headers: ExtensionHeaders = ExtensionHeaders{ .unsupported = {} },
+    body_buffer: [constants.message_max_body_size]u8 = undefined,
+    checksum: u64 = 0,
 
     // how many times this message is referenced
     ref_count: atomic.Value(u32),
 
-    // create an uninitialized Message
-    pub fn new() Message {
-        return Message{
-            .headers = Headers{ .message_type = .undefined },
-            .body_buffer = undefined,
-            .ref_count = atomic.Value(u32).init(0),
-        };
-    }
-
-    pub fn new2(message_type: MessageType) Self {
-        return Self{
-            .headers = Headers{ .message_type = message_type },
-            .body_buffer = undefined,
-            .ref_count = atomic.Value(u32).init(0),
+    pub fn new(message_type: MessageType) Self {
+        return switch (message_type) {
+            .publish => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .publish = PublishHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .subscribe => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .subscribe = SubscribeHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .subscribe_ack => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .subscribe_ack = SubscribeAckHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .unsubscribe => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .unsubscribe = UnsubscribeHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .unsubscribe_ack => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .unsubscribe_ack = UnsubscribeAckHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .auth_challenge => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .auth_challenge = AuthChallengeHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .session_init => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .session_init = SessionInitHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .session_join => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .session_join = SessionJoinHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .auth_failure => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .auth_failure = AuthFailureHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .auth_success => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .auth_success = AuthSuccessHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .service_request => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .service_request = ServiceRequestHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .service_reply => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .service_reply = ServiceReplyHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .advertise => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .advertise = AdvertiseHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .advertise_ack => Self{
+                .fixed_headers = .{ .message_type = message_type },
+                .extension_headers = .{ .advertise_ack = AdvertiseAckHeaders{} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            else => Self{
+                .fixed_headers = .{ .message_type = .unsupported },
+                .extension_headers = .{ .unsupported = {} },
+                .body_buffer = undefined,
+                .checksum = 0,
+                .ref_count = atomic.Value(u32).init(0),
+            },
         };
     }
 
@@ -91,15 +246,8 @@ pub const Message = struct {
         _ = self.ref_count.fetchSub(1, .seq_cst);
     }
 
-    // this needs to be a mut ref to self
     pub fn body(self: *Self) []const u8 {
-        assert(self.headers.body_length <= constants.message_max_body_size);
-
-        return self.body_buffer[0..self.headers.body_length];
-    }
-
-    pub fn size(self: Self) u32 {
-        return @sizeOf(Headers) + self.headers.body_length;
+        return self.body_buffer[0..self.fixed_headers.body_length];
     }
 
     /// copy a slice of bytes into the body_buffer of the message
@@ -110,64 +258,53 @@ pub const Message = struct {
         @memcpy(self.body_buffer[0..v.len], v);
 
         // ensure the header.body_length
-        self.headers.body_length = @intCast(v.len);
+        self.fixed_headers.body_length = @intCast(v.len);
+    }
+
+    pub fn packedSize(self: Self) usize {
+        var sum: usize = 0;
+        sum += FixedHeaders.packedSize();
+        sum += self.extension_headers.packedSize();
+        sum += self.fixed_headers.body_length;
+        sum += @sizeOf(u64);
+
+        return sum;
     }
 
     pub fn setTopicName(self: *Self, v: []const u8) void {
-        // This is an absolutely tedious way of handling setting fields.
-        switch (self.headers.message_type) {
-            .request => {
+        switch (self.extension_headers) {
+            .publish => |*headers| {
                 if (v.len > constants.message_max_topic_name_size) unreachable;
-
-                var headers: *Request = self.headers.into(.request).?;
 
                 @memcpy(headers.topic_name[0..v.len], v);
                 headers.topic_name_length = @intCast(v.len);
             },
-            .reply => {
+            .subscribe => |*headers| {
                 if (v.len > constants.message_max_topic_name_size) unreachable;
-
-                var headers: *Reply = self.headers.into(.reply).?;
 
                 @memcpy(headers.topic_name[0..v.len], v);
                 headers.topic_name_length = @intCast(v.len);
             },
-            .advertise => {
+            .unsubscribe => |*headers| {
                 if (v.len > constants.message_max_topic_name_size) unreachable;
-
-                var headers: *Advertise = self.headers.into(.advertise).?;
 
                 @memcpy(headers.topic_name[0..v.len], v);
                 headers.topic_name_length = @intCast(v.len);
             },
-            .unadvertise => {
+            .service_request => |*headers| {
                 if (v.len > constants.message_max_topic_name_size) unreachable;
-
-                var headers: *Unadvertise = self.headers.into(.unadvertise).?;
 
                 @memcpy(headers.topic_name[0..v.len], v);
                 headers.topic_name_length = @intCast(v.len);
             },
-            .publish => {
+            .service_reply => |*headers| {
                 if (v.len > constants.message_max_topic_name_size) unreachable;
-
-                var headers: *Publish = self.headers.into(.publish).?;
 
                 @memcpy(headers.topic_name[0..v.len], v);
                 headers.topic_name_length = @intCast(v.len);
             },
-            .subscribe => {
+            .advertise => |*headers| {
                 if (v.len > constants.message_max_topic_name_size) unreachable;
-
-                var headers: *Subscribe = self.headers.into(.subscribe).?;
-
-                @memcpy(headers.topic_name[0..v.len], v);
-                headers.topic_name_length = @intCast(v.len);
-            },
-            .unsubscribe => {
-                if (v.len > constants.message_max_topic_name_size) unreachable;
-
-                var headers: *Unsubscribe = self.headers.into(.unsubscribe).?;
 
                 @memcpy(headers.topic_name[0..v.len], v);
                 headers.topic_name_length = @intCast(v.len);
@@ -177,1107 +314,1438 @@ pub const Message = struct {
     }
 
     pub fn topicName(self: *Self) []const u8 {
-        switch (self.headers.message_type) {
-            .request => {
-                var headers: *Request = self.headers.into(.request).?;
-                return headers.topic_name[0..@intCast(headers.topic_name_length)];
-            },
-            .reply => {
-                var headers: *Reply = self.headers.into(.reply).?;
-                return headers.topic_name[0..@intCast(headers.topic_name_length)];
-            },
-            .advertise => {
-                var headers: *Advertise = self.headers.into(.advertise).?;
-                return headers.topic_name[0..@intCast(headers.topic_name_length)];
-            },
-            .unadvertise => {
-                var headers: *Unadvertise = self.headers.into(.unadvertise).?;
-                return headers.topic_name[0..@intCast(headers.topic_name_length)];
-            },
-            .publish => {
-                var headers: *Publish = self.headers.into(.publish).?;
-                return headers.topic_name[0..@intCast(headers.topic_name_length)];
-            },
-            .subscribe => {
-                var headers: *Subscribe = self.headers.into(.subscribe).?;
-                return headers.topic_name[0..@intCast(headers.topic_name_length)];
-            },
-            .unsubscribe => {
-                var headers: *Unsubscribe = self.headers.into(.unsubscribe).?;
-                return headers.topic_name[0..@intCast(headers.topic_name_length)];
-            },
+        switch (self.extension_headers) {
+            .publish => |*headers| return headers.topic_name[0..headers.topic_name_length],
+            .subscribe => |*headers| return headers.topic_name[0..headers.topic_name_length],
+            .unsubscribe => |*headers| return headers.topic_name[0..headers.topic_name_length],
+            .service_request => |*headers| return headers.topic_name[0..headers.topic_name_length],
+            .service_reply => |*headers| return headers.topic_name[0..headers.topic_name_length],
+            .advertise => |*headers| return headers.topic_name[0..headers.topic_name_length],
             else => unreachable,
         }
     }
 
-    pub fn setTransactionId(self: *Self, v: u128) void {
-        // This is an absolutely tedious way of handling setting fields.
-        switch (self.headers.message_type) {
-            .request => {
-                var headers: *Request = self.headers.into(.request).?;
-                headers.transaction_id = v;
-            },
-            .reply => {
-                var headers: *Reply = self.headers.into(.reply).?;
-                headers.transaction_id = v;
-            },
-            .advertise => {
-                var headers: *Advertise = self.headers.into(.advertise).?;
-                headers.transaction_id = v;
-            },
-            .unadvertise => {
-                var headers: *Unadvertise = self.headers.into(.unadvertise).?;
-                headers.transaction_id = v;
-            },
-            .ping => {
-                var headers: *Ping = self.headers.into(.ping).?;
-                headers.transaction_id = v;
-            },
-            .pong => {
-                var headers: *Pong = self.headers.into(.pong).?;
-                headers.transaction_id = v;
-            },
-            .subscribe => {
-                var headers: *Subscribe = self.headers.into(.subscribe).?;
-                headers.transaction_id = v;
-            },
-            .unsubscribe => {
-                var headers: *Unsubscribe = self.headers.into(.unsubscribe).?;
-                headers.transaction_id = v;
-            },
-            .auth_challenge => {
-                var headers: *AuthChallenge = self.headers.into(.auth_challenge).?;
-                headers.transaction_id = v;
-            },
-            .auth_response => {
-                var headers: *AuthResponse = self.headers.into(.auth_response).?;
-                headers.transaction_id = v;
-            },
-            .auth_result => {
-                var headers: *AuthResult = self.headers.into(.auth_result).?;
-                headers.transaction_id = v;
-            },
-            else => unreachable,
-        }
-    }
-
-    pub fn transactionId(self: *Self) u128 {
-        switch (self.headers.message_type) {
-            .request => {
-                const headers: *const Request = self.headers.intoConst(.request).?;
-                return headers.transaction_id;
-            },
-            .reply => {
-                const headers: *const Reply = self.headers.intoConst(.reply).?;
-                return headers.transaction_id;
-            },
-            .advertise => {
-                const headers: *const Advertise = self.headers.intoConst(.advertise).?;
-                return headers.transaction_id;
-            },
-            .unadvertise => {
-                const headers: *const Unadvertise = self.headers.intoConst(.unadvertise).?;
-                return headers.transaction_id;
-            },
-            .ping => {
-                const headers: *const Ping = self.headers.intoConst(.ping).?;
-                return headers.transaction_id;
-            },
-            .pong => {
-                const headers: *const Pong = self.headers.intoConst(.pong).?;
-                return headers.transaction_id;
-            },
-            .subscribe => {
-                const headers: *const Subscribe = self.headers.intoConst(.subscribe).?;
-                return headers.transaction_id;
-            },
-            .unsubscribe => {
-                const headers: *const Unsubscribe = self.headers.intoConst(.unsubscribe).?;
-                return headers.transaction_id;
-            },
-            .auth_response => {
-                const headers: *const AuthResponse = self.headers.intoConst(.auth_response).?;
-                return headers.transaction_id;
-            },
-            .auth_challenge => {
-                const headers: *const AuthChallenge = self.headers.intoConst(.auth_challenge).?;
-                return headers.transaction_id;
-            },
-            .auth_result => {
-                const headers: *const AuthResult = self.headers.intoConst(.auth_result).?;
-                return headers.transaction_id;
-            },
-            else => unreachable,
-        }
-    }
-
-    pub fn setErrorCode(self: *Self, v: ErrorCode) void {
-        // This is an absolutely tedious way of handling setting fields.
-        switch (self.headers.message_type) {
-            .reply => {
-                var headers: *Reply = self.headers.into(.reply).?;
-                headers.error_code = v;
-            },
-            .pong => {
-                var headers: *Pong = self.headers.into(.pong).?;
-                headers.error_code = v;
-            },
-            .auth_result => {
-                var headers: *AuthResult = self.headers.into(.auth_result).?;
-                headers.error_code = v;
-            },
-            else => unreachable,
-        }
-    }
-
-    pub fn errorCode(self: *Self) ErrorCode {
-        switch (self.headers.message_type) {
-            .reply => {
-                const headers: *const Reply = self.headers.intoConst(.reply).?;
-                return headers.error_code;
-            },
-            .pong => {
-                const headers: *const Pong = self.headers.intoConst(.pong).?;
-                return headers.error_code;
-            },
-            .auth_result => {
-                const headers: *const AuthResult = self.headers.intoConst(.auth_result).?;
-                return headers.error_code;
-            },
-            else => unreachable,
-        }
-    }
-
-    pub fn setChallengeMethod(self: *Self, v: ChallengeMethod) void {
-        // This is an absolutely tedious way of handling setting fields.
-        switch (self.headers.message_type) {
-            .auth_challenge => {
-                var headers: *AuthChallenge = self.headers.into(.auth_challenge).?;
-                headers.challenge_method = v;
-            },
-            .auth_response => {
-                var headers: *AuthResponse = self.headers.into(.auth_response).?;
-                headers.challenge_method = v;
-            },
-            else => unreachable,
-        }
-    }
-
-    pub fn challengeMethod(self: *Self) ErrorCode {
-        switch (self.headers.message_type) {
-            .auth_challenge => {
-                const headers: *const AuthChallenge = self.headers.into(.auth_challenge).?;
-                return headers.challenge_method;
-            },
-            .auth_response => {
-                const headers: *const AuthResponse = self.headers.into(.auth_response).?;
-                return headers.challenge_method;
-            },
-            else => unreachable,
-        }
-    }
-
-    /// Compresses the body of the message according to the compression algorithim set in message headers.
-    /// Does not allow for overcompression which would put the message body in an unknowable state for
-    /// the consumer of the message body.
-    pub fn compress(self: *Self) !void {
-        // ensure that the message is not already compressed
-        if (self.headers.compressed) return error.AlreadyCompressed;
-        switch (self.headers.compression) {
-            .none => {},
-            else => unreachable,
-            // .gzip => {
-            //     const message_body = self.body();
-
-            //     // if the message.body is empty, do nothing and just return early this will be faster
-            //     // and can eliminate errors. This should be checked on the decompress call
-            //     if (message_body.len == 0) return;
-
-            //     // create a reader that can read the message_body
-            //     var reader_fbs = std.io.fixedBufferStream(message_body);
-            //     const reader = reader_fbs.reader();
-
-            //     // at worse this message is going to be as big as the body already is. This isn't ideal.
-            //     // TODO: remove the requirement to have a separate buffer
-            //     var writer_buf: [constants.message_max_body_size]u8 = undefined;
-            //     var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
-            //     const writer_allocator = writer_fba.allocator();
-
-            //     var writer_list = std.array_list.Managed(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
-            //     defer writer_list.deinit();
-            //     const writer = writer_list.writer();
-
-            //     try gzip.compress(reader, writer, .{});
-
-            //     // set the message body
-            //     self.setBody(writer_list.items);
-            //     self.headers.compressed = true;
-            // },
-        }
-    }
-
-    /// Decompresses the body of the message according to the compression algorithim set in message headers.
-    /// Does not allow for overdecompression which would put the message body in an unknowable state for
-    /// the consumer of the message body.
-    pub fn decompress(self: *Self) !void {
-        // ensure that the message is not already compressed
-        if (!self.headers.compressed and self.headers.compression != .none) return error.AlreadyDecompressed;
-        switch (self.headers.compression) {
-            .none => {},
-            else => unreachable,
-            // .gzip => {
-            //     const message_body = self.body();
-            //     // if the message.body is empty, do nothing and just return early this will be faster
-            //     // and can eliminate errors. This should be checked on the compress call
-            //     if (message_body.len == 0) return;
-
-            //     // create a reader that can read the message_body
-            //     var reader_fbs = std.io.fixedBufferStream(message_body);
-            //     const reader = reader_fbs.reader();
-
-            //     // at worse this message is going to be as big as the body already is.
-            //     var writer_buf: [constants.message_max_body_size]u8 = undefined;
-            //     var writer_fba = std.heap.FixedBufferAllocator.init(&writer_buf);
-            //     const writer_allocator = writer_fba.allocator();
-
-            //     var writer_list = std.array_list.Managed(u8).initCapacity(writer_allocator, writer_buf.len) catch unreachable;
-            //     defer writer_list.deinit();
-            //     const writer = writer_list.writer();
-
-            //     try gzip.decompress(reader, writer);
-
-            //     // set the message body
-            //     self.setBody(writer_list.items);
-            //     self.headers.compressed = false;
-            // },
-        }
-    }
-
-    /// encodes the message into bytes that can be sent through a socket
-    pub fn encode(self: *Self, buf: []u8) void {
-        assert(self.size() <= constants.message_max_size);
-        assert(buf.len == self.size());
-
-        // create a buffer that can hold the entirety of the headers payload
-        var headers_buf: [@sizeOf(Headers)]u8 = undefined;
-        const headers_checksum_payload = self.headers.toChecksumPayload(&headers_buf);
-
-        self.headers.headers_checksum = hash.xxHash64Checksum(headers_checksum_payload);
-        self.headers.body_checksum = hash.xxHash64Checksum(self.body());
-
-        // Reuse the headers buf
-        const headers_bytes = self.headers.asBytes(&headers_buf);
-
-        @memcpy(buf[0..@sizeOf(Headers)], headers_bytes);
-        @memcpy(buf[@sizeOf(Headers)..self.size()], self.body());
-    }
-
-    // take a slice of bytes and try to decode a message out of it
-    pub fn decode(self: *Self, data: []const u8) !void {
-        // we should not get to this point but just code defensively
-        if (data.len < @sizeOf(Headers)) return ProtocolError.NotEnoughData;
-
-        // try to parse the headers out of the buffer
-        self.headers = try Headers.fromBytes(data[0..@sizeOf(Headers)]);
-
-        // create a payload that is used to calculate the checksum of the headers
-        // create a buffer that can hold the entirety of the headers payload
-        var headers_buf: [@sizeOf(Headers)]u8 = undefined;
-        const headers_checksum_payload = self.headers.toChecksumPayload(&headers_buf);
-
-        // compare the header_checksum received from the data against
-        // a recomputed checksum based on the values provided
-        if (!hash.xxHash64Verify(self.headers.headers_checksum, headers_checksum_payload)) {
-            // std.debug.print("expected: {} , got checksum {}", .{ self.headers.headers_checksum, hash.xxHash64Checksum(headers_checksum_payload) });
-            return ProtocolError.InvalidHeadersChecksum;
-        }
-
-        // let's just exit if we don't support the protocol version
-        switch (self.headers.protocol_version) {
-            .v1 => {},
-            else => @panic("unsupported version"),
-        }
-
-        // this means that we don't have the full message body and should wait for more data.
-        if (data.len < self.size()) return ProtocolError.NotEnoughData;
-
-        // get the body of the message
-        const body_bytes = data[@sizeOf(Headers)..self.size()];
-
-        // verify the body checksum to ensure the body is valid
-        if (!hash.xxHash64Verify(self.headers.body_checksum, body_bytes)) {
-            return ProtocolError.InvalidBodyChecksum;
-        }
-
-        self.setBody(body_bytes);
-    }
-
-    // FIX: this is a BS function and there should be a nicer way to call this instead of
-    // repeating the same logic found in Headers.Type just figure out what kind of message headers
-    // this is
-    pub fn validate(self: Self) ?[]const u8 {
-        return switch (self.headers.message_type) {
-            .request => {
-                const headers: *const Request = self.headers.intoConst(.request).?;
-                return headers.validate();
-            },
-            .reply => {
-                const headers: *const Reply = self.headers.intoConst(.reply).?;
-                return headers.validate();
-            },
-            .ping => {
-                const headers: *const Ping = self.headers.intoConst(.ping).?;
-                return headers.validate();
-            },
-            .pong => {
-                const headers: *const Pong = self.headers.intoConst(.pong).?;
-                return headers.validate();
-            },
-            .accept => {
-                const headers: *const Accept = self.headers.intoConst(.accept).?;
-                return headers.validate();
-            },
-            .advertise => {
-                const headers: *const Advertise = self.headers.intoConst(.advertise).?;
-                return headers.validate();
-            },
-            .unadvertise => {
-                const headers: *const Unadvertise = self.headers.intoConst(.unadvertise).?;
-                return headers.validate();
-            },
-            .publish => {
-                const headers: *const Publish = self.headers.intoConst(.publish).?;
-                return headers.validate();
-            },
-            .subscribe => {
-                const headers: *const Subscribe = self.headers.intoConst(.subscribe).?;
-                return headers.validate();
-            },
-            .unsubscribe => {
-                const headers: *const Unsubscribe = self.headers.intoConst(.unsubscribe).?;
-                return headers.validate();
-            },
-            .auth_response => {
-                const headers: *const AuthResponse = self.headers.intoConst(.auth_response).?;
-                return headers.validate();
-            },
-            .auth_challenge => {
-                const headers: *const AuthChallenge = self.headers.intoConst(.auth_challenge).?;
-                return headers.validate();
-            },
-            .auth_result => {
-                const headers: *const AuthResult = self.headers.intoConst(.auth_result).?;
-                return headers.validate();
-            },
-            else => "unsupported message type",
+    /// Calculate the size of the unserialized message.
+    pub fn size(self: Self) usize {
+        const extension_size: usize = switch (self.fixed_headers.message_type) {
+            .unsupported => 0,
+            .publish => @sizeOf(PublishHeaders),
+            .subscribe => @sizeOf(SubscribeHeaders),
+            .subscribe_ack => @sizeOf(SubscribeAckHeaders),
+            .unsubscribe => @sizeOf(UnsubscribeHeaders),
+            .unsubscribe_ack => @sizeOf(UnsubscribeAckHeaders),
+            .auth_challenge => @sizeOf(AuthChallengeHeaders),
+            .session_init => @sizeOf(SessionInitHeaders),
+            .session_join => @sizeOf(SessionJoinHeaders),
+            .auth_failure => @sizeOf(AuthFailureHeaders),
+            .auth_success => @sizeOf(AuthSuccessHeaders),
+            .service_request => @sizeOf(ServiceRequestHeaders),
+            .service_reply => @sizeOf(ServiceReplyHeaders),
+            .advertise => @sizeOf(AdvertiseHeaders),
+            .advertise_ack => @sizeOf(AdvertiseAckHeaders),
         };
-    }
-};
 
-pub const Headers = extern struct {
-    const Self = @This();
-    pub const padding_len: comptime_int = 10;
-    pub const reserved_len: comptime_int = 64;
-
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .undefined,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
-
-    reserved: [Headers.reserved_len]u8 = [_]u8{0} ** Headers.reserved_len,
-
-    pub fn Type(comptime message_type: MessageType) type {
-        return switch (message_type) {
-            .accept => Accept,
-            .advertise => Advertise,
-            .auth_response => AuthResponse,
-            .auth_challenge => AuthChallenge,
-            .auth_result => AuthResult,
-            .ping => Ping,
-            .pong => Pong,
-            .publish => Publish,
-            .reply => Reply,
-            .request => Request,
-            .subscribe => Subscribe,
-            .unadvertise => Unadvertise,
-            .unsubscribe => Unsubscribe,
-            .undefined => unreachable,
-        };
+        return @sizeOf(FixedHeaders) + extension_size + self.fixed_headers.body_length + @sizeOf(u64);
     }
 
-    pub fn into(self: *Headers, comptime message_type: MessageType) ?*Type(message_type) {
-        if (self.message_type != message_type) return null;
-        return std.mem.bytesAsValue(Type(message_type), std.mem.asBytes(self));
-    }
-
-    pub fn intoConst(self: *const Headers, comptime message_type: MessageType) ?*const Type(message_type) {
-        if (self.message_type != message_type) return null;
-        return std.mem.bytesAsValue(Type(message_type), std.mem.asBytes(self));
-    }
-
-    pub fn asBytes(self: Headers, buf: *[@sizeOf(Headers)]u8) []const u8 {
-        return self.serialize(buf, self.headers_checksum, self.body_checksum);
-    }
-
-    // we assume the same byte layout as `asBytes`
-    pub fn fromBytes(bytes: []const u8) !Headers {
-        assert(bytes.len == @sizeOf(Headers));
+    pub fn serialize(self: *Self, buf: []u8) usize {
+        // Ensure the buffer is large enough
+        assert(buf.len >= self.packedSize());
 
         var i: usize = 0;
 
-        const headers_checksum = utils.bytesToU64(bytes[i..][0..8]);
-        i += 8;
+        // Fixed headers
+        i += self.fixed_headers.toBytes(buf[i..]);
 
-        const body_checksum = utils.bytesToU64(bytes[i..][0..8]);
-        i += 8;
+        // Extension headers
+        i += self.extension_headers.toBytes(buf[i..]);
 
-        const origin_id = utils.bytesToU128(bytes[i..][0..16]);
-        i += 16;
+        const body_len = self.fixed_headers.body_length;
+        @memcpy(buf[i .. i + body_len], self.body_buffer[0..body_len]);
+        i += body_len;
 
-        const connection_id = utils.bytesToU128(bytes[i..][0..16]);
-        i += 16;
+        // Compute checksum directly on the written slice
+        const checksum = hash.xxHash64Checksum(buf[0..i]);
 
-        const body_length = utils.bytesToU16(bytes[i..][0..2]);
+        // Write checksum in-place (avoids creating buf[i..][0..size])
+        std.mem.writeInt(u64, buf.ptr[i..][0..@sizeOf(u64)], checksum, .big);
+        i += @sizeOf(u64);
+
+        // if this didn't work something went wrong
+        if (self.packedSize() != i) {
+            log.err("self {any}", .{self});
+            log.err("i {}", .{i});
+            unreachable;
+        }
+
+        return i;
+    }
+
+    pub fn deserialize(data: []const u8) !DeserializeResult {
+        // ensure that the buffer is at least the minimum size that a message could possibly be.
+        if (data.len < FixedHeaders.packedSize()) {
+            // log.err("error: {any}, reason: fixed_headers size", .{error.Truncated});
+            return error.Truncated;
+        }
+
+        var read_offset: usize = 0;
+
+        // get the fixed headers from the bytes
+        const fixed_headers = try FixedHeaders.fromBytes(data[0..FixedHeaders.packedSize()]);
+        read_offset += FixedHeaders.packedSize();
+
+        if (data.len < fixed_headers.body_length + FixedHeaders.packedSize()) {
+            // log.err("error: {any}, reason: not enough bytes", .{error.Truncated});
+            return error.Truncated;
+        }
+
+        const extension_headers = try ExtensionHeaders.fromBytes(
+            fixed_headers.message_type,
+            data[FixedHeaders.packedSize()..],
+        );
+        const extension_headers_size = extension_headers.packedSize();
+        read_offset += extension_headers_size;
+
+        const total_message_size =
+            FixedHeaders.packedSize() +
+            extension_headers_size +
+            fixed_headers.body_length +
+            @sizeOf(u64);
+
+        if (total_message_size > @sizeOf(Message)) {
+            // log.err("fixed_headers {any}", .{fixed_headers});
+            // log.err("extension_headers {any}", .{extension_headers});
+            // log.err("error: {any}, reason: total_message_size exceeds max message size", .{error.InvalidMessage});
+            return error.InvalidMessage;
+        }
+
+        if (data.len < total_message_size) {
+            // log.err("error: {any}, reason: total_message_size", .{error.Truncated});
+            return error.Truncated;
+        }
+
+        if (fixed_headers.body_length > constants.message_max_body_size) {
+            // log.err("error: {any}, reason: fixed_headers.body_length", .{error.InvalidMessage});
+            return error.InvalidMessage;
+        }
+        if (data[read_offset..].len < fixed_headers.body_length) {
+            // log.err("error: {any}, reason: not enough bytes for body", .{error.Truncated});
+            return error.Truncated;
+        }
+
+        var body_buffer: [constants.message_max_body_size]u8 = undefined;
+        @memcpy(body_buffer[0..fixed_headers.body_length], data[read_offset .. read_offset + fixed_headers.body_length]);
+        read_offset += fixed_headers.body_length;
+
+        if (data[read_offset..].len < @sizeOf(u64)) {
+            // log.err("error: {any}, reason: not enough bytes for checksum", .{error.Truncated});
+            return error.Truncated;
+        }
+        const checksum = std.mem.readInt(u64, data[read_offset .. read_offset + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+
+        if (!hash.xxHash64Verify(checksum, data[0..read_offset])) {
+            // log.err("error: {any}, reason: invalid checksum", .{error.InvalidChecksum});
+            return error.InvalidChecksum;
+        }
+        read_offset += @sizeOf(u64);
+
+        assert(read_offset == total_message_size);
+
+        return DeserializeResult{
+            .message = Message{
+                .fixed_headers = fixed_headers,
+                .extension_headers = extension_headers,
+                .body_buffer = body_buffer,
+                .checksum = checksum,
+                .ref_count = atomic.Value(u32).init(0),
+            },
+            .bytes_consumed = read_offset,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.fixed_headers.validate()) |e| return e;
+        switch (self.extension_headers) {
+            .auth_challenge => |headers| if (headers.validate()) |e| return e,
+            .session_init => |headers| if (headers.validate()) |e| return e,
+            .session_join => |headers| if (headers.validate()) |e| return e,
+            .auth_failure => |headers| if (headers.validate()) |e| return e,
+            .auth_success => |headers| if (headers.validate()) |e| return e,
+            .publish => |headers| if (headers.validate()) |e| return e,
+            .subscribe => |headers| if (headers.validate()) |e| return e,
+            .subscribe_ack => |headers| if (headers.validate()) |e| return e,
+            .unsubscribe => |headers| if (headers.validate()) |e| return e,
+            .unsubscribe_ack => |headers| if (headers.validate()) |e| return e,
+            .service_request => |headers| if (headers.validate()) |e| return e,
+            .service_reply => |headers| if (headers.validate()) |e| return e,
+            .advertise => |headers| if (headers.validate()) |e| return e,
+            .advertise_ack => |headers| if (headers.validate()) |e| return e,
+            else => return "invalid headers",
+        }
+
+        return null;
+    }
+};
+
+pub const FixedHeaders = packed struct {
+    const Self = @This();
+
+    comptime {
+        assert(6 == Self.packedSize());
+    }
+
+    body_length: u16 = 0,
+    message_type: MessageType = .unsupported,
+    protocol_version: ProtocolVersion = .v1,
+    flags: u4 = 0,
+    padding: u16 = 0,
+
+    pub fn packedSize() usize {
+        return @sizeOf(u16) + @sizeOf(MessageType) + 1 + @sizeOf(u16);
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        assert(buf.len >= @sizeOf(Self));
+
+        var i: usize = 0;
+
+        std.mem.writeInt(u16, buf[i..][0..2], self.body_length, .big);
+        i += @sizeOf(u16);
+
+        buf[i] = @intFromEnum(self.message_type);
+        i += 1;
+
+        // protocol_version (u4) + flags (u4) packed into one byte
+        buf[i] = (@as(u8, @intFromEnum(self.protocol_version)) << 4) | @as(u8, self.flags);
+        i += 1;
+
+        std.mem.writeInt(u16, buf[i..][0..2], self.padding, .big);
+        i += @sizeOf(u16);
+
+        return i;
+    }
+
+    /// Writes the packed struct into `buf` in big-endian order.
+    /// Returns the slice of written bytes.
+    pub fn fromBytes(data: []const u8) !Self {
+        if (data.len < Self.packedSize()) return error.Truncated;
+
+        var i: usize = 0;
+
+        const body_length = (@as(u16, data[i]) << 8) | @as(u16, data[i + 1]);
         i += 2;
 
-        const protocol_version: ProtocolVersion = switch (bytes[i]) {
-            0 => ProtocolVersion.unsupported,
-            1 => ProtocolVersion.v1,
-            else => ProtocolVersion.unsupported,
-        };
+        const message_type = MessageType.fromByte(data[i]);
+        if (message_type == .unsupported) {
+            // log.err("invalid message type {}", .{data[i]});
+            // log.err("data slice {any}", .{data});
+            // @panic("ahhhhh");
+            // log.err("error: {any}, reason: unsupported message_type", .{error.InvalidMessageType});
+            return error.InvalidMessageType;
+        }
         i += 1;
 
-        const message_type: MessageType = switch (bytes[i]) {
-            0 => MessageType.undefined,
-            1 => MessageType.request,
-            2 => MessageType.reply,
-            3 => MessageType.ping,
-            4 => MessageType.pong,
-            5 => MessageType.accept,
-            6 => MessageType.advertise,
-            7 => MessageType.unadvertise,
-            8 => MessageType.publish,
-            9 => MessageType.subscribe,
-            10 => MessageType.unsubscribe,
-            11 => MessageType.auth_response,
-            12 => MessageType.auth_challenge,
-            13 => MessageType.auth_result,
-            else => MessageType.undefined,
-        };
+        const protocol_version_flags = data[i];
+
+        // get the bits for the protocol version
+        const protocol_version_bits: u4 = @intCast(protocol_version_flags >> 4);
+        const protocol_version = ProtocolVersion.fromBits(protocol_version_bits);
+
+        // get the bits for the flags
+        const flags: u4 = @intCast(protocol_version_flags & 0xF);
+
+        // add 1 byte for both the protocol_version and flags
         i += 1;
 
-        const compression: Compression = switch (bytes[i]) {
-            0 => Compression.none,
-            1 => Compression.gzip,
-            else => Compression.none,
-        };
-        i += 1;
+        const padding = (@as(u16, data[i]) << 8) | @as(u16, data[i + 1]);
+        i += 2;
 
-        const compressed = bytes[i] != 0;
-        i += 1;
-
-        var padding: [Headers.padding_len]u8 = undefined;
-        @memcpy(&padding, bytes[i..][0..Headers.padding_len]);
-        i += Headers.padding_len;
-
-        var reserved: [Headers.reserved_len]u8 = undefined;
-        @memcpy(&reserved, bytes[i..][0..Headers.reserved_len]);
-        i += Headers.reserved_len;
-
-        return Headers{
-            .headers_checksum = headers_checksum,
-            .body_checksum = body_checksum,
-            .origin_id = origin_id,
-            .connection_id = connection_id,
+        return FixedHeaders{
             .body_length = body_length,
-            .protocol_version = protocol_version,
             .message_type = message_type,
-            .compression = compression,
-            .compressed = compressed,
+            .protocol_version = protocol_version,
+            .flags = flags,
             .padding = padding,
-            .reserved = reserved,
         };
     }
 
-    pub fn toChecksumPayload(self: Headers, buf: *[@sizeOf(Headers)]u8) []const u8 {
-        return self.serialize(buf, 0, 0);
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.message_type == .unsupported) return "invalid message_type";
+        if (self.protocol_version == .unsupported) return "invalid protocol_version";
+        if (self.padding != 0) return "invalid padding";
+
+        return null;
+    }
+};
+
+pub const ExtensionHeaders = union(MessageType) {
+    const Self = @This();
+
+    unsupported: void,
+    auth_challenge: AuthChallengeHeaders,
+    session_init: SessionInitHeaders,
+    session_join: SessionJoinHeaders,
+    auth_failure: AuthFailureHeaders,
+    auth_success: AuthSuccessHeaders,
+    publish: PublishHeaders,
+    subscribe: SubscribeHeaders,
+    subscribe_ack: SubscribeAckHeaders,
+    unsubscribe: UnsubscribeHeaders,
+    unsubscribe_ack: UnsubscribeAckHeaders,
+    service_request: ServiceRequestHeaders,
+    service_reply: ServiceReplyHeaders,
+    advertise: AdvertiseHeaders,
+    advertise_ack: AdvertiseAckHeaders,
+
+    pub fn packedSize(self: *const Self) usize {
+        return switch (self.*) {
+            .unsupported => 0,
+            inline else => |headers| headers.packedSize(),
+        };
     }
 
-    fn serialize(
-        self: Headers,
-        buf: *[@sizeOf(Headers)]u8,
-        headers_checksum: u64,
-        body_checksum: u64,
-    ) []const u8 {
-        assert(buf.len >= @sizeOf(Headers));
+    pub fn toBytes(self: *Self, buf: []u8) usize {
+        return switch (self.*) {
+            .unsupported => 0,
+            inline else => |headers| blk: {
+                assert(buf.len >= @sizeOf(@TypeOf(headers)));
 
-        var fba = std.heap.FixedBufferAllocator.init(buf);
-        const fba_allocator = fba.allocator();
-
-        var list = std.ArrayList(u8).initCapacity(fba_allocator, @sizeOf(Headers)) catch unreachable;
-
-        list.appendSliceAssumeCapacity(&utils.u64ToBytes(headers_checksum));
-        list.appendSliceAssumeCapacity(&utils.u64ToBytes(body_checksum));
-        list.appendSliceAssumeCapacity(&utils.u128ToBytes(self.origin_id));
-        list.appendSliceAssumeCapacity(&utils.u128ToBytes(self.connection_id));
-        list.appendSliceAssumeCapacity(&utils.u16ToBytes(self.body_length));
-        list.appendAssumeCapacity(@intFromEnum(self.protocol_version));
-        list.appendAssumeCapacity(@intFromEnum(self.message_type));
-        list.appendAssumeCapacity(@intFromEnum(self.compression));
-        list.appendAssumeCapacity(@intFromBool(self.compressed));
-        list.appendSliceAssumeCapacity(&self.padding);
-        list.appendSliceAssumeCapacity(&self.reserved);
-
-        assert(list.items.len == @sizeOf(Headers));
-        return list.items;
+                const bytes = headers.toBytes(buf);
+                break :blk bytes;
+            },
+        };
     }
 
-    pub fn validate(self: @This()) ?[]const u8 {
+    pub fn fromBytes(message_type: MessageType, data: []const u8) !Self {
+        return switch (message_type) {
+            .unsupported => ExtensionHeaders{ .unsupported = {} },
+            .auth_challenge => blk: {
+                const headers = try AuthChallengeHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .auth_challenge = headers };
+            },
+            .session_init => blk: {
+                const headers = try SessionInitHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .session_init = headers };
+            },
+            .session_join => blk: {
+                const headers = try SessionJoinHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .session_join = headers };
+            },
+            .auth_failure => blk: {
+                const headers = try AuthFailureHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .auth_failure = headers };
+            },
+            .auth_success => blk: {
+                const headers = try AuthSuccessHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .auth_success = headers };
+            },
+            .publish => blk: {
+                const headers = try PublishHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .publish = headers };
+            },
+            .subscribe => blk: {
+                const headers = try SubscribeHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .subscribe = headers };
+            },
+            .subscribe_ack => blk: {
+                const headers = try SubscribeAckHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .subscribe_ack = headers };
+            },
+            .unsubscribe => blk: {
+                const headers = try UnsubscribeHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .unsubscribe = headers };
+            },
+            .unsubscribe_ack => blk: {
+                const headers = try UnsubscribeAckHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .unsubscribe_ack = headers };
+            },
+            .service_request => blk: {
+                const headers = try ServiceRequestHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .service_request = headers };
+            },
+            .service_reply => blk: {
+                const headers = try ServiceReplyHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .service_reply = headers };
+            },
+            .advertise => blk: {
+                const headers = try AdvertiseHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .advertise = headers };
+            },
+            .advertise_ack => blk: {
+                const headers = try AdvertiseAckHeaders.fromBytes(data);
+                break :blk ExtensionHeaders{ .advertise_ack = headers };
+            },
+        };
+    }
+};
+
+pub const PublishHeaders = struct {
+    const Self = @This();
+
+    topic_name_length: u8 = 0,
+    topic_name: [constants.message_max_topic_name_size]u8 = undefined,
+
+    pub fn packedSize(self: Self) usize {
+        return Self.minimumSize() + self.topic_name_length;
+    }
+
+    fn minimumSize() usize {
+        // return @sizeOf(u64) + 1;
+        return 1;
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        var i: usize = 0;
+
+        buf[i] = self.topic_name_length;
+        i += 1;
+
+        @memcpy(buf[i .. i + self.topic_name_length], self.topic_name[0..self.topic_name_length]);
+        i += @intCast(self.topic_name_length);
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const topic_name_length = data[i];
+        i += 1;
+
+        if (topic_name_length > constants.message_max_topic_name_size) return error.InvalidTopicName;
+        if (i + topic_name_length > data.len) return error.Truncated;
+
+        var topic_name: [constants.message_max_topic_name_size]u8 = undefined;
+        @memcpy(topic_name[0..topic_name_length], data[i .. i + topic_name_length]);
+
+        return Self{
+            .topic_name_length = topic_name_length,
+            .topic_name = topic_name,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+        if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
+
+        return null;
+    }
+};
+
+pub const SubscribeHeaders = struct {
+    const Self = @This();
+
+    transaction_id: u64 = 0,
+    topic_name_length: u8 = 0,
+    topic_name: [constants.message_max_topic_name_size]u8 = undefined,
+
+    pub fn packedSize(self: Self) usize {
+        return Self.minimumSize() + self.topic_name_length;
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(u64) + 1;
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        var i: usize = 0;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.transaction_id, .big);
+        i += @sizeOf(u64);
+
+        buf[i] = self.topic_name_length;
+        i += 1;
+
+        @memcpy(buf[i .. i + self.topic_name_length], self.topic_name[0..self.topic_name_length]);
+        i += @intCast(self.topic_name_length);
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const topic_name_length = data[i];
+        i += 1;
+
+        if (topic_name_length > constants.message_max_topic_name_size) return error.InvalidTopicName;
+        if (i + topic_name_length > data.len) return error.Truncated;
+
+        var topic_name: [constants.message_max_topic_name_size]u8 = undefined;
+        @memcpy(topic_name[0..topic_name_length], data[i .. i + topic_name_length]);
+
+        return Self{
+            .transaction_id = transaction_id,
+            .topic_name_length = topic_name_length,
+            .topic_name = topic_name,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+        if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
+
+        return null;
+    }
+};
+
+pub const SubscribeAckHeaders = struct {
+    const Self = @This();
+
+    transaction_id: u64 = 0,
+    error_code: ErrorCode = .ok,
+
+    pub fn packedSize(_: Self) usize {
+        return Self.minimumSize();
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(u64) + 1;
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        var i: usize = 0;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.transaction_id, .big);
+        i += @sizeOf(u64);
+
+        buf[i] = @intFromEnum(self.error_code);
+        i += 1;
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const error_code = ErrorCode.fromByte(data[i]);
+        // TODO: should we return an error if this is an unsupported error code?
+        i += 1;
+
+        return Self{
+            .transaction_id = transaction_id,
+            .error_code = error_code,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.error_code == .unsupported) return "invalid error_code";
+
+        return null;
+    }
+};
+
+pub const UnsubscribeHeaders = struct {
+    const Self = @This();
+
+    transaction_id: u64 = 0,
+    topic_name_length: u8 = 0,
+    topic_name: [constants.message_max_topic_name_size]u8 = undefined,
+
+    pub fn packedSize(self: Self) usize {
+        return Self.minimumSize() + self.topic_name_length;
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(u64) + 1;
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        var i: usize = 0;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.transaction_id, .big);
+        i += @sizeOf(u64);
+
+        buf[i] = self.topic_name_length;
+        i += 1;
+
+        @memcpy(buf[i .. i + self.topic_name_length], self.topic_name[0..self.topic_name_length]);
+        i += @intCast(self.topic_name_length);
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const topic_name_length = data[i];
+        i += 1;
+
+        if (topic_name_length > constants.message_max_topic_name_size) return error.InvalidTopicName;
+        if (i + topic_name_length > data.len) return error.Truncated;
+
+        var topic_name: [constants.message_max_topic_name_size]u8 = undefined;
+        @memcpy(topic_name[0..topic_name_length], data[i .. i + topic_name_length]);
+
+        return Self{
+            .transaction_id = transaction_id,
+            .topic_name_length = topic_name_length,
+            .topic_name = topic_name,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+        if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
+
+        return null;
+    }
+};
+
+pub const UnsubscribeAckHeaders = struct {
+    const Self = @This();
+
+    transaction_id: u64 = 0,
+    error_code: ErrorCode = .ok,
+
+    pub fn packedSize(_: Self) usize {
+        return Self.minimumSize();
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(u64) + 1;
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        var i: usize = 0;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.transaction_id, .big);
+        i += @sizeOf(u64);
+
+        buf[i] = @intFromEnum(self.error_code);
+        i += 1;
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const error_code = ErrorCode.fromByte(data[i]);
+        i += 1;
+
+        return Self{
+            .transaction_id = transaction_id,
+            .error_code = error_code,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.error_code == .unsupported) return "invalid error_code";
+
+        return null;
+    }
+};
+
+pub const AdvertiseHeaders = struct {
+    const Self = @This();
+
+    transaction_id: u64 = 0,
+    topic_name_length: u8 = 0,
+    topic_name: [constants.message_max_topic_name_size]u8 = undefined,
+
+    pub fn packedSize(self: Self) usize {
+        return Self.minimumSize() + self.topic_name_length;
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(u64) + 1;
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        var i: usize = 0;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.transaction_id, .big);
+        i += @sizeOf(u64);
+
+        buf[i] = self.topic_name_length;
+        i += 1;
+
+        @memcpy(buf[i .. i + self.topic_name_length], self.topic_name[0..self.topic_name_length]);
+        i += @intCast(self.topic_name_length);
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const topic_name_length = data[i];
+        i += 1;
+
+        if (topic_name_length > constants.message_max_topic_name_size) return error.InvalidTopicName;
+        if (i + topic_name_length > data.len) return error.Truncated;
+
+        var topic_name: [constants.message_max_topic_name_size]u8 = undefined;
+        @memcpy(topic_name[0..topic_name_length], data[i .. i + topic_name_length]);
+
+        return Self{
+            .transaction_id = transaction_id,
+            .topic_name_length = topic_name_length,
+            .topic_name = topic_name,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+        if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
+
+        return null;
+    }
+};
+
+pub const AdvertiseAckHeaders = struct {
+    const Self = @This();
+
+    transaction_id: u64 = 0,
+    error_code: ErrorCode = .ok,
+
+    pub fn packedSize(_: Self) usize {
+        return Self.minimumSize();
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(u64) + 1;
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        var i: usize = 0;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.transaction_id, .big);
+        i += @sizeOf(u64);
+
+        buf[i] = @intFromEnum(self.error_code);
+        i += 1;
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const error_code = ErrorCode.fromByte(data[i]);
+        // TODO: should we return an error if this is an unsupported error code?
+        i += 1;
+
+        return Self{
+            .transaction_id = transaction_id,
+            .error_code = error_code,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.error_code == .unsupported) return "invalid error_code";
+
+        return null;
+    }
+};
+
+pub const ServiceRequestHeaders = struct {
+    const Self = @This();
+
+    transaction_id: u64 = 0,
+    topic_name_length: u8 = 0,
+    topic_name: [constants.message_max_topic_name_size]u8 = undefined,
+
+    pub fn packedSize(self: Self) usize {
+        return Self.minimumSize() + self.topic_name_length;
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(u64) + 1;
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        var i: usize = 0;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.transaction_id, .big);
+        i += @sizeOf(u64);
+
+        buf[i] = self.topic_name_length;
+        i += 1;
+
+        @memcpy(buf[i .. i + self.topic_name_length], self.topic_name[0..self.topic_name_length]);
+        i += @intCast(self.topic_name_length);
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const topic_name_length = data[i];
+        i += 1;
+
+        if (topic_name_length > constants.message_max_topic_name_size) return error.InvalidTopicName;
+        if (i + topic_name_length > data.len) return error.Truncated;
+
+        var topic_name: [constants.message_max_topic_name_size]u8 = undefined;
+        @memcpy(topic_name[0..topic_name_length], data[i .. i + topic_name_length]);
+
+        return Self{
+            .transaction_id = transaction_id,
+            .topic_name_length = topic_name_length,
+            .topic_name = topic_name,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+        if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
+
+        return null;
+    }
+};
+
+pub const ServiceReplyHeaders = struct {
+    const Self = @This();
+
+    transaction_id: u64 = 0,
+    error_code: ErrorCode = .ok,
+    topic_name_length: u8 = 0,
+    topic_name: [constants.message_max_topic_name_size]u8 = undefined,
+
+    pub fn packedSize(self: Self) usize {
+        return Self.minimumSize() + self.topic_name_length;
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(u64) + 1 + 1;
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        var i: usize = 0;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.transaction_id, .big);
+        i += @sizeOf(u64);
+
+        buf[i] = @intFromEnum(self.error_code);
+        i += 1;
+
+        buf[i] = self.topic_name_length;
+        i += 1;
+
+        @memcpy(buf[i .. i + self.topic_name_length], self.topic_name[0..self.topic_name_length]);
+        i += @intCast(self.topic_name_length);
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const error_code = ErrorCode.fromByte(data[i]);
+        i += 1;
+
+        const topic_name_length = data[i];
+        i += 1;
+
+        if (topic_name_length > constants.message_max_topic_name_size) return error.InvalidTopicName;
+        if (i + topic_name_length > data.len) return error.Truncated;
+
+        var topic_name: [constants.message_max_topic_name_size]u8 = undefined;
+        @memcpy(topic_name[0..topic_name_length], data[i .. i + topic_name_length]);
+
+        return Self{
+            .transaction_id = transaction_id,
+            .topic_name_length = topic_name_length,
+            .topic_name = topic_name,
+            .error_code = error_code,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (self.error_code == .unsupported) return "invalid error_code";
+        if (self.topic_name_length == 0) return "invalid topic_name_length";
+        if (self.topic_name_length > constants.message_max_topic_name_size) return "invalid topic_name_length";
+
+        return null;
+    }
+};
+
+pub const AuthChallengeHeaders = struct {
+    const Self = @This();
+
+    // challenge method and algorithm can be made smaller
+    challenge_method: ChallengeMethod = .none,
+    algorithm: ChallengeAlgorithm = .hmac256,
+    connection_id: u64 = 0,
+    nonce: u128 = 0,
+
+    pub fn packedSize(self: Self) usize {
         _ = self;
-        unreachable;
-    }
-};
-
-pub const Request = extern struct {
-    comptime {
-        assert(@sizeOf(@This()) == @sizeOf(Headers));
+        return Self.minimumSize();
     }
 
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .request,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
-
-    transaction_id: u128 = 0,
-    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
-    topic_name_length: u8 = 0,
-
-    reserved: [15]u8 = [_]u8{0} ** 15,
-
-    pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .request);
-
-        // common headers
-        if (self.protocol_version == .unsupported) return "invalid protocol_version";
-        for (self.padding) |b| if (b != 0) return "invalid padding";
-
-        // ensure this transaction is valid
-        if (self.transaction_id == 0) return "invalid transaction_id";
-
-        // ensure this topic_name is valid (no empty topic_names allowed)
-        if (self.topic_name_length == 0) return "invalid topic_name_length";
-
-        // ensure reserved is empty
-        for (self.reserved) |b| if (b != 0) return "invalid reserved";
-        return null;
-    }
-};
-
-pub const Reply = extern struct {
-    comptime {
-        assert(@sizeOf(@This()) == @sizeOf(Headers));
+    fn minimumSize() usize {
+        return @sizeOf(ChallengeMethod) + @sizeOf(ChallengeAlgorithm) + @sizeOf(u64) + @sizeOf(u128);
     }
 
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .reply,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        assert(buf.len >= self.packedSize());
 
-    transaction_id: u128 = 0,
-    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
-    topic_name_length: u8 = 0,
-    error_code: ErrorCode = .ok,
+        var i: usize = 0;
+        buf[i] = @intFromEnum(self.challenge_method);
+        i += 1;
 
-    reserved: [14]u8 = [_]u8{0} ** 14,
+        buf[i] = @intFromEnum(self.algorithm);
+        i += 1;
 
-    pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .reply);
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.connection_id, .big);
+        i += @sizeOf(u64);
 
-        // common headers
-        if (self.protocol_version == .unsupported) return "invalid protocol_version";
-        for (self.padding) |b| if (b != 0) return "invalid padding";
+        std.mem.writeInt(u128, buf[i..][0..@sizeOf(u128)], self.nonce, .big);
+        i += @sizeOf(u128);
 
-        // ensure this transaction is valid
-        if (self.transaction_id == 0) return "invalid transaction_id";
-
-        // ensure this topic_name is valid (no empty topic_names allowed)
-        if (self.topic_name_length == 0) return "invalid topic_name_length";
-
-        if (self.error_code == .undefined) return "invalid error_code";
-
-        // ensure reserved is empty
-        for (self.reserved) |b| if (b != 0) return "invalid reserved";
-
-        return null;
-    }
-};
-
-pub const Ping = extern struct {
-    comptime {
-        assert(@sizeOf(@This()) == @sizeOf(Headers));
+        return i;
     }
 
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .ping,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
 
-    transaction_id: u128 = 0,
+        if (data.len < Self.minimumSize()) return error.Truncated;
 
-    reserved: [48]u8 = [_]u8{0} ** 48,
+        const challenge_method = ChallengeMethod.fromByte(data[i]);
+        i += 1;
 
-    pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .ping);
+        const challenge_algorithm = ChallengeAlgorithm.fromByte(data[i]);
+        i += 1;
 
-        // common headers
-        if (self.body_length > 0) return "invalid body_length";
-        if (self.protocol_version == .unsupported) return "invalid protocol_version";
-        for (self.padding) |b| if (b != 0) return "invalid padding";
+        const connection_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
 
-        // ensure this transaction is valid
-        if (self.transaction_id == 0) return "invalid transaction_id";
+        const nonce = std.mem.readInt(u128, data[i .. i + @sizeOf(u128)][0..@sizeOf(u128)], .big);
+        i += @sizeOf(u128);
 
-        // ensure reserved is empty
-        for (self.reserved) |b| if (b != 0) return "invalid reserved";
-
-        return null;
-    }
-};
-
-pub const Pong = extern struct {
-    comptime {
-        assert(@sizeOf(@This()) == @sizeOf(Headers));
+        return Self{
+            .challenge_method = challenge_method,
+            .algorithm = challenge_algorithm,
+            .connection_id = connection_id,
+            .nonce = nonce,
+        };
     }
 
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .pong,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
-
-    transaction_id: u128 = 0,
-    error_code: ErrorCode = .ok,
-
-    reserved: [47]u8 = [_]u8{0} ** 47,
-
-    pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .pong);
-
-        // common headers
-        if (self.body_length > 0) return "invalid body_length";
-        if (self.protocol_version == .unsupported) return "invalid protocol_version";
-        for (self.padding) |b| if (b != 0) return "invalid padding";
-
-        // ensure this transaction is valid
-        if (self.transaction_id == 0) return "invalid transaction_id";
-        if (self.error_code == .undefined) return "invalid error_code";
-
-        // ensure reserved is empty
-        for (self.reserved) |b| if (b != 0) return "invalid reserved";
-
-        return null;
-    }
-};
-
-pub const Accept = extern struct {
-    comptime {
-        assert(@sizeOf(@This()) == @sizeOf(Headers));
-    }
-
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .accept,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
-
-    reserved: [64]u8 = [_]u8{0} ** 64,
-
-    pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .accept);
-
-        // common headers
-        if (self.protocol_version == .unsupported) return "invalid protocol_version";
-        for (self.padding) |b| if (b != 0) return "invalid padding";
-
-        // ensure the origin_id is valid
-        if (self.origin_id == 0) return "invalid origin_id";
-
-        // ensure the connection_id is valid
+    pub fn validate(self: Self) ?[]const u8 {
         if (self.connection_id == 0) return "invalid connection_id";
-
-        // ensure reserved is empty
-        for (self.reserved) |b| if (b != 0) return "invalid reserved";
-        return null;
-    }
-};
-
-pub const Advertise = extern struct {
-    comptime {
-        assert(@sizeOf(@This()) == @sizeOf(Headers));
-    }
-
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .advertise,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
-
-    transaction_id: u128 = 0,
-    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
-    topic_name_length: u8 = 0,
-
-    reserved: [15]u8 = [_]u8{0} ** 15,
-
-    pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .advertise);
-
-        // common headers
-        if (self.protocol_version == .unsupported) return "invalid protocol_version";
-        for (self.padding) |b| if (b != 0) return "invalid padding";
-
-        // ensure the body of this message is empty
-        if (self.body_length > 0) return "invalid body_length";
-
-        // ensure this transaction is valid
-        if (self.transaction_id == 0) return "invalid transaction_id";
-
-        // ensure this topic_name is valid (no empty topic_names allowed)
-        if (self.topic_name_length == 0) return "invalid topic_name_length";
-
-        // ensure reserved is empty
-        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+        if (self.nonce == 0) return "invalid nonce";
 
         return null;
     }
 };
 
-pub const Unadvertise = extern struct {
-    comptime {
-        assert(@sizeOf(@This()) == @sizeOf(Headers));
+pub const SessionInitHeaders = struct {
+    const Self = @This();
+
+    peer_id: u64 = 0,
+    peer_type: PeerType = .client,
+
+    pub fn packedSize(_: Self) usize {
+        return Self.minimumSize();
     }
 
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .unadvertise,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
+    fn minimumSize() usize {
+        return @sizeOf(PeerType) + @sizeOf(u64);
+    }
 
-    transaction_id: u128 = 0,
-    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
-    topic_name_length: u8 = 0,
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        assert(buf.len >= self.packedSize());
+        var i: usize = 0;
 
-    reserved: [15]u8 = [_]u8{0} ** 15,
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.peer_id, .big);
+        i += @sizeOf(u64);
 
-    pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .unadvertise);
+        buf[i] = @intFromEnum(self.peer_type);
+        i += 1;
 
-        // common headers
-        if (self.protocol_version == .unsupported) return "invalid protocol_version";
-        for (self.padding) |b| if (b != 0) return "invalid padding";
+        return i;
+    }
 
-        // ensure the body of this message is empty
-        if (self.body_length > 0) return "invalid body_length";
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
 
-        // ensure this transaction is valid
-        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (data.len < Self.minimumSize()) return error.Truncated;
 
-        // ensure this topic_name is valid (no empty topic_names allowed)
-        if (self.topic_name_length == 0) return "invalid topic_name_length";
+        const peer_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
 
-        // ensure reserved is empty
-        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+        const peer_type: PeerType = switch (data[i]) {
+            0 => .client,
+            1 => .node,
+            else => unreachable,
+        };
+        i += 1;
+
+        return Self{
+            .peer_id = peer_id,
+            .peer_type = peer_type,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.peer_id == 0) return "invalid peer_id";
 
         return null;
     }
 };
 
-pub const Publish = extern struct {
-    comptime {
-        assert(@sizeOf(@This()) == @sizeOf(Headers));
+pub const SessionJoinHeaders = struct {
+    const Self = @This();
+
+    peer_id: u64 = 0,
+    session_id: u64 = 0,
+
+    pub fn packedSize(_: Self) usize {
+        return Self.minimumSize();
     }
 
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .publish,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
+    fn minimumSize() usize {
+        return @sizeOf(u64) + @sizeOf(u64);
+    }
 
-    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
-    topic_name_length: u8 = 0,
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        assert(buf.len >= self.packedSize());
+        var i: usize = 0;
 
-    reserved: [31]u8 = [_]u8{0} ** 31,
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.peer_id, .big);
+        i += @sizeOf(u64);
 
-    pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .publish);
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.session_id, .big);
+        i += @sizeOf(u64);
 
-        // common headers
-        if (self.protocol_version == .unsupported) return "invalid protocol_version";
-        for (self.padding) |b| if (b != 0) return "invalid padding";
+        return i;
+    }
 
-        // ensure this topic_name is valid (no empty topic_names allowed)
-        if (self.topic_name_length == 0) return "invalid topic_name_length";
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
 
-        // ensure reserved is empty
-        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const peer_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const session_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        return Self{
+            .peer_id = peer_id,
+            .session_id = session_id,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.peer_id == 0) return "invalid peer_id";
+        if (self.session_id == 0) return "invalid session_id";
 
         return null;
     }
 };
 
-pub const Subscribe = extern struct {
-    comptime {
-        assert(@sizeOf(@This()) == @sizeOf(Headers));
+pub const AuthFailureHeaders = struct {
+    const Self = @This();
+
+    error_code: ErrorCode = .unauthenticated,
+
+    pub fn packedSize(_: Self) usize {
+        return Self.minimumSize();
     }
 
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .subscribe,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
+    fn minimumSize() usize {
+        return @sizeOf(ErrorCode);
+    }
 
-    transaction_id: u128 = 0,
-    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
-    topic_name_length: u8 = 0,
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        assert(buf.len >= self.packedSize());
+        var i: usize = 0;
 
-    reserved: [15]u8 = [_]u8{0} ** 15,
+        buf[i] = @intFromEnum(self.error_code);
+        i += 1;
 
-    pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .subscribe);
+        return i;
+    }
 
-        // common headers
-        if (self.protocol_version == .unsupported) return "invalid protocol_version";
-        for (self.padding) |b| if (b != 0) return "invalid padding";
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
 
-        // ensure this transaction is valid
-        if (self.transaction_id == 0) return "invalid transaction_id";
+        if (data.len < Self.minimumSize()) return error.Truncated;
 
-        // ensure this topic_name is valid (no empty topic_names allowed)
-        if (self.topic_name_length == 0) return "invalid topic_name_length";
+        const error_code = ErrorCode.fromByte(data[i]);
+        i += 1;
 
-        // ensure reserved is empty
-        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+        return Self{
+            .error_code = error_code,
+        };
+    }
+
+    pub fn validate(_: Self) ?[]const u8 {
+        return null;
+    }
+};
+
+pub const AuthSuccessHeaders = struct {
+    const Self = @This();
+
+    peer_id: u64 = 0,
+    session_id: u64 = 0,
+
+    pub fn packedSize(_: Self) usize {
+        return Self.minimumSize();
+    }
+
+    fn minimumSize() usize {
+        return @sizeOf(u64) + @sizeOf(u64);
+    }
+
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        assert(buf.len >= self.packedSize());
+        var i: usize = 0;
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.peer_id, .big);
+        i += @sizeOf(u64);
+
+        std.mem.writeInt(u64, buf[i..][0..@sizeOf(u64)], self.session_id, .big);
+        i += @sizeOf(u64);
+
+        return i;
+    }
+
+    pub fn fromBytes(data: []const u8) !Self {
+        var i: usize = 0;
+
+        if (data.len < Self.minimumSize()) return error.Truncated;
+
+        const peer_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        const session_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        i += @sizeOf(u64);
+
+        return Self{
+            .session_id = session_id,
+            .peer_id = peer_id,
+        };
+    }
+
+    pub fn validate(self: Self) ?[]const u8 {
+        if (self.peer_id == 0) return "invalid peer_id";
+        if (self.session_id == 0) return "invalid session_id";
 
         return null;
     }
 };
 
-pub const Unsubscribe = extern struct {
-    comptime {
-        assert(@sizeOf(@This()) == @sizeOf(Headers));
+test "size of structs" {
+    try testing.expectEqual(8, @sizeOf(FixedHeaders));
+    try testing.expectEqual(6, FixedHeaders.packedSize());
+
+    const unsupported_message = Message.new(.unsupported);
+    try testing.expectEqual(16, unsupported_message.size());
+    try testing.expectEqual(14, unsupported_message.packedSize());
+
+    const publish_message = Message.new(.publish);
+    try testing.expectEqual(49, publish_message.size());
+    try testing.expectEqual(15, publish_message.packedSize());
+
+    const subscribe_message = Message.new(.subscribe);
+    try testing.expectEqual(64, subscribe_message.size());
+    try testing.expectEqual(23, subscribe_message.packedSize());
+
+    const subscribe_ack_message = Message.new(.subscribe_ack);
+    try testing.expectEqual(32, subscribe_ack_message.size());
+    try testing.expectEqual(23, subscribe_ack_message.packedSize());
+
+    const unsubscribe_message = Message.new(.unsubscribe);
+    try testing.expectEqual(64, unsubscribe_message.size());
+    try testing.expectEqual(23, unsubscribe_message.packedSize());
+
+    const unsubscribe_ack_message = Message.new(.unsubscribe_ack);
+    try testing.expectEqual(32, unsubscribe_ack_message.size());
+    try testing.expectEqual(23, unsubscribe_ack_message.packedSize());
+
+    const session_init_message = Message.new(.session_init);
+    try testing.expectEqual(32, session_init_message.size());
+    try testing.expectEqual(23, session_init_message.packedSize());
+
+    const session_join_message = Message.new(.session_join);
+    try testing.expectEqual(32, session_join_message.size());
+    try testing.expectEqual(30, session_join_message.packedSize());
+
+    const auth_failure_message = Message.new(.auth_failure);
+    try testing.expectEqual(17, auth_failure_message.size());
+    try testing.expectEqual(15, auth_failure_message.packedSize());
+
+    const auth_success_message = Message.new(.auth_success);
+    try testing.expectEqual(32, auth_success_message.size());
+    try testing.expectEqual(30, auth_success_message.packedSize());
+
+    const service_request_message = Message.new(.service_request);
+    try testing.expectEqual(64, service_request_message.size());
+    try testing.expectEqual(23, service_request_message.packedSize());
+
+    const service_reply_message = Message.new(.service_reply);
+    try testing.expectEqual(64, service_reply_message.size());
+    try testing.expectEqual(24, service_reply_message.packedSize());
+
+    const advertise_message = Message.new(.advertise);
+    try testing.expectEqual(64, advertise_message.size());
+    try testing.expectEqual(23, advertise_message.packedSize());
+
+    const advertise_ack_message = Message.new(.advertise_ack);
+    try testing.expectEqual(32, advertise_ack_message.size());
+    try testing.expectEqual(23, advertise_ack_message.packedSize());
+}
+
+test "message can comprise of variable size extensions" {
+    const publish_message = Message.new(.publish);
+    try testing.expectEqual(publish_message.fixed_headers.message_type, .publish);
+}
+
+test "message serialization" {
+    const message_types = [_]MessageType{
+        .publish,
+        .subscribe,
+        .subscribe_ack,
+        .session_init,
+        .session_join,
+        .auth_failure,
+        .auth_success,
+        .service_request,
+        .service_reply,
+        .advertise,
+        .advertise_ack,
+    };
+
+    var buf: [@sizeOf(Message)]u8 = undefined;
+
+    for (message_types) |message_type| {
+        var message = Message.new(message_type);
+
+        const bytes = message.serialize(&buf);
+
+        try testing.expectEqual(bytes, message.packedSize());
     }
+}
 
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .unsubscribe,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
+test "message deserialization" {
+    const message_types = [_]MessageType{
+        .publish,
+        .subscribe,
+        .subscribe_ack,
+        .session_init,
+        .session_join,
+        .auth_failure,
+        .auth_success,
+        .service_request,
+        .service_reply,
+        .advertise,
+        .advertise_ack,
+    };
 
-    transaction_id: u128 = 0,
-    topic_name: [constants.message_max_topic_name_size]u8 = [_]u8{0} ** constants.message_max_topic_name_size,
-    topic_name_length: u8 = 0,
+    var buf: [@sizeOf(Message)]u8 = undefined;
 
-    reserved: [15]u8 = [_]u8{0} ** 15,
+    for (message_types) |message_type| {
+        var message = Message.new(message_type);
 
-    pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .unsubscribe);
+        // serialize the message
+        const bytes = message.serialize(&buf);
 
-        // common headers
-        if (self.protocol_version == .unsupported) return "invalid protocol_version";
-        for (self.padding) |b| if (b != 0) return "invalid padding";
+        // deserialize the message
+        const deserialized_result = try Message.deserialize(buf[0..bytes]);
 
-        // ensure this transaction is valid
-        if (self.transaction_id == 0) return "invalid transaction_id";
+        try testing.expectEqual(bytes, deserialized_result.bytes_consumed);
 
-        // ensure this topic_name is valid (no empty topic_names allowed)
-        if (self.topic_name_length == 0) return "invalid topic_name_length";
+        var deserialized_message = deserialized_result.message;
 
-        // ensure reserved is empty
-        for (self.reserved) |b| if (b != 0) return "invalid reserved";
+        try testing.expectEqual(message.size(), deserialized_message.size());
+        try testing.expectEqual(message.packedSize(), deserialized_message.packedSize());
+        try testing.expect(std.mem.eql(u8, message.body(), deserialized_message.body()));
 
-        return null;
+        switch (message_type) {
+            .unsupported => {
+                try testing.expectEqual(message.size(), deserialized_message.size());
+            },
+            .publish => {
+                try testing.expectEqual(
+                    message.extension_headers.publish.topic_name_length,
+                    deserialized_message.extension_headers.publish.topic_name_length,
+                );
+                try testing.expect(std.mem.eql(u8, message.topicName(), deserialized_message.topicName()));
+            },
+            .subscribe => {
+                try testing.expectEqual(
+                    message.extension_headers.subscribe.transaction_id,
+                    deserialized_message.extension_headers.subscribe.transaction_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.subscribe.topic_name_length,
+                    deserialized_message.extension_headers.subscribe.topic_name_length,
+                );
+                try testing.expect(std.mem.eql(u8, message.topicName(), deserialized_message.topicName()));
+            },
+            .subscribe_ack => {
+                try testing.expectEqual(
+                    message.extension_headers.subscribe_ack.transaction_id,
+                    deserialized_message.extension_headers.subscribe_ack.transaction_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.subscribe_ack.error_code,
+                    deserialized_message.extension_headers.subscribe_ack.error_code,
+                );
+            },
+            .auth_challenge => {
+                try testing.expectEqual(
+                    message.extension_headers.auth_challenge.challenge_method,
+                    deserialized_message.extension_headers.auth_challenge.challenge_method,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.auth_challenge.algorithm,
+                    deserialized_message.extension_headers.auth_challenge.algorithm,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.auth_challenge.nonce,
+                    deserialized_message.extension_headers.auth_challenge.nonce,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.auth_challenge.connection_id,
+                    deserialized_message.extension_headers.auth_challenge.connection_id,
+                );
+            },
+            .session_init => {
+                try testing.expectEqual(
+                    message.extension_headers.session_init.peer_id,
+                    deserialized_message.extension_headers.session_init.peer_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.session_init.peer_type,
+                    deserialized_message.extension_headers.session_init.peer_type,
+                );
+            },
+            .session_join => {
+                try testing.expectEqual(
+                    message.extension_headers.session_join.peer_id,
+                    deserialized_message.extension_headers.session_join.peer_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.session_join.session_id,
+                    deserialized_message.extension_headers.session_join.session_id,
+                );
+            },
+            .auth_failure => {
+                try testing.expectEqual(
+                    message.extension_headers.auth_failure.error_code,
+                    deserialized_message.extension_headers.auth_failure.error_code,
+                );
+            },
+            .auth_success => {
+                try testing.expectEqual(
+                    message.extension_headers.auth_success.peer_id,
+                    deserialized_message.extension_headers.auth_success.peer_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.auth_success.session_id,
+                    deserialized_message.extension_headers.auth_success.session_id,
+                );
+            },
+            .unsubscribe => {
+                try testing.expectEqual(
+                    message.extension_headers.unsubscribe.transaction_id,
+                    deserialized_message.extension_headers.unsubscribe.transaction_id,
+                );
+                try testing.expect(std.mem.eql(u8, message.topicName(), deserialized_message.topicName()));
+            },
+            .unsubscribe_ack => {
+                try testing.expectEqual(
+                    message.extension_headers.unsubscribe_ack.transaction_id,
+                    deserialized_message.extension_headers.unsubscribe_ack.transaction_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.unsubscribe_ack.error_code,
+                    deserialized_message.extension_headers.unsubscribe_ack.error_code,
+                );
+            },
+            .service_request => {
+                try testing.expectEqual(
+                    message.extension_headers.service_request.transaction_id,
+                    deserialized_message.extension_headers.service_request.transaction_id,
+                );
+                try testing.expect(std.mem.eql(u8, message.topicName(), deserialized_message.topicName()));
+            },
+            .service_reply => {
+                try testing.expectEqual(
+                    message.extension_headers.service_reply.transaction_id,
+                    deserialized_message.extension_headers.service_reply.transaction_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.service_reply.error_code,
+                    deserialized_message.extension_headers.service_reply.error_code,
+                );
+            },
+            .advertise => {
+                try testing.expectEqual(
+                    message.extension_headers.advertise.transaction_id,
+                    deserialized_message.extension_headers.advertise.transaction_id,
+                );
+                try testing.expect(std.mem.eql(u8, message.topicName(), deserialized_message.topicName()));
+            },
+            .advertise_ack => {
+                try testing.expectEqual(
+                    message.extension_headers.advertise_ack.transaction_id,
+                    deserialized_message.extension_headers.advertise_ack.transaction_id,
+                );
+                try testing.expectEqual(
+                    message.extension_headers.advertise_ack.error_code,
+                    deserialized_message.extension_headers.advertise_ack.error_code,
+                );
+            },
+        }
     }
-};
-
-pub const AuthChallenge = extern struct {
-    comptime {
-        assert(@sizeOf(@This()) == @sizeOf(Headers));
-    }
-
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .auth_challenge,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
-
-    transaction_id: u128 = 0,
-    challenge_method: ChallengeMethod = .none,
-
-    reserved: [47]u8 = [_]u8{0} ** 47,
-
-    pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .auth_challenge);
-
-        // common headers
-        if (self.protocol_version == .unsupported) return "invalid protocol_version";
-        for (self.padding) |b| if (b != 0) return "invalid padding";
-
-        // ensure this transaction is valid
-        if (self.transaction_id == 0) return "invalid transaction_id";
-
-        // ensure reserved is empty
-        for (self.reserved) |b| if (b != 0) return "invalid reserved";
-
-        return null;
-    }
-};
-
-/// The `body_buffer` of the `AuthResponse` message contains the auth_response for the challenge.
-/// example 1:
-///     message.headers.method = .none
-///     message.headers.encoding = .cbor
-///     ------- therefore
-///     body_buffer = "",
-/// example 2:
-///     message.headers.method = .token
-///     message.headers.encoding = .cbor
-///     ------- therefore
-///     body_buffer = token,
-pub const AuthResponse = extern struct {
-    comptime {
-        assert(@sizeOf(@This()) == @sizeOf(Headers));
-    }
-
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .auth_response,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
-
-    transaction_id: u128 = 0,
-    challenge_method: ChallengeMethod = .none,
-
-    reserved: [47]u8 = [_]u8{0} ** 47,
-
-    pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .auth_response);
-
-        // common headers
-        if (self.protocol_version == .unsupported) return "invalid protocol_version";
-        for (self.padding) |b| if (b != 0) return "invalid padding";
-
-        // ensure this transaction is valid
-        if (self.transaction_id == 0) return "invalid transaction_id";
-
-        // ensure reserved is empty
-        for (self.reserved) |b| if (b != 0) return "invalid reserved";
-
-        return null;
-    }
-};
-
-pub const AuthResult = extern struct {
-    comptime {
-        assert(@sizeOf(@This()) == @sizeOf(Headers));
-    }
-
-    origin_id: u128 = 0,
-    connection_id: u128 = 0,
-    headers_checksum: u64 = 0,
-    body_checksum: u64 = 0,
-    body_length: u16 = 0,
-    protocol_version: ProtocolVersion = .v1,
-    message_type: MessageType = .auth_result,
-    compression: Compression = .none,
-    compressed: bool = false,
-    padding: [Headers.padding_len]u8 = [_]u8{0} ** Headers.padding_len,
-
-    transaction_id: u128 = 0,
-    error_code: ErrorCode = .ok,
-
-    reserved: [47]u8 = [_]u8{0} ** 47,
-
-    pub fn validate(self: @This()) ?[]const u8 {
-        assert(self.message_type == .auth_result);
-
-        // common headers
-        if (self.protocol_version == .unsupported) return "invalid protocol_version";
-        for (self.padding) |b| if (b != 0) return "invalid padding";
-
-        // ensure this transaction is valid
-        if (self.transaction_id == 0) return "invalid transaction_id";
-
-        // ensure reserved is empty
-        for (self.reserved) |b| if (b != 0) return "invalid reserved";
-
-        return null;
-    }
-};
+}

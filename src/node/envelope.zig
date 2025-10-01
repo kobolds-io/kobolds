@@ -1,4 +1,4 @@
-const Message = @import("../protocol/message2.zig").Message;
+const Message = @import("../protocol/message.zig").Message;
 
 pub const Envelope = struct {
     message: *Message,

@@ -7,7 +7,7 @@ const constants = @import("../constants.zig");
 const RingBuffer = @import("stdx").RingBuffer;
 const MemoryPool = @import("stdx").MemoryPool;
 
-const Message = @import("../protocol/message2.zig").Message;
+const Message = @import("../protocol/message.zig").Message;
 const Envelope = @import("../node/envelope.zig").Envelope;
 
 const Subscriber = @import("./subscriber.zig").Subscriber;

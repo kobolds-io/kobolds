@@ -11,20 +11,20 @@ const utils = @import("../utils.zig");
 const KID = @import("kid").KID;
 
 const IO = @import("../io.zig").IO;
-const Worker = @import("./worker2.zig").Worker;
+const Worker = @import("./worker.zig").Worker;
 const Listener = @import("./listener.zig").Listener;
 const ListenerConfig = @import("./listener.zig").ListenerConfig;
-const InboundConnectionConfig = @import("../protocol/connection2.zig").InboundConnectionConfig;
-const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
-const PeerType = @import("../protocol/connection2.zig").PeerType;
+const InboundConnectionConfig = @import("../protocol/connection.zig").InboundConnectionConfig;
+const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
+const Connection = @import("../protocol/connection.zig").Connection;
+const PeerType = @import("../protocol/connection.zig").PeerType;
 const NodeMetrics = @import("./metrics.zig").NodeMetrics;
 
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const MemoryPool = @import("stdx").MemoryPool;
 const RingBuffer = @import("stdx").RingBuffer;
 
-const Message = @import("../protocol/message2.zig").Message;
-const Connection = @import("../protocol/connection2.zig").Connection;
+const Message = @import("../protocol/message.zig").Message;
 
 const Publisher = @import("../pubsub/publisher.zig").Publisher;
 const Subscriber = @import("../pubsub/subscriber.zig").Subscriber;

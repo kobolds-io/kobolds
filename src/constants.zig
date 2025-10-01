@@ -1,6 +1,5 @@
 const std = @import("std");
-const Message = @import("./protocol/message2.zig").Message;
-const Headers = @import("./protocol/message.zig").Headers;
+const Message = @import("./protocol/message.zig").Message;
 
 /// the maximum size of a message body
 pub const message_max_body_size = 1024 * 8; // 8kb
@@ -11,8 +10,7 @@ pub const message_max_topic_name_size = 32; // 32 bytes
 // pub const message_max_topic_name_size = 3; // testing only
 
 /// The maximum size of a message, inluding headers
-pub const message_max_size = @sizeOf(Headers) + message_max_body_size;
-pub const message_min_size = @sizeOf(Headers);
+pub const message_max_size = @sizeOf(Message);
 
 /// The size of the parser's working buffer to be used for decoding messsages
 /// over multiple parse calls.
