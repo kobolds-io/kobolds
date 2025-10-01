@@ -38,6 +38,9 @@ const SubscribeOptions = struct {
 const UnsubscribeOptions = struct {
     timeout_ms: u64 = 5_000,
 };
+const UnadvertiseOptions = struct {
+    timeout_ms: u64 = 5_000,
+};
 const RequestOptions = struct {
     timeout_ms: u64 = 5_000,
 };
@@ -332,8 +335,8 @@ pub const Client = struct {
     }
 
     fn tick(self: *Self) !void {
-        try self.tickConnections();
         try self.initializeOutboundConnections();
+        try self.tickConnections();
         try self.processInboundMessages();
         try self.processOutboundMessages();
     }
@@ -411,7 +414,6 @@ pub const Client = struct {
                     else => {
                         log.info("message.fixed_headers.message_type {any}", .{message.fixed_headers.message_type});
                     },
-                    // else => unreachable,
                 }
             }
         }
@@ -628,6 +630,8 @@ pub const Client = struct {
         }
     }
 
+    // FIX: this function looks up the topic and serially executes the callbacks. It doesn't allow the topic to do
+    // any message ordering enforcement like it should. as part of Topic.tick() the topic should sort messages.
     fn handlePublish(self: *Self, conn: *Connection, message: *Message) !void {
         _ = conn;
         defer {
@@ -646,6 +650,15 @@ pub const Client = struct {
             }
         } else {
             log.warn("topic not found", .{});
+        }
+    }
+
+    fn handleServiceRequest(self: *Self, conn: *Connection, message: *Message) !void {
+        _ = conn;
+
+        defer {
+            message.deref();
+            if (message.refs() == 0) self.memory_pool.destroy(message);
         }
     }
 
@@ -883,6 +896,22 @@ pub const Client = struct {
             },
             else => return error.FailedToUnsubscribe,
         }
+    }
+
+    pub fn advertise(self: *Self, topic_name: []const u8, callback: AdvertiserCallback, options: AdvertiseOptions) !u64 {
+        _ = self;
+        _ = topic_name;
+        _ = callback;
+        _ = options;
+
+        return 0;
+    }
+
+    pub fn unadvertise(self: *Self, topic_name: []const u8, callback_id: u64, options: UnadvertiseOptions) !void {
+        _ = self;
+        _ = callback_id;
+        _ = options;
+        _ = topic_name;
     }
 
     fn request(self: *Self, transaction_id: u64, request_message: *Message, options: RequestOptions) !*Message {

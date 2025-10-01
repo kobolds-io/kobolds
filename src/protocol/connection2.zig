@@ -585,71 +585,71 @@ test "init/deinit" {
     defer connection.deinit();
 }
 
-// test "processing inbound messages" {
-//     const allocator = testing.allocator;
-//     var kid = KID.init(0, .{});
+test "processing inbound messages" {
+    const allocator = testing.allocator;
+    var kid = KID.init(0, .{});
 
-//     var io = try IO.init(16, 0);
-//     defer io.deinit();
+    var io = try IO.init(16, 0);
+    defer io.deinit();
 
-//     const socket: posix.socket_t = undefined;
+    const socket: posix.socket_t = undefined;
 
-//     var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_inbox_capacity);
-//     defer memory_pool.deinit();
+    var memory_pool = try MemoryPool(Message).init(allocator, constants.connection_inbox_capacity);
+    defer memory_pool.deinit();
 
-//     const config = ConnectionConfig{ .inbound = .{} };
+    const config = ConnectionConfig{ .inbound = .{} };
 
-//     var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
-//     defer conn.deinit();
+    var conn = try Connection.init(kid.generate(), &io, socket, allocator, &memory_pool, config);
+    defer conn.deinit();
 
-//     // serailize the message
-//     var buf: [@sizeOf(Message)]u8 = undefined;
+    // serailize the message
+    var buf: [@sizeOf(Message)]u8 = undefined;
 
-//     // fill up the recv buffer with some messages
-//     var current_index: usize = 0;
-//     var recv_bytes: usize = 0;
-//     var messages_count: usize = 0;
+    // fill up the recv buffer with some messages
+    var current_index: usize = 0;
+    var recv_bytes: usize = 0;
+    var messages_count: usize = 0;
 
-//     const topic_name = "a" ** constants.message_max_topic_name_size;
-//     const body = "a" ** constants.message_max_body_size;
+    const topic_name = "a" ** constants.message_max_topic_name_size;
+    const body = "a" ** constants.message_max_body_size;
 
-//     while (true) {
-//         if (messages_count == conn.inbox.capacity) break;
+    while (true) {
+        if (messages_count == conn.inbox.capacity) break;
 
-//         var message = Message.new(.publish);
-//         message.setTopicName(topic_name);
-//         message.setBody(body);
+        var message = Message.new(.publish);
+        message.setTopicName(topic_name);
+        message.setBody(body);
 
-//         const bytes = message.serialize(&buf);
+        const bytes = message.serialize(&buf);
 
-//         // we are only testing for a single receive buffer and ensuring that all the
-//         // messages can fit neatly into this buffer.
-//         if (bytes > conn.recv_buffer[current_index..].len) break;
-//         recv_bytes = current_index + bytes;
+        // we are only testing for a single receive buffer and ensuring that all the
+        // messages can fit neatly into this buffer.
+        if (bytes > conn.recv_buffer[current_index..].len) break;
+        recv_bytes = current_index + bytes;
 
-//         // copy the bytes to the recv buffer
-//         @memcpy(conn.recv_buffer[current_index..recv_bytes], buf[0..bytes]);
-//         conn.recv_bytes = recv_bytes;
-//         current_index = recv_bytes;
-//         messages_count += 1;
-//     }
+        // copy the bytes to the recv buffer
+        @memcpy(conn.recv_buffer[current_index..recv_bytes], buf[0..bytes]);
+        conn.recv_bytes = recv_bytes;
+        current_index = recv_bytes;
+        messages_count += 1;
+    }
 
-//     try testing.expectEqual(0, conn.metrics.messages_recv_total);
-//     try testing.expectEqual(0, conn.metrics.bytes_recv_total);
+    try testing.expectEqual(0, conn.metrics.messages_recv_total);
+    try testing.expectEqual(0, conn.metrics.bytes_recv_total);
 
-//     // loop over calling process inbound messages until all messages are parsed
-//     var safety: usize = 0;
-//     while (conn.metrics.messages_recv_total < messages_count) : (safety += 1) {
-//         // it should take less that 100 iterations to fully parse all messages
-//         if (safety > 100) break;
+    // loop over calling process inbound messages until all messages are parsed
+    var safety: usize = 0;
+    while (conn.metrics.messages_recv_total < messages_count) : (safety += 1) {
+        // it should take less that 100 iterations to fully parse all messages
+        if (safety > 100) break;
 
-//         // log.err("safety {}", .{safety});
-//         conn.processInboundMessages();
-//     }
+        // log.err("safety {}", .{safety});
+        conn.processInboundMessages();
+    }
 
-//     try testing.expectEqual(messages_count, conn.metrics.messages_recv_total);
-//     try testing.expectEqual(recv_bytes, conn.metrics.bytes_recv_total);
-// }
+    try testing.expectEqual(messages_count, conn.metrics.messages_recv_total);
+    try testing.expectEqual(recv_bytes, conn.metrics.bytes_recv_total);
+}
 
 test "processing inbound messages with mutliple recv_buffers" {
     const allocator = testing.allocator;

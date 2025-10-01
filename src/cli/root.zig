@@ -5,6 +5,7 @@ const ListenCommand = @import("./listen.zig").ListenCommand;
 const ConnectCommand = @import("./connect.zig").ConnectCommand;
 const PublishCommand = @import("./publish.zig").PublishCommand;
 const SubscribeCommand = @import("./subscribe.zig").SubscribeCommand;
+const AdvertiseCommand = @import("./advertise.zig").AdvertiseCommand;
 
 pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
     const RootSubCommands = enum {
@@ -13,6 +14,7 @@ pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator)
         connect,
         publish,
         subscribe,
+        advertise,
     };
 
     const root_parsers = .{ .subcommand = clap.parsers.enumeration(RootSubCommands) };
@@ -54,5 +56,6 @@ pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator)
         .connect => try ConnectCommand(allocator, iter),
         .publish => try PublishCommand(allocator, iter),
         .subscribe => try SubscribeCommand(allocator, iter),
+        .advertise => try AdvertiseCommand(allocator, iter),
     }
 }

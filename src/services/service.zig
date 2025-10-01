@@ -16,7 +16,7 @@ const Transaction = @import("./transaction.zig").Transaction;
 const RoundRobinLoadBalancer = @import("./load_balancers.zig").RoundRobinLoadBalancer;
 
 pub const ServiceLoadBalancer = union(ServiceLoadBalancingStrategy) {
-    round_robin: RoundRobinLoadBalancer(u128),
+    round_robin: RoundRobinLoadBalancer(u64),
 };
 
 pub const ServiceLoadBalancingStrategy = enum {
@@ -31,14 +31,14 @@ pub const ServiceOptions = struct {
 pub const Service = struct {
     const Self = @This();
 
-    advertisers: std.AutoHashMap(u128, *Advertiser),
-    requestors: std.AutoHashMap(u128, *Requestor),
+    advertisers: std.AutoHashMap(u64, *Advertiser),
+    requestors: std.AutoHashMap(u64, *Requestor),
     allocator: std.mem.Allocator,
     memory_pool: *MemoryPool(Message),
     requests_queue: *RingBuffer(*Message),
     replies_queue: *RingBuffer(*Message),
     topic_name: []const u8,
-    transactions: std.AutoHashMap(u128, Transaction),
+    transactions: std.AutoHashMap(u64, Transaction),
     load_balancing_strategy: ServiceLoadBalancer,
 
     pub fn init(
@@ -60,15 +60,15 @@ pub const Service = struct {
         errdefer replies_queue.deinit();
 
         return Self{
-            .advertisers = std.AutoHashMap(u128, *Advertiser).init(allocator),
-            .requestors = std.AutoHashMap(u128, *Requestor).init(allocator),
+            .advertisers = std.AutoHashMap(u64, *Advertiser).init(allocator),
+            .requestors = std.AutoHashMap(u64, *Requestor).init(allocator),
             .allocator = allocator,
             .memory_pool = memory_pool,
             .requests_queue = requests_queue,
             .replies_queue = replies_queue,
             .topic_name = topic_name,
-            .transactions = std.AutoHashMap(u128, Transaction).init(allocator),
-            .load_balancing_strategy = ServiceLoadBalancer{ .round_robin = RoundRobinLoadBalancer(u128).init(allocator) },
+            .transactions = std.AutoHashMap(u64, Transaction).init(allocator),
+            .load_balancing_strategy = ServiceLoadBalancer{ .round_robin = RoundRobinLoadBalancer(u64).init(allocator) },
         };
     }
 
@@ -203,7 +203,7 @@ pub const Service = struct {
         }
     }
 
-    fn findOrCreateRequestor(self: *Self, conn_id: u128) !*Requestor {
+    fn findOrCreateRequestor(self: *Self, conn_id: u64) !*Requestor {
         const requestor_key = utils.generateKey(self.topic_name, conn_id);
 
         if (self.requestors.get(requestor_key)) |requestor| {
@@ -225,7 +225,7 @@ pub const Service = struct {
         }
     }
 
-    pub fn addAdvertiser(self: *Self, advertiser_key: u128, conn_id: u128) !void {
+    pub fn addAdvertiser(self: *Self, advertiser_key: u64, conn_id: u64) !void {
         const advertiser = try self.allocator.create(Advertiser);
         errdefer self.allocator.destroy(advertiser);
 
@@ -245,14 +245,14 @@ pub const Service = struct {
                 try lb.keys.append(self.allocator, advertiser_key);
                 errdefer _ = lb.keys.pop();
 
-                std.mem.sort(u128, lb.keys.items, {}, std.sort.asc(u128));
+                std.mem.sort(u64, lb.keys.items, {}, std.sort.asc(u64));
             },
         }
     }
 
     // FIX: if there are any messages associated with this advertiser, we should see if we can reroute any active
     //     requests OR something better would be to send the requestor an error.
-    pub fn removeAdvertiser(self: *Self, advertiser_key: u128) bool {
+    pub fn removeAdvertiser(self: *Self, advertiser_key: u64) bool {
         switch (self.load_balancing_strategy) {
             .round_robin => |*lb| {
                 for (lb.keys.items, 0..lb.keys.items.len) |k, index| {

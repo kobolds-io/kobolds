@@ -25,7 +25,7 @@ pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
         \\<body>                                 Body of the message
     );
 
-    const listen_parsers = .{
+    const publish_parsers = .{
         .body = clap.parsers.string,
         .client_id = clap.parsers.int(u11, 10),
         .count = clap.parsers.int(u32, 10),
@@ -40,7 +40,7 @@ pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
 
     // Here we pass the partially parsed argument iterator.
     var diag = clap.Diagnostic{};
-    var parsed_args = clap.parseEx(clap.Help, &params, listen_parsers, iter, .{
+    var parsed_args = clap.parseEx(clap.Help, &params, publish_parsers, iter, .{
         .diagnostic = &diag,
         .allocator = allocator,
     }) catch |err| {
@@ -121,9 +121,6 @@ fn publish(args: PublishArgs) !void {
     const connect_end = timer.read();
     defer client.drain();
 
-    const t_name = try allocator.dupe(u8, args.topic_name);
-    defer allocator.free(t_name);
-
     std.debug.print("established connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
 
     if (args.count > 0) {
@@ -166,12 +163,8 @@ fn publish(args: PublishArgs) !void {
         return;
     }
 
-    // var buf: [16]u8 = undefined;
     if (args.rate == 0) {
-        // const ts = std.time.nanoTimestamp();
-        // const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
-        // try client.publish(t_name, str, .{});
-        try client.publish(t_name, args.body, .{});
+        try client.publish(args.topic_name, args.body, .{});
     } else {
         signal_handler.registerSigintHandler();
 
@@ -187,13 +180,6 @@ fn publish(args: PublishArgs) !void {
 
             // schedule next slot
             next_deadline += period_ns;
-            // const ts = std.time.nanoTimestamp();
-            // const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
-
-            // try publish
-            // const body = "a" ** constants.message_max_body_size;
-            // client.publish(args.topic_name, body, .{}) catch {
-            // client.publish(args.topic_name, str, .{}) catch {
             client.publish(args.topic_name, args.body, .{}) catch {
                 std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;

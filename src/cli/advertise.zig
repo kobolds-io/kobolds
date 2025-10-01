@@ -9,7 +9,7 @@ const ClientConfig = @import("../client/client.zig").ClientConfig;
 const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
 const Message = @import("../protocol/message2.zig").Message;
 
-pub fn SubscribeCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
+pub fn AdvertiseCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
 
     // The parameters for the subcommand.
     const params = comptime clap.parseParamsComptime(
@@ -21,9 +21,11 @@ pub fn SubscribeCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIter
         \\--max-connections <max_connections>    Maximum number of connections to open (default: 1)
         \\--min-connections <min_connections>    Minimum number of connections to open (default: 1)
         \\<topic_name>                           Topic name
+        \\<body>                                 Body of the message
     );
 
-    const subscribe_parsers = .{
+    const advertise_parsers = .{
+        .body = clap.parsers.string,
         .client_id = clap.parsers.int(u11, 10),
         .host = clap.parsers.string,
         .max_connections = clap.parsers.int(u16, 10),
@@ -35,7 +37,7 @@ pub fn SubscribeCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIter
 
     // Here we pass the partially parsed argument iterator.
     var diag = clap.Diagnostic{};
-    var parsed_args = clap.parseEx(clap.Help, &params, subscribe_parsers, iter, .{
+    var parsed_args = clap.parseEx(clap.Help, &params, advertise_parsers, iter, .{
         .diagnostic = &diag,
         .allocator = allocator,
     }) catch |err| {
@@ -48,9 +50,10 @@ pub fn SubscribeCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIter
         return clap.helpToFile(.stderr(), clap.Help, &params, .{});
     }
 
-    if (parsed_args.positionals.len != 1) return error.MissingParams;
+    if (parsed_args.positionals.len != 2) return error.MissingParams;
 
-    const args = SubscribeArgs{
+    const args = AdvertiseArgs{
+        .body = parsed_args.positionals[1].?,
         .client_id = parsed_args.args.@"client-id" orelse 1,
         .host = parsed_args.args.host orelse "127.0.0.1",
         .max_connections = parsed_args.args.@"max-connections" orelse 1,
@@ -60,10 +63,11 @@ pub fn SubscribeCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIter
         .topic_name = parsed_args.positionals[0].?,
     };
 
-    try subscribe(args);
+    try publish(args);
 }
 
-const SubscribeArgs = struct {
+const AdvertiseArgs = struct {
+    body: []const u8,
     client_id: u11,
     host: []const u8,
     max_connections: u16,
@@ -73,9 +77,7 @@ const SubscribeArgs = struct {
     topic_name: []const u8,
 };
 
-var messages_recv_count: u128 = 0;
-
-fn subscribe(args: SubscribeArgs) !void {
+fn publish(args: AdvertiseArgs) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
@@ -105,24 +107,18 @@ fn subscribe(args: SubscribeArgs) !void {
     // wait for the client to be connected
     client.awaitConnected(5_000 * std.time.ns_per_ms);
     const connect_end = timer.read();
+    defer client.drain();
 
-    std.debug.print("connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
-
-    signal_handler.registerSigintHandler();
+    std.debug.print("established connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
 
     const callback_1 = struct {
-        pub fn callback(message: *Message) void {
-            _ = message;
-            messages_recv_count += 1;
-
-            std.debug.print("callback_1: messages_recv_count: {d}\n", .{messages_recv_count});
+        pub fn callback(request: *Message, reply: *Message) void {
+            std.debug.print("received request!\n", .{});
+            _ = request;
+            _ = reply;
         }
     }.callback;
 
-    const callback_1_id = try client.subscribe(args.topic_name, callback_1, .{});
-    defer client.unsubscribe(args.topic_name, callback_1_id, .{ .timeout_ms = 5_000 }) catch unreachable;
-
-    while (!signal_handler.sigint_triggered) {
-        std.Thread.sleep(100 * std.time.ns_per_ms);
-    }
+    const callback_1_id = try client.advertise(args.topic_name, callback_1, .{});
+    defer client.unadvertise(args.topic_name, callback_1_id, .{ .timeout_ms = 5_000 }) catch unreachable;
 }

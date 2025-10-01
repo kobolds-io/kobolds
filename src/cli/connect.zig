@@ -19,7 +19,7 @@ pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
         \\--min-connections <min_connections>    Minimum number of connections to open (default: 1)
     );
 
-    const listen_parsers = .{
+    const connect_parsers = .{
         .host = clap.parsers.string,
         .port = clap.parsers.int(u16, 10),
         .client_id = clap.parsers.int(u11, 10),
@@ -30,7 +30,7 @@ pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
 
     // Here we pass the partially parsed argument iterator.
     var diag = clap.Diagnostic{};
-    var parsed_args = clap.parseEx(clap.Help, &params, listen_parsers, iter, .{
+    var parsed_args = clap.parseEx(clap.Help, &params, connect_parsers, iter, .{
         .diagnostic = &diag,
         .allocator = allocator,
     }) catch |err| {
