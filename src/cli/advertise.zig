@@ -6,8 +6,8 @@ const constants = @import("../constants.zig");
 
 const Client = @import("../client/client.zig").Client;
 const ClientConfig = @import("../client/client.zig").ClientConfig;
-const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
-const Message = @import("../protocol/message2.zig").Message;
+const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
+const Message = @import("../protocol/message.zig").Message;
 
 pub fn AdvertiseCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
 

@@ -5,7 +5,7 @@ const signal_handler = @import("../signal_handler.zig");
 const Node = @import("../node/node.zig").Node;
 const NodeConfig = @import("../node/node.zig").NodeConfig;
 const ListenerConfig = @import("../node/listener.zig").ListenerConfig;
-const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
+const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 const AllowedInboundConnectionConfig = @import("../node/listener.zig").AllowedInboundConnectionConfig;
 
 pub fn ListenCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {

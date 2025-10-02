@@ -16,9 +16,9 @@ const Signal = @import("stdx").Signal;
 const MemoryPool = @import("stdx").MemoryPool;
 const RingBuffer = @import("stdx").RingBuffer;
 
-const Message = @import("../protocol/message2.zig").Message;
-const Connection = @import("../protocol/connection2.zig").Connection;
-const OutboundConnectionConfig = @import("../protocol/connection2.zig").OutboundConnectionConfig;
+const Message = @import("../protocol/message.zig").Message;
+const Connection = @import("../protocol/connection.zig").Connection;
+const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
 
 const ClientTopic = @import("../pubsub/client_topic.zig").ClientTopic;
 const ClientTopicOptions = @import("../pubsub/client_topic.zig").ClientTopicOptions;

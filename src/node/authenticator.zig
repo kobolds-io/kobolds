@@ -2,8 +2,6 @@ const std = @import("std");
 const testing = std.testing;
 const ChallengeMethod = @import("../protocol/message.zig").ChallengeMethod;
 
-const AuthenticationStrategyType = ChallengeMethod;
-
 pub const NoneAuthStrategy = struct {
     const Self = @This();
 
@@ -11,7 +9,7 @@ pub const NoneAuthStrategy = struct {
     pub const Config = struct {};
 
     pub const Challenge = struct {
-        challenge_method: AuthenticationStrategyType.none,
+        challenge_method: ChallengeMethod.none,
     };
 
     pub const ChallengeContext = struct {};
@@ -52,7 +50,7 @@ pub const TokenAuthStrategy = struct {
     };
 
     pub const Challenge = struct {
-        challenge_method: AuthenticationStrategyType.token,
+        challenge_method: ChallengeMethod.token,
     };
 
     pub const ChallengeContext = struct {};
@@ -113,7 +111,7 @@ pub const TokenAuthStrategy = struct {
     }
 };
 
-pub const AuthenticatorConfig = union(AuthenticationStrategyType) {
+pub const AuthenticatorConfig = union(ChallengeMethod) {
     none: NoneAuthStrategy.Config,
     token: TokenAuthStrategy.Config,
 };
@@ -122,10 +120,10 @@ pub const Authenticator = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
-    strategy_type: AuthenticationStrategyType,
+    strategy_type: ChallengeMethod,
     strategy: StrategyUnion,
 
-    const StrategyUnion = union(AuthenticationStrategyType) {
+    const StrategyUnion = union(ChallengeMethod) {
         none: NoneAuthStrategy,
         token: TokenAuthStrategy,
     };

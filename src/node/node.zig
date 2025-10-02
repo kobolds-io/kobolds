@@ -869,7 +869,6 @@ pub const Node = struct {
     }
 
     fn handleUnsubscribe(self: *Self, envelope: Envelope) !void {
-        log.info("--------------------------------------", .{});
         log.info("handleUnsubscribe: conn_id: {}, session_id: {}", .{ envelope.conn_id, envelope.session_id });
         assert(envelope.message.refs() == 1);
 

@@ -3,7 +3,7 @@ const zbench = @import("zbench");
 const assert = std.debug.assert;
 const testing = std.testing;
 
-const Message = @import("../protocol/message2.zig").Message;
+const Message = @import("../protocol/message.zig").Message;
 
 const constants = @import("../constants.zig");
 const benchmark_constants = @import("./constants.zig");
@@ -70,7 +70,7 @@ pub fn BenchmarkMessageDeserializeSmall(_: std.mem.Allocator) void {
 //     message.decompress() catch unreachable;
 // }
 
-test "Message2 benchmarks" {
+test "Message benchmarks" {
     // var bench = zbench.Benchmark.init(std.testing.allocator, .{ .iterations = 1 });
     var bench = zbench.Benchmark.init(std.testing.allocator, .{
         .iterations = benchmark_constants.benchmark_max_iterations,
@@ -88,8 +88,8 @@ test "Message2 benchmarks" {
     const writer = &stderr.interface;
 
     try writer.writeAll("\n");
-    try writer.writeAll("|---------------------|\n");
-    try writer.writeAll("| Message2 Benchmarks |\n");
-    try writer.writeAll("|---------------------|\n");
+    try writer.writeAll("|--------------------|\n");
+    try writer.writeAll("| Message Benchmarks |\n");
+    try writer.writeAll("|--------------------|\n");
     try bench.run(writer);
 }

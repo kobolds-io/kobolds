@@ -8,7 +8,7 @@ const constants = @import("../constants.zig");
 const RingBuffer = @import("stdx").RingBuffer;
 const MemoryPool = @import("stdx").MemoryPool;
 
-const Message = @import("../protocol/message2.zig").Message;
+const Message = @import("../protocol/message.zig").Message;
 
 /// Used to map messages to their intended recipients
 pub const ConnectionMessages = struct {

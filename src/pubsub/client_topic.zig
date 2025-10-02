@@ -7,7 +7,7 @@ const constants = @import("../constants.zig");
 const RingBuffer = @import("stdx").RingBuffer;
 const MemoryPool = @import("stdx").MemoryPool;
 
-const Message = @import("../protocol/message2.zig").Message;
+const Message = @import("../protocol/message.zig").Message;
 
 pub const ClientTopicOptions = struct {
     queue_capacity: usize = constants.topic_max_queue_capacity,

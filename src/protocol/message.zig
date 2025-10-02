@@ -16,15 +16,14 @@ pub const DeserializeResult = struct {
 };
 
 pub const ChallengeMethod = enum(u8) {
-    unsupported,
     none,
     token,
 
     pub fn fromByte(byte: u8) ChallengeMethod {
         return switch (byte) {
-            1 => .none,
-            2 => .token,
-            else => .unsupported,
+            0 => .none,
+            1 => .token,
+            else => .none,
         };
     }
 };
