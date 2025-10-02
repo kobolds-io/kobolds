@@ -10,7 +10,8 @@ const MemoryPool = @import("stdx").MemoryPool;
 const Message = @import("../protocol/message.zig").Message;
 
 pub const ClientTopicOptions = struct {
-    queue_capacity: usize = constants.topic_max_queue_capacity,
+    // queue_capacity: usize = constants.topic_max_queue_capacity,
+    queue_capacity: usize = 250,
 };
 
 pub const TopicError = error{
@@ -66,6 +67,8 @@ pub const ClientTopic = struct {
         }
     }
 
+    // FIX: the tick method should also enforce that the messages are sorted
+    // oh shit, i just realized that the messages don't have an id :(((((((
     pub fn tick(self: *Self) !void {
         if (self.queue.count == 0) return;
         if (self.callbacks.count() == 0) {
@@ -79,8 +82,8 @@ pub const ClientTopic = struct {
                 if (message.refs() == 0) self.memory_pool.destroy(message);
             }
 
-            const subscriber_callbacks_iter = self.callbacks.valueIterator();
-            while (subscriber_callbacks_iter.next()) |entry| {
+            var callbacks_iter = self.callbacks.valueIterator();
+            while (callbacks_iter.next()) |entry| {
                 const callback = entry.*;
                 callback(message);
             }

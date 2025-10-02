@@ -899,6 +899,7 @@ pub const Node = struct {
         };
 
         try session_outbox.enqueue(unsubscribe_ack_envelope);
+        log.info("enqueue unsubscribeack", .{});
     }
 
     // fn handleAdvertise(self: *Self, message: *Message) !void {

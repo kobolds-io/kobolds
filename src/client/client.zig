@@ -417,6 +417,13 @@ pub const Client = struct {
                 }
             }
         }
+
+        var topics_iter = self.topics.valueIterator();
+        while (topics_iter.next()) |entry| {
+            const topic = entry.*;
+
+            try topic.tick();
+        }
     }
 
     fn processOutboundMessages(self: *Self) !void {
@@ -610,6 +617,7 @@ pub const Client = struct {
     }
 
     fn handleUnsubscribeAck(self: *Self, _: *Connection, message: *Message) !void {
+        log.info("handle UnsubscribeAck", .{});
         defer {
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
@@ -644,10 +652,14 @@ pub const Client = struct {
         // log.info("here {any}, topic_count: {}", .{ message.topicName(), self.topics.count() });
 
         if (self.topics.get(message.topicName())) |topic| {
-            var callbacks_iter = topic.callbacks.valueIterator();
-            while (callbacks_iter.next()) |callback| {
-                callback.*(message);
-            }
+
+            // var callbacks_iter = topic.callbacks.valueIterator();
+            // while (callbacks_iter.next()) |entry| {
+            //     const callback = entry.*;
+            //     callback(message);
+            // }
+            message.ref();
+            try topic.queue.enqueue(message);
         } else {
             log.warn("topic not found", .{});
         }
@@ -861,7 +873,7 @@ pub const Client = struct {
             return error.CallbackMissing;
         }
 
-        // there is no more work to be done if this is the case
+        // there is no more work to be done if this is the case as there is another callback that is still registered.
         if (client_topic.callbacks.count() > 0) {
             const diff = (timer.read() - timer_start) / std.time.ns_per_us;
             log.info("unsubscribed from topic {s}. took {}us", .{ topic_name, diff });
@@ -899,10 +911,25 @@ pub const Client = struct {
     }
 
     pub fn advertise(self: *Self, topic_name: []const u8, callback: AdvertiserCallback, options: AdvertiseOptions) !u64 {
-        _ = self;
+        if (!self.isConnected()) return error.NotConnected;
+
+        // var timer = try std.time.Timer.start();
+        // const timer_start = timer.read();
+
+        // self.topics_mutex.lock();
+        // defer self.topics_mutex.unlock();
+
+        // const client_topic = try self.findOrCreateClientTopic(topic_name, .{});
+
+        // const callback_id = self.kid.generate();
+        // try client_topic.addCallback(callback_id, callback);
+        // errdefer _ = client_topic.removeCallback(callback_id);
+
+        // const diff = timer.read() - timer_start;
+        // _ = diff;
+        _ = options;
         _ = topic_name;
         _ = callback;
-        _ = options;
 
         return 0;
     }
