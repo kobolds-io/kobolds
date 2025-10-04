@@ -11,6 +11,7 @@ const Message = @import("../protocol/message.zig").Message;
 const Envelope = @import("../node/envelope.zig").Envelope;
 
 const Subscriber = @import("./subscriber.zig").Subscriber;
+const Publisher = @import("./publisher.zig").Publisher;
 
 pub const TopicOptions = struct {
     queue_capacity: usize = constants.topic_max_queue_capacity,
@@ -27,7 +28,7 @@ pub const Topic = struct {
 
     allocator: std.mem.Allocator,
     memory_pool: *MemoryPool(Message),
-    // publishers: std.AutoHashMap(u128, *Publisher),
+    publishers: std.AutoHashMapUnmanaged(u64, *Publisher),
     queue: *RingBuffer(Envelope),
     subscriber_queues: std.ArrayList(*RingBuffer(Envelope)),
     subscribers: std.AutoHashMapUnmanaged(u64, *Subscriber),
@@ -56,6 +57,7 @@ pub const Topic = struct {
             .queue = queue,
             .subscriber_queues = .empty,
             .subscribers = .empty,
+            .publishers = .empty,
             .topic_name = topic_name,
             .tmp_copy_buffer = tmp_copy_buffer,
         };
@@ -63,6 +65,19 @@ pub const Topic = struct {
 
     pub fn deinit(self: *Self) void {
         self.clearQueue();
+
+        var publishers_iter = self.publishers.valueIterator();
+        while (publishers_iter.next()) |entry| {
+            const publisher = entry.*;
+
+            while (publisher.queue.dequeue()) |envelope| {
+                envelope.message.deref();
+                if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+            }
+
+            publisher.deinit();
+            self.allocator.destroy(publisher);
+        }
 
         var subscribers_iter = self.subscribers.valueIterator();
         while (subscribers_iter.next()) |entry| {
@@ -80,15 +95,42 @@ pub const Topic = struct {
         self.queue.deinit();
         self.subscriber_queues.deinit(self.allocator);
         self.subscribers.deinit(self.allocator);
+        self.publishers.deinit(self.allocator);
 
         self.allocator.destroy(self.queue);
         self.allocator.free(self.tmp_copy_buffer);
     }
 
     pub fn tick(self: *Self) !void {
-        // log.info("topic subscriers: {}, queue: {}", .{ self.subscribers.count(), self.queue.count });
-        // There are no messages needing to be distributed to subscribers
-        if (self.queue.count == 0) return;
+        try self.gatherEnvelopes();
+        try self.sortMessages();
+        try self.distributeEnvelopes();
+    }
+
+    fn gatherEnvelopes(self: *Self) !void {
+        if (self.publishers.count() == 0) return;
+
+        var publishers_iter = self.publishers.valueIterator();
+        while (publishers_iter.next()) |entry| {
+            const publisher = entry.*;
+
+            if (self.queue.isFull()) {
+                log.warn("topic queue is full", .{});
+                break;
+            }
+
+            if (publisher.queue.isEmpty()) continue;
+
+            self.queue.concatenateAvailable(publisher.queue);
+        }
+    }
+
+    fn sortMessages(self: *Self) !void {
+        _ = self;
+    }
+
+    fn distributeEnvelopes(self: *Self) !void {
+        if (self.queue.isEmpty()) return;
 
         // there are no subscribers who are able to consume this message. We should not hang on to these messages
         if (self.subscribers.count() == 0) {
@@ -137,7 +179,7 @@ pub const Topic = struct {
         }
     }
 
-    pub fn addSubscriber(self: *Self, subscriber_key: u64, session_id: u64) !void {
+    pub fn addSubscriber(self: *Self, subscriber_key: u64, session_id: u64) !*Subscriber {
         if (self.subscribers.contains(subscriber_key)) return error.AlreadyExists;
 
         const subscriber = try self.allocator.create(Subscriber);
@@ -152,6 +194,8 @@ pub const Topic = struct {
         errdefer subscriber.deinit();
 
         try self.subscribers.put(self.allocator, subscriber_key, subscriber);
+
+        return subscriber;
     }
 
     pub fn removeSubscriber(self: *Self, subscriber_key: u64) bool {
@@ -165,6 +209,43 @@ pub const Topic = struct {
 
             subscriber.deinit();
             self.allocator.destroy(subscriber);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    pub fn addPublisher(self: *Self, publisher_key: u64, session_id: u64) !*Publisher {
+        if (self.publishers.contains(publisher_key)) return error.AlreadyExists;
+
+        const publisher = try self.allocator.create(Publisher);
+        errdefer self.allocator.destroy(publisher);
+
+        publisher.* = try Publisher.init(
+            self.allocator,
+            publisher_key,
+            session_id,
+            constants.publisher_max_queue_capacity,
+        );
+        errdefer publisher.deinit();
+
+        try self.publishers.put(self.allocator, publisher_key, publisher);
+
+        return publisher;
+    }
+
+    pub fn removePublisher(self: *Self, publisher_key: u64) bool {
+        if (self.publishers.fetchRemove(publisher_key)) |entry| {
+            const publisher = entry.value;
+
+            while (publisher.queue.dequeue()) |envelope| {
+                envelope.message.deref();
+                if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+            }
+
+            publisher.deinit();
+            self.allocator.destroy(publisher);
 
             return true;
         }

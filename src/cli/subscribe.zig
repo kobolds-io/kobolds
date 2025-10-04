@@ -119,8 +119,20 @@ fn subscribe(args: SubscribeArgs) !void {
         }
     }.callback;
 
-    const callback_1_id = try client.subscribe(args.topic_name, callback_1, .{});
-    defer client.unsubscribe(args.topic_name, callback_1_id, .{ .timeout_ms = 5_000 }) catch unreachable;
+    const callback_2 = struct {
+        pub fn callback(message: *Message) void {
+            const end = std.time.nanoTimestamp();
+            const start = std.fmt.parseInt(i128, message.body(), 10) catch 0;
+
+            const diff = @divFloor(end - start, std.time.ns_per_us);
+            std.debug.print("took: {d}us\n", .{diff});
+        }
+    }.callback;
+
+    // const callback_1_id = try client.subscribe(args.topic_name, callback_1, .{});
+    _ = callback_1;
+    const callback_id = try client.subscribe(args.topic_name, callback_2, .{});
+    defer client.unsubscribe(args.topic_name, callback_id, .{ .timeout_ms = 5_000 }) catch unreachable;
 
     while (!signal_handler.sigint_triggered) {
         std.Thread.sleep(100 * std.time.ns_per_ms);

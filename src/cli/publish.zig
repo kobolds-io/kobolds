@@ -163,8 +163,12 @@ fn publish(args: PublishArgs) !void {
         return;
     }
 
+    var buf: [32]u8 = undefined;
     if (args.rate == 0) {
-        try client.publish(args.topic_name, args.body, .{});
+        const ts = std.time.nanoTimestamp();
+        const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
+        try client.publish(args.topic_name, str, .{});
+        // try client.publish(args.topic_name, args.body, .{});
     } else {
         signal_handler.registerSigintHandler();
 
@@ -180,7 +184,12 @@ fn publish(args: PublishArgs) !void {
 
             // schedule next slot
             next_deadline += period_ns;
-            client.publish(args.topic_name, args.body, .{}) catch {
+
+            const ts = std.time.nanoTimestamp();
+            const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
+
+            // client.publish(args.topic_name, args.body, .{}) catch {
+            client.publish(args.topic_name, str, .{}) catch {
                 std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;
             };

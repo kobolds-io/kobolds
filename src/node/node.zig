@@ -825,11 +825,18 @@ pub const Node = struct {
         const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
         if (topic.queue.available() == 0) try topic.tick(); // if there is no space, try to advance the topic
 
-        // log.info("node message.topicName(): {any}", .{envelope.message.topicName()});
-        // log.info("node message.body(): {any}", .{envelope.message.body()});
+        const publisher_key = utils.generateKey64(topic.topic_name, envelope.session_id);
+
+        var publisher: *Publisher = undefined;
+        if (topic.publishers.get(publisher_key)) |p| {
+            publisher = p;
+        } else {
+            const p = try topic.addPublisher(publisher_key, envelope.session_id);
+            publisher = p;
+        }
 
         envelope.message.ref();
-        topic.queue.enqueue(envelope) catch envelope.message.deref();
+        publisher.queue.enqueue(envelope) catch envelope.message.deref();
     }
 
     fn handleSubscribe(self: *Self, envelope: Envelope) !void {
@@ -849,7 +856,7 @@ pub const Node = struct {
         const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
         const subscriber_key = utils.generateKey64(envelope.message.topicName(), envelope.session_id);
 
-        topic.addSubscriber(subscriber_key, envelope.session_id) catch |err| switch (err) {
+        _ = topic.addSubscriber(subscriber_key, envelope.session_id) catch |err| switch (err) {
             error.AlreadyExists => {},
             else => {
                 subscribe_ack.extension_headers.subscribe_ack.error_code = .failure;

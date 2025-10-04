@@ -4,30 +4,34 @@ const utils = @import("../utils.zig");
 const constants = @import("../constants.zig");
 
 const RingBuffer = @import("stdx").RingBuffer;
-const Topic = @import("./topic.zig").Topic;
-const Message = @import("../protocol/message.zig").Message;
+const Envelope = @import("../node/envelope.zig").Envelope;
 
 pub const Publisher = struct {
     const Self = @This();
 
-    conn_id: uuid.Uuid,
-    topic: *Topic,
-    key: u128,
-    published_count: u128,
+    allocator: std.mem.Allocator,
+    session_id: u64,
+    key: u64,
+    queue: *RingBuffer(Envelope),
 
-    pub fn new(conn_id: uuid.Uuid, topic: *Topic) Self {
-        const key = utils.generateKey(topic.topic_name, conn_id);
+    pub fn init(allocator: std.mem.Allocator, key: u64, session_id: u64, queue_capacity: usize) !Self {
+        const queue = try allocator.create(RingBuffer(Envelope));
+        errdefer allocator.destroy(queue);
+
+        queue.* = try RingBuffer(Envelope).init(allocator, queue_capacity);
+        errdefer queue.deinit();
 
         return Self{
-            .conn_id = conn_id,
-            .topic = topic,
+            .allocator = allocator,
+            .session_id = session_id,
             .key = key,
-            .published_count = 0,
+            .queue = queue,
         };
     }
 
-    pub fn publish(self: *Self, message: *Message) !void {
-        try self.topic.enqueue(message);
-        self.published_count += 1;
+    pub fn deinit(self: *Self) void {
+        self.queue.deinit();
+
+        self.allocator.destroy(self.queue);
     }
 };
