@@ -23,9 +23,9 @@ const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundC
 const ClientTopic = @import("../pubsub/client_topic.zig").ClientTopic;
 const ClientTopicOptions = @import("../pubsub/client_topic.zig").ClientTopicOptions;
 
-const Service = @import("../services/service.zig").Service;
-const Advertiser = @import("../services/advertiser.zig").Advertiser;
-const Requestor = @import("../services/requestor.zig").Requestor;
+// const Service = @import("../services/service.zig").Service;
+// const Advertiser = @import("../services/advertiser.zig").Advertiser;
+// const Requestor = @import("../services/requestor.zig").Requestor;
 const AdvertiserCallback = *const fn (request: *Message, reply: *Message) void;
 
 const Session = @import("../node/session.zig").Session;
@@ -81,7 +81,7 @@ const ClientMetrics = struct {
 pub const Client = struct {
     const Self = @This();
 
-    advertiser_callbacks: std.AutoHashMap(u128, AdvertiserCallback),
+    // advertiser_callbacks: std.AutoHashMap(u128, AdvertiserCallback),
     allocator: std.mem.Allocator,
     close_channel: *UnbufferedChannel(bool),
     config: ClientConfig,
@@ -98,8 +98,8 @@ pub const Client = struct {
     mutex: std.Thread.Mutex,
     outbox_mutex: std.Thread.Mutex,
     outbox: *RingBuffer(*Message),
-    services_mutex: std.Thread.Mutex,
-    services: std.StringHashMap(*Service),
+    // services_mutex: std.Thread.Mutex,
+    // services: std.StringHashMap(*ClientService),
     session_mutex: std.Thread.Mutex,
     session: ?*Session = null,
     state: ClientState,
@@ -145,7 +145,7 @@ pub const Client = struct {
         errdefer outbox.deinit();
 
         return Self{
-            .advertiser_callbacks = std.AutoHashMap(u128, AdvertiserCallback).init(allocator),
+            // .advertiser_callbacks = std.AutoHashMap(u128, AdvertiserCallback).init(allocator),
             .allocator = allocator,
             .close_channel = close_channel,
             .config = config,
@@ -162,8 +162,8 @@ pub const Client = struct {
             .memory_pool = memory_pool,
             .metrics = ClientMetrics{},
             .mutex = std.Thread.Mutex{},
-            .services_mutex = std.Thread.Mutex{},
-            .services = std.StringHashMap(*Service).init(allocator),
+            // .services_mutex = std.Thread.Mutex{},
+            // .services = std.StringHashMap(*ClientService).init(allocator),
             .session_mutex = std.Thread.Mutex{},
             .session = null,
             .state = .closed,
@@ -214,13 +214,15 @@ pub const Client = struct {
             self.allocator.destroy(transaction);
         }
 
-        var services_iterator = self.services.valueIterator();
-        while (services_iterator.next()) |entry| {
-            const service = entry.*;
+        // var services_iterator = self.services.valueIterator();
+        // while (services_iterator.next()) |entry| {
+        //     const service = entry.*;
 
-            service.deinit();
-            self.allocator.destroy(service);
-        }
+        //     self.allocator.free(service.topic_name);
+
+        //     service.deinit();
+        //     self.allocator.destroy(service);
+        // }
 
         while (self.inbox.dequeue()) |message| {
             message.deref();
@@ -243,8 +245,8 @@ pub const Client = struct {
         self.uninitialized_connections.deinit();
         self.transactions.deinit(self.allocator);
         self.topics.deinit();
-        self.services.deinit();
-        self.advertiser_callbacks.deinit();
+        // self.services.deinit();
+        // self.advertiser_callbacks.deinit();
         self.inbox.deinit();
         self.outbox.deinit();
 
