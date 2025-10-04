@@ -331,9 +331,17 @@ pub const Client = struct {
         }
     }
 
-    pub fn drain(self: *Self) void {
-        while (self.memory_pool.available() != self.memory_pool.capacity) {}
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+    pub fn drain(self: *Self, timeout_ns: u64) void {
+        var now = std.time.nanoTimestamp();
+        const deadline = now + timeout_ns;
+
+        while (now < deadline) {
+            if (self.memory_pool.available() != self.memory_pool.capacity) return;
+            std.Thread.sleep(100 * std.time.ns_per_ms);
+            now = std.time.nanoTimestamp();
+        } else {
+            log.warn("drain timed out", .{});
+        }
     }
 
     fn tick(self: *Self) !void {
@@ -393,7 +401,7 @@ pub const Client = struct {
         while (connections_iter.next()) |connection_entry| {
             const conn = connection_entry.*;
 
-            if (conn.inbox.count == 0) continue;
+            if (conn.inbox.isEmpty()) continue;
             while (conn.inbox.dequeue()) |message| {
 
                 // if this message has more than a single ref, something has not been initialized or deinitialized correctly.
@@ -410,15 +418,29 @@ pub const Client = struct {
                     },
                     .auth_success => try self.handleAuthSuccess(conn, message),
                     .auth_failure => try self.handleAuthFailure(conn, message),
-                    .publish => try self.handlePublish(conn, message),
-                    .subscribe_ack => try self.handleSubscribeAck(conn, message),
-                    .unsubscribe_ack => try self.handleUnsubscribeAck(conn, message),
                     else => {
-                        log.info("message.fixed_headers.message_type {any}", .{message.fixed_headers.message_type});
+                        self.inbox.enqueue(message) catch conn.inbox.prepend(message) catch unreachable;
+                        // log.info("message.fixed_headers.message_type {any}", .{message.fixed_headers.message_type});
                     },
                 }
             }
         }
+
+        while (self.inbox.dequeue()) |message| {
+            defer {
+                message.deref();
+                if (message.refs() == 0) self.memory_pool.destroy(message);
+            }
+
+            switch (message.fixed_headers.message_type) {
+                .publish => try self.handlePublish(message),
+                .subscribe_ack => try self.handleSubscribeAck(message),
+                .unsubscribe_ack => try self.handleUnsubscribeAck(message),
+                else => @panic("unhandle message type!"),
+            }
+        }
+
+        assert(self.inbox.isEmpty());
 
         var topics_iter = self.topics.valueIterator();
         while (topics_iter.next()) |entry| {
@@ -597,12 +619,7 @@ pub const Client = struct {
         try conn.outbox.enqueue(session_message);
     }
 
-    fn handleSubscribeAck(self: *Self, _: *Connection, message: *Message) !void {
-        defer {
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
-        }
-
+    fn handleSubscribeAck(self: *Self, message: *Message) !void {
         assert(message.refs() == 1);
 
         self.transactions_mutex.lock();
@@ -618,12 +635,8 @@ pub const Client = struct {
         }
     }
 
-    fn handleUnsubscribeAck(self: *Self, _: *Connection, message: *Message) !void {
+    fn handleUnsubscribeAck(self: *Self, message: *Message) !void {
         log.info("handle UnsubscribeAck", .{});
-        defer {
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
-        }
 
         assert(message.refs() == 1);
 
@@ -642,18 +655,18 @@ pub const Client = struct {
 
     // FIX: this function looks up the topic and serially executes the callbacks. It doesn't allow the topic to do
     // any message ordering enforcement like it should. as part of Topic.tick() the topic should sort messages.
-    fn handlePublish(self: *Self, conn: *Connection, message: *Message) !void {
-        _ = conn;
-        defer {
-            message.deref();
-            if (message.refs() == 0) self.memory_pool.destroy(message);
-        }
-
+    fn handlePublish(self: *Self, message: *Message) !void {
         self.topics_mutex.lock();
         defer self.topics_mutex.unlock();
         // log.info("here {any}, topic_count: {}", .{ message.topicName(), self.topics.count() });
 
         if (self.topics.get(message.topicName())) |topic| {
+
+            // if the topic is already full, then just execute all the callbacks for this topic
+            if (topic.queue.isFull()) {
+                try topic.tick();
+                assert(topic.queue.isEmpty());
+            }
 
             // var callbacks_iter = topic.callbacks.valueIterator();
             // while (callbacks_iter.next()) |entry| {

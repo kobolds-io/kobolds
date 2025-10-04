@@ -119,10 +119,11 @@ fn publish(args: PublishArgs) !void {
     // wait for the client to be connected
     client.awaitConnected(5_000 * std.time.ns_per_ms);
     const connect_end = timer.read();
-    defer client.drain();
+    defer client.drain(10_000 * std.time.ns_per_ms);
 
     std.debug.print("established connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
 
+    var buf: [32]u8 = undefined;
     if (args.count > 0) {
         signal_handler.registerSigintHandler();
 
@@ -135,7 +136,10 @@ fn publish(args: PublishArgs) !void {
 
             // const body = "a" ** constants.message_max_body_size;
             // client.publish(args.topic_name, body, .{}) catch {
-            client.publish(args.topic_name, args.body, .{}) catch {
+            const ts = std.time.nanoTimestamp();
+            const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
+            client.publish(args.topic_name, str, .{}) catch {
+                // client.publish(args.topic_name, args.body, .{}) catch {
                 published -= 1;
                 continue;
             };
@@ -163,7 +167,6 @@ fn publish(args: PublishArgs) !void {
         return;
     }
 
-    var buf: [32]u8 = undefined;
     if (args.rate == 0) {
         const ts = std.time.nanoTimestamp();
         const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});

@@ -226,6 +226,8 @@ pub const Worker = struct {
         while (connections_iter.next()) |entry| {
             const conn = entry.value_ptr.*;
 
+            // if (!conn.inbox.isEmpty()) continue;
+
             // check if this connection was closed for whatever reason
             if (conn.connection_state == .closed) {
                 try self.cleanupConnection(conn);

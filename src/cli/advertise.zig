@@ -107,7 +107,7 @@ fn publish(args: AdvertiseArgs) !void {
     // wait for the client to be connected
     client.awaitConnected(5_000 * std.time.ns_per_ms);
     const connect_end = timer.read();
-    defer client.drain();
+    defer client.drain(1_000 * std.time.ns_per_ms);
 
     std.debug.print("established connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
 

@@ -393,7 +393,7 @@ pub const Connection = struct {
 
                 // add the maximum number of bytes possible to the send buffer
                 const bytes_available: usize = self.send_buffer_list.capacity - self.send_buffer_list.items.len;
-                if (bytes_available > self.tmp_serialization_buffer[0..bytes].len) {
+                if (bytes_available >= self.tmp_serialization_buffer[0..bytes].len) {
                     self.metrics.bytes_send_total += bytes;
                     self.metrics.messages_send_total += 1;
 
