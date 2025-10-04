@@ -819,7 +819,7 @@ pub const Node = struct {
         try worker.addOutboundConnection(config);
     }
 
-    fn handlePublish(self: *Self, envelope: Envelope) !void {
+    fn handlePublish2(self: *Self, envelope: Envelope) !void {
         assert(envelope.message.refs() == 1);
 
         const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
@@ -837,6 +837,17 @@ pub const Node = struct {
 
         envelope.message.ref();
         publisher.queue.enqueue(envelope) catch envelope.message.deref();
+    }
+
+    // faster than handle publish 2
+    fn handlePublish(self: *Self, envelope: Envelope) !void {
+        assert(envelope.message.refs() == 1);
+
+        const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
+        if (topic.queue.available() == 0) try topic.tick(); // if there is no space, try to advance the topic
+
+        envelope.message.ref();
+        topic.queue.enqueue(envelope) catch envelope.message.deref();
     }
 
     fn handleSubscribe(self: *Self, envelope: Envelope) !void {
