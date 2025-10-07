@@ -335,8 +335,18 @@ pub const Client = struct {
         var now = std.time.nanoTimestamp();
         const deadline = now + timeout_ns;
 
-        while (now < deadline) {
-            if (self.memory_pool.available() != self.memory_pool.capacity) return;
+        while (deadline > now) {
+            log.info("draining!", .{});
+            const memory_pool_drained = self.memory_pool.available() == self.memory_pool.capacity;
+
+            self.outbox_mutex.lock();
+            defer self.outbox_mutex.unlock();
+
+            self.inbox_mutex.lock();
+            defer self.inbox_mutex.unlock();
+
+            if (memory_pool_drained and self.outbox.isEmpty() and self.inbox.isEmpty()) return;
+
             std.Thread.sleep(100 * std.time.ns_per_ms);
             now = std.time.nanoTimestamp();
         } else {

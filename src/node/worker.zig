@@ -227,6 +227,8 @@ pub const Worker = struct {
             const conn = entry.value_ptr.*;
 
             // if (!conn.inbox.isEmpty()) continue;
+            // if (self.inbox.isFull()) continue;
+            // if (self.node.memory_pool.available() < 500) continue;
 
             // check if this connection was closed for whatever reason
             if (conn.connection_state == .closed) {

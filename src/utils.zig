@@ -54,7 +54,7 @@ pub fn generateKey64(topic_name: []const u8, id: u64) u64 {
     var bytes_list = std.array_list.Managed(u8).initCapacity(fba_allocator, buf.len) catch unreachable;
 
     bytes_list.appendSliceAssumeCapacity(topic_name);
-    bytes_list.appendSliceAssumeCapacity(&u128ToBytes(id));
+    bytes_list.appendSliceAssumeCapacity(&u64ToBytes(id));
     defer bytes_list.deinit();
 
     // we are just going to use the same checksum hasher as we do for messages.

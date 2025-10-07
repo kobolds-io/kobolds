@@ -4,6 +4,7 @@ const posix = std.posix;
 const assert = std.debug.assert;
 const log = std.log.scoped(.Connection);
 const testing = std.testing;
+const hash = @import("../hash.zig");
 
 const uuid = @import("uuid");
 const KID = @import("kid").KID;
@@ -349,7 +350,7 @@ pub const Connection = struct {
         self.send_submitted = true;
     }
 
-    fn processOutboundMessages(self: *Self) void {
+    fn processOutboundMessagesOld(self: *Self) void {
         assert(!self.send_submitted);
 
         // NOTE: reset the send buffer list. This effectively drops all previous bytes
@@ -394,11 +395,14 @@ pub const Connection = struct {
                 // add the maximum number of bytes possible to the send buffer
                 const bytes_available: usize = self.send_buffer_list.capacity - self.send_buffer_list.items.len;
                 if (bytes_available >= self.tmp_serialization_buffer[0..bytes].len) {
-                    self.metrics.bytes_send_total += bytes;
-                    self.metrics.messages_send_total += 1;
-
                     // append the encoded message to the send_buffer
                     self.send_buffer_list.appendSliceAssumeCapacity(self.tmp_serialization_buffer[0..bytes]);
+
+                    // log.info("serialized bytes: {any}", .{self.tmp_serialization_buffer[0..bytes]});
+
+                    // increment all counts
+                    self.metrics.bytes_send_total += bytes;
+                    self.metrics.messages_send_total += 1;
                 } else {
                     message.ref();
                     // instead of dealing with the overflow just prepend and try again
@@ -420,7 +424,176 @@ pub const Connection = struct {
         }
     }
 
+    fn processOutboundMessages(self: *Self) void {
+        assert(!self.send_submitted);
+
+        // NOTE: reset the send buffer list. This effectively drops all previous bytes
+        self.send_buffer_list.items.len = 0;
+
+        // if there are bytes remaining in the current send_buffer_list and there is a message to send
+        if (self.send_buffer_list.capacity - self.send_buffer_list.items.len > 0 and self.outbox.count > 0) {
+            var i: usize = 0;
+            while (self.outbox.dequeue()) |message| : (i += 1) {
+                defer {
+                    message.deref();
+                    if (message.refs() == 0) self.memory_pool.destroy(message);
+                }
+
+                assert(self.tmp_serialization_buffer.len > message.packedSize());
+                const bytes = message.serialize(self.tmp_serialization_buffer);
+
+                // if (message.fixed_headers.message_type == .publish) {
+                //     // log.info("message.packedSize(): {}, checksum: {}, bytes: {}", .{ message.packedSize(), message.checksum, bytes });
+                //     assert(message.checksum == hash.xxHash64Checksum(self.tmp_serialization_buffer[0 .. bytes - 8]));
+                // }
+
+                const pub_bytes = [_]u8{ 1, 0, 6, 16, 0, 0, 3, 98, 98, 98, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 209, 109, 161, 241, 93, 252, 47, 123 };
+
+                // add the maximum number of bytes possible to the send buffer
+                const bytes_available: usize = self.send_buffer_list.capacity - self.send_buffer_list.items.len;
+                if (bytes_available >= self.tmp_serialization_buffer[0..bytes].len) {
+                    if (message.fixed_headers.message_type == .publish) {
+                        assert(std.mem.eql(u8, &pub_bytes, self.tmp_serialization_buffer[0..bytes]));
+                    }
+
+                    // append the encoded message to the send_buffer
+                    self.send_buffer_list.appendSliceAssumeCapacity(self.tmp_serialization_buffer[0..bytes]);
+
+                    // increment all counts
+                    self.metrics.bytes_send_total += bytes;
+                    self.metrics.messages_send_total += 1;
+                } else {
+                    message.ref();
+                    // instead of dealing with the overflow just prepend and try again
+                    self.outbox.prepend(message) catch unreachable;
+                    break;
+                }
+            }
+        }
+    }
+
     fn processInboundMessages(self: *Self) void {
+        // ensure that we are not overlapping with an io_uring operation
+        assert(!self.recv_submitted);
+
+        while (true) {
+            // // First handle any overflow bytes from last time
+            // if (self.recv_buffer_overflow_count > 0) {
+            //     // log.err("recv_buffer_overflow is not empty", .{});
+            //     const parser_buffer_available_bytes = self.parser.buffer.capacity - self.parser.buffer.items.len;
+
+            //     // if the parser.buffer can accept bytes, we should try to write them into the buffer
+            //     if (parser_buffer_available_bytes >= self.recv_buffer_overflow_count) {
+            //         log.info("full overflow fill", .{});
+            //         self.parser.buffer.appendSliceAssumeCapacity(self.recv_buffer_overflow[0..self.recv_buffer_overflow_count]);
+            //         self.recv_buffer_overflow_count = 0;
+            //     } else {
+            //         log.info("partial overflow fill", .{});
+            //         // we can only partially fill the parser.buffer and will have some bytes left over
+            //         const remaining_bytes = self.recv_buffer_overflow_count - parser_buffer_available_bytes;
+            //         self.parser.buffer.appendSliceAssumeCapacity(self.recv_buffer_overflow[0..remaining_bytes]);
+
+            //         std.mem.copyForwards(u8, self.recv_buffer_overflow[0..], self.recv_buffer_overflow[remaining_bytes..]);
+            //         self.recv_buffer_overflow_count -= remaining_bytes;
+            //     }
+            // }
+
+            // copy the maximum number of bytes into the parser_buffer
+            if (self.recv_bytes > 0) {
+                const parser_buffer_available_bytes = self.parser.buffer.capacity - self.parser.buffer.items.len;
+
+                if (parser_buffer_available_bytes >= self.recv_bytes) {
+                    log.info("appending bytes: {any}", .{self.recv_buffer[0..self.recv_bytes]});
+                    self.parser.buffer.appendSliceAssumeCapacity(self.recv_buffer[0..self.recv_bytes]);
+                    self.recv_bytes = 0;
+                } else {
+                    const remaining_bytes = self.recv_bytes - parser_buffer_available_bytes;
+
+                    if (self.protocol_state == .ready) {
+                        log.info("partial appending bytes: {any}", .{self.recv_buffer[0..remaining_bytes]});
+                    }
+
+                    self.parser.buffer.appendSliceAssumeCapacity(self.recv_buffer[0..remaining_bytes]);
+
+                    std.mem.copyForwards(u8, self.recv_buffer[0..], self.recv_buffer[remaining_bytes..]);
+                    self.recv_bytes -= remaining_bytes;
+
+                    // log.info("recv_bytes: {}", .{self.recv_bytes});
+
+                    // // copy the remaining bytes into the self.recv_buffer_overflow
+                    // @memcpy(self.recv_buffer_overflow[self.recv_buffer_overflow_count..], self.recv_buffer[0..self.recv_bytes]);
+                    // self.recv_buffer_overflow_count += self.recv_bytes;
+                    // self.recv_bytes = 0;
+                }
+            }
+
+            // const v = [_]u8{ 1, 0, 6, 16, 0, 0, 3, 98, 98, 98, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97 };
+            // log.info("invalid message len: {}", .{v.len});
+
+            // if (self.parser.buffer.items.len < 275) {
+            //     log.info("parser.buffer.items.len: {}, bytes: {any}", .{
+            //         self.parser.buffer.items.len,
+            //         self.parser.buffer.items,
+            //     });
+            // }
+
+            const parsed_count = self.parser.parse(&self.messages_buffer, &.{}) catch unreachable;
+            if (parsed_count == 0) break;
+
+            self.metrics.messages_recv_total += parsed_count;
+
+            const parsed_messages = self.messages_buffer[0..parsed_count];
+            for (parsed_messages) |*message| {
+                if (message.fixed_headers.message_type == .publish) {
+                    log.info("message.fixed_headers.body_length: {}, message.packedSize(): {}, message.checksum: {}", .{
+                        message.fixed_headers.body_length,
+                        message.packedSize(),
+                        message.checksum,
+                    });
+                    assert(message.checksum == 15090895984424398715);
+                }
+
+                if (message.validate()) |reason| {
+                    self.connection_state = .closing;
+                    log.err("invalid message: {s}", .{reason});
+                    return;
+                }
+            }
+
+            const message_ptrs = self.memory_pool.createN(self.allocator, parsed_count) catch |err| {
+                log.err("inbox memory_pool.createN() returned err: {any}", .{err});
+                return;
+            };
+            defer self.allocator.free(message_ptrs);
+
+            if (message_ptrs.len != parsed_count) {
+                log.err("not enough node ptrs {d} for parsed_messages {d}", .{
+                    message_ptrs.len,
+                    parsed_count,
+                });
+                for (message_ptrs) |message_ptr| self.memory_pool.destroy(message_ptr);
+                return;
+            }
+
+            for (message_ptrs, parsed_messages) |message_ptr, message| {
+                message_ptr.* = message;
+                message_ptr.ref();
+
+                assert(message_ptr.refs() == 1);
+            }
+
+            const messages_enqueued = self.inbox.enqueueMany(message_ptrs);
+            if (messages_enqueued < message_ptrs.len) {
+                log.err("could not enqueue all message ptrs. dropping {d} messages", .{message_ptrs[messages_enqueued..].len});
+                for (message_ptrs[messages_enqueued..]) |message_ptr| {
+                    message_ptr.deref();
+                    self.memory_pool.destroy(message_ptr);
+                }
+            }
+        }
+    }
+
+    fn processInboundMessagesOld(self: *Self) void {
         assert(!self.recv_submitted);
 
         self.metrics.bytes_recv_total += self.recv_bytes;
@@ -430,15 +603,20 @@ pub const Connection = struct {
         if (self.recv_buffer_overflow_count > 0) {
             // log.err("recv_buffer_overflow is not empty", .{});
             const parser_buffer_available_bytes = self.parser.buffer.capacity - self.parser.buffer.items.len;
-            if (parser_buffer_available_bytes > 0) {
-                const remaining_bytes = @min(parser_buffer_available_bytes, self.recv_buffer_overflow_count);
-                self.parser.buffer.appendSliceAssumeCapacity(self.recv_buffer_overflow[0..remaining_bytes]);
-                self.recv_buffer_overflow_count -= remaining_bytes;
 
-                if (self.recv_buffer_overflow_count > 0) {
-                    // Still not enough space for everything, bail out until next call
-                    @panic("i don't think i can do much in this situation :'(");
-                }
+            // if the parser.buffer can accept bytes, we should try to write them into the buffer
+            if (parser_buffer_available_bytes >= self.recv_buffer_overflow_count) {
+                log.info("full overflow fill", .{});
+                self.parser.buffer.appendSliceAssumeCapacity(self.recv_buffer_overflow[0..self.recv_buffer_overflow_count]);
+                self.recv_buffer_overflow_count = 0;
+            } else {
+                log.info("partial overflow fill", .{});
+                // we can only partially fill the parser.buffer and will have some bytes left over
+                const remaining_bytes = self.recv_buffer_overflow_count - parser_buffer_available_bytes;
+                self.parser.buffer.appendSliceAssumeCapacity(self.recv_buffer_overflow[0..remaining_bytes]);
+
+                std.mem.copyForwards(u8, self.recv_buffer_overflow[0..], self.recv_buffer_overflow[remaining_bytes..]);
+                self.recv_buffer_overflow_count -= remaining_bytes;
             }
         }
 
@@ -469,12 +647,12 @@ pub const Connection = struct {
 
             // Now parse until parser can’t produce more messages
             while (true) {
-                const parsed_count = self.parser.parse(&self.messages_buffer, &.{}) catch unreachable;
+                var parsed_count = self.parser.parse(&self.messages_buffer, &.{}) catch unreachable;
                 if (parsed_count == 0) break;
 
                 self.metrics.messages_recv_total += parsed_count;
 
-                const parsed_messages = self.messages_buffer[0..parsed_count];
+                var parsed_messages = self.messages_buffer[0..parsed_count];
 
                 for (parsed_messages) |*message| {
                     if (message.validate()) |reason| {
@@ -482,6 +660,17 @@ pub const Connection = struct {
                         log.err("invalid message: {s}", .{reason});
                         return;
                     }
+                }
+
+                if (parsed_count > self.memory_pool.available()) {
+                    const parsed_overflow_count = parsed_count - self.memory_pool.available();
+                    // we are going to add these messages to the tmp overflow
+
+                    log.info("parsed_overflow_count: {}", .{parsed_overflow_count});
+
+                    parsed_count -= parsed_overflow_count;
+                    parsed_messages = self.messages_buffer[0..parsed_count];
+                    // log.info("self.memory_pool.available: {}, want: {}", .{ self.memory_pool.available(), parsed_count });
                 }
 
                 const message_ptrs = self.memory_pool.createN(self.allocator, parsed_count) catch |err| {

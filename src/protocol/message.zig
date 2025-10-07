@@ -260,7 +260,7 @@ pub const Message = struct {
         self.fixed_headers.body_length = @intCast(v.len);
     }
 
-    pub fn packedSize(self: Self) usize {
+    pub fn packedSize(self: *Self) usize {
         var sum: usize = 0;
         sum += FixedHeaders.packedSize();
         sum += self.extension_headers.packedSize();
@@ -377,6 +377,8 @@ pub const Message = struct {
             unreachable;
         }
 
+        self.checksum = checksum;
+
         return i;
     }
 
@@ -397,6 +399,8 @@ pub const Message = struct {
             log.debug("error: {any}, reason: not enough bytes", .{error.Truncated});
             return error.Truncated;
         }
+
+        log.info("body_length: {}", .{fixed_headers.body_length});
 
         const extension_headers = try ExtensionHeaders.fromBytes(
             fixed_headers.message_type,
