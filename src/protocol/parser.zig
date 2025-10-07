@@ -37,31 +37,24 @@ pub const Parser = struct {
         var count: usize = 0;
         var read_offset: usize = 0;
 
-        var buf = self.buffer.items;
-
         while (count < messages.len) {
+            const buf = self.buffer.items;
             if (buf.len - read_offset < FixedHeaders.packedSize()) break;
 
             const parsed = Message.deserialize(buf[read_offset..]) catch |err| switch (err) {
                 error.Truncated => break,
                 error.InvalidMessageType, error.InvalidTopicName, error.InvalidMessage, error.InvalidChecksum => {
-                    // log.err("parse err {any}", .{err});
-                    // log.err("parser.buffer.items.len: {}, items: {any}", .{ self.buffer.items[read_offset..].len, self.buffer.items[read_offset..] });
-                    read_offset += 1; // skip bad byte
-                    @panic("ahhh");
-
-                    // continue;
+                    read_offset += 1;
+                    continue;
                 },
             };
 
-            // protect against buggy deserialize
             if (parsed.bytes_consumed == 0) {
                 log.err("buggy deserialize", .{});
                 read_offset += 1;
                 continue;
             }
 
-            // parsed says it consumed more than available — treat as corrupted, drop a byte and continue to resync.
             if (read_offset + parsed.bytes_consumed > buf.len) {
                 log.err("mismatched bytes", .{});
                 read_offset += 1;
@@ -70,10 +63,44 @@ pub const Parser = struct {
 
             messages[count] = parsed.message;
             count += 1;
-
-            // advance the read offset
             read_offset += parsed.bytes_consumed;
         }
+
+        // while (count < messages.len) {
+        //     if (buf.len - read_offset < FixedHeaders.packedSize()) break;
+
+        //     const parsed = Message.deserialize(buf[read_offset..]) catch |err| switch (err) {
+        //         error.Truncated => break,
+        //         error.InvalidMessageType, error.InvalidTopicName, error.InvalidMessage, error.InvalidChecksum => {
+        //             // log.err("parse err {any}", .{err});
+        //             // log.err("parser.buffer.items.len: {}, items: {any}", .{ self.buffer.items[read_offset..].len, self.buffer.items[read_offset..] });
+        //             read_offset += 1; // skip bad byte
+        //             @panic("ahhh");
+
+        //             // continue;
+        //         },
+        //     };
+
+        //     // protect against buggy deserialize
+        //     if (parsed.bytes_consumed == 0) {
+        //         log.err("buggy deserialize", .{});
+        //         read_offset += 1;
+        //         continue;
+        //     }
+
+        //     // parsed says it consumed more than available — treat as corrupted, drop a byte and continue to resync.
+        //     if (read_offset + parsed.bytes_consumed > buf.len) {
+        //         log.err("mismatched bytes", .{});
+        //         read_offset += 1;
+        //         continue;
+        //     }
+
+        //     messages[count] = parsed.message;
+        //     count += 1;
+
+        //     // advance the read offset
+        //     read_offset += parsed.bytes_consumed;
+        // }
 
         // Remove consumed bytes from buffer
         if (read_offset > 0) {

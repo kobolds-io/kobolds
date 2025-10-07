@@ -253,20 +253,13 @@ pub const Worker = struct {
             const conn = entry.value_ptr.*;
             const session_id_opt = self.conns_sessions.get(conn.connection_id);
 
-            // defer assert(conn.inbox.count == 0);
-
-            dequeue_loop: while (conn.inbox.dequeue()) |message| {
+            while (conn.inbox.dequeue()) |message| {
                 assert(message.refs() == 1);
                 switch (message.fixed_headers.message_type) {
                     .session_init => try self.handleSessionInit(conn, message),
                     .session_join => try self.handleSessionJoin(conn, message),
                     else => {
                         if (session_id_opt) |session_id| {
-                            // if (message.fixed_headers.message_type == .publish) {
-                            //     log.info("worker message.topicName(): {any}", .{message.topicName()});
-                            //     log.info("worker message.body(): {any}", .{message.body()});
-                            // }
-
                             const envelope = Envelope{
                                 .message = message,
                                 .session_id = session_id,
@@ -274,18 +267,12 @@ pub const Worker = struct {
                                 .message_id = self.node.kid.generate(),
                             };
 
-                            // const end = std.time.nanoTimestamp();
-                            // const start = std.fmt.parseInt(i128, message.body(), 10) catch 0;
-                            // const diff = @divFloor(end - start, std.time.ns_per_us);
-
-                            // log.info("took {}us to reach the node", .{diff});
-
                             self.inbox_mutex.lock();
                             defer self.inbox_mutex.unlock();
 
                             self.inbox.enqueue(envelope) catch {
                                 conn.inbox.prepend(message) catch unreachable;
-                                break :dequeue_loop;
+                                break;
                             };
                         } else {
                             // message was received but is not associated with a session. Dropping this message

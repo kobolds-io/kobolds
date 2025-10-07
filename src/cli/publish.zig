@@ -120,9 +120,9 @@ fn publish(args: PublishArgs) !void {
     client.awaitConnected(5_000 * std.time.ns_per_ms);
     const connect_end = timer.read();
 
-    defer client.drain(3_000 * std.time.ns_per_ms);
-
     std.debug.print("established connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
+
+    defer client.drain(5_000 * std.time.ns_per_ms);
 
     var buf: [32]u8 = undefined;
     if (args.count > 0) {

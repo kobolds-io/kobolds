@@ -335,8 +335,7 @@ pub const Client = struct {
         var now = std.time.nanoTimestamp();
         const deadline = now + timeout_ns;
 
-        while (deadline > now) {
-            log.info("draining!", .{});
+        dealine_loop: while (deadline > now) {
             const memory_pool_drained = self.memory_pool.available() == self.memory_pool.capacity;
 
             self.outbox_mutex.lock();
@@ -345,13 +344,26 @@ pub const Client = struct {
             self.inbox_mutex.lock();
             defer self.inbox_mutex.unlock();
 
+            self.connections_mutex.lock();
+            defer self.connections_mutex.unlock();
+
+            var connections_iter = self.connections.valueIterator();
+            while (connections_iter.next()) |entry| {
+                const conn = entry.*;
+                if (conn.inbox.count > 0) continue :dealine_loop;
+                if (conn.outbox.count > 0) continue :dealine_loop;
+            }
+
             if (memory_pool_drained and self.outbox.isEmpty() and self.inbox.isEmpty()) return;
 
+            log.info("draining!", .{});
             std.Thread.sleep(100 * std.time.ns_per_ms);
             now = std.time.nanoTimestamp();
         } else {
             log.warn("drain timed out", .{});
         }
+        // always sleep a little longer
+        std.Thread.sleep(1_000 * std.time.ns_per_ms);
     }
 
     fn tick(self: *Self) !void {

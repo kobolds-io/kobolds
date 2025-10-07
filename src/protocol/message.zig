@@ -400,7 +400,7 @@ pub const Message = struct {
             return error.Truncated;
         }
 
-        log.info("body_length: {}", .{fixed_headers.body_length});
+        // log.info("body_length: {}", .{fixed_headers.body_length});
 
         const extension_headers = try ExtensionHeaders.fromBytes(
             fixed_headers.message_type,
