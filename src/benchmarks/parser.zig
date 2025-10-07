@@ -23,7 +23,20 @@ const ParserParseBenchmark = struct {
     }
 
     pub fn run(self: ParserParseBenchmark, _: std.mem.Allocator) void {
-        _ = self.parser.parse(self.messages, self.bytes) catch unreachable;
+        assert(self.parser.buffer.items.len == 0);
+
+        // Add the
+        self.parser.buffer.appendSliceAssumeCapacity(self.bytes);
+
+        var i: usize = 0;
+        while (self.parser.buffer.items.len > 0 or i > 10) : (i += 1) {
+            _ = self.parser.parse(self.messages, &.{}) catch unreachable;
+        }
+
+        if (self.parser.buffer.items.len > 0) {
+            std.debug.print("parser didn't empty! {}\n", .{self.parser.buffer.items.len});
+            unreachable;
+        }
     }
 };
 
@@ -31,7 +44,7 @@ var parser_messages: std.ArrayList(Message) = undefined;
 
 test "Parser benchmarks" {
     var bench = zbench.Benchmark.init(std.testing.allocator, .{
-        .iterations = 1_000,
+        .iterations = benchmark_constants.benchmark_max_iterations,
     });
     defer bench.deinit();
 
@@ -46,8 +59,10 @@ test "Parser benchmarks" {
     var parser = try Parser.init(parser_allocator);
     defer parser.deinit(parser_allocator);
 
+    const topic_name = [_]u8{98} ** constants.message_max_topic_name_size;
     const body = [_]u8{97} ** constants.message_max_body_size;
-    var message_1 = Message.new(.undefined);
+    var message_1 = Message.new(.publish);
+    message_1.setTopicName(&topic_name);
     message_1.setBody(&body);
 
     const message_1_buf = try messages_allocator.alloc(u8, message_1.packedSize());
@@ -105,7 +120,8 @@ test "Parser benchmarks" {
     defer messages_allocator.free(parser_parse_3_title);
 
     // create a single encoded message with no body
-    var message_2 = Message.new(.undefined);
+    var message_2 = Message.new(.publish);
+    message_2.setTopicName(&topic_name);
     const message_2_buf = try messages_allocator.alloc(u8, message_2.packedSize());
     defer messages_allocator.free(message_2_buf);
 
@@ -161,8 +177,8 @@ test "Parser benchmarks" {
     const writer = &stderr.interface;
 
     try writer.writeAll("\n");
-    try writer.writeAll("|--------------------|\n");
-    try writer.writeAll("| Parser2 Benchmarks |\n");
-    try writer.writeAll("|--------------------|\n");
+    try writer.writeAll("|-------------------|\n");
+    try writer.writeAll("| Parser Benchmarks |\n");
+    try writer.writeAll("|-------------------|\n");
     try bench.run(writer);
 }
