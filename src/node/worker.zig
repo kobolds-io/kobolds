@@ -212,9 +212,33 @@ pub const Worker = struct {
     }
 
     pub fn tick(self: *Self) !void {
+        var timer = try std.time.Timer.start();
+        const tick_start = timer.read();
+
+        const tick_connections_start = timer.read();
         try self.tickConnections();
+        const tick_connections_end = timer.read();
+
+        const process_inbound_messages_start = timer.read();
         try self.processInboundMessages();
+        const process_inbound_messages_end = timer.read();
+
+        const process_outbound_messages_start = timer.read();
         try self.processOutboundMessages();
+        const process_outbound_messages_end = timer.read();
+
+        const tick_end = timer.read();
+
+        const tick_total = (tick_end - tick_start) / std.time.ns_per_us;
+
+        if (tick_total > 500) {
+            log.info("tick: {}us, tick_connections: {}us, process_inbound_messages: {}us, process_outbound_message: {}us", .{
+                tick_total,
+                (tick_connections_end - tick_connections_start) / std.time.ns_per_us,
+                (process_inbound_messages_end - process_inbound_messages_start) / std.time.ns_per_us,
+                (process_outbound_messages_end - process_outbound_messages_start) / std.time.ns_per_us,
+            });
+        }
     }
 
     pub fn tickConnections(self: *Self) !void {
@@ -225,10 +249,6 @@ pub const Worker = struct {
         var connections_iter = self.connections.iterator();
         while (connections_iter.next()) |entry| {
             const conn = entry.value_ptr.*;
-
-            // if (!conn.inbox.isEmpty()) continue;
-            // if (self.inbox.isFull()) continue;
-            // if (self.node.memory_pool.available() < 500) continue;
 
             // check if this connection was closed for whatever reason
             if (conn.connection_state == .closed) {

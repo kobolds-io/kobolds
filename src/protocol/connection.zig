@@ -318,6 +318,7 @@ pub const Connection = struct {
         if (self.recv_submitted) return;
 
         self.processInboundMessages();
+        // self.processInboundMessagesOld();
 
         self.io.recv(
             *Connection,
@@ -495,9 +496,6 @@ pub const Connection = struct {
                 const parser_buffer_available_bytes = self.parser.buffer.capacity - self.parser.buffer.items.len;
 
                 if (parser_buffer_available_bytes >= self.recv_bytes) {
-                    // if (self.parser.buffer.items.len > 0 and self.parser.buffer.items[0] == 97) {
-                    //     log.info("parser will fail!: {any}", .{self.parser.buffer.items});
-                    // }
                     self.parser.buffer.appendSliceAssumeCapacity(self.recv_buffer[0..self.recv_bytes]);
                     self.recv_bytes = 0;
                 } else {
@@ -510,16 +508,6 @@ pub const Connection = struct {
                     self.recv_bytes -= remaining_bytes;
                 }
             }
-
-            // const v = [_]u8{ 1, 0, 6, 16, 0, 0, 3, 98, 98, 98, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97, 97 };
-            // log.info("invalid message len: {}", .{v.len});
-
-            // if (self.parser.buffer.items.len < 275) {
-            //     log.info("parser.buffer.items.len: {}, bytes: {any}", .{
-            //         self.parser.buffer.items.len,
-            //         self.parser.buffer.items,
-            //     });
-            // }
 
             const parsed_count = self.parser.parse(&self.messages_buffer, &.{}) catch unreachable;
             if (parsed_count == 0) break;

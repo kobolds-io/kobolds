@@ -369,15 +369,53 @@ pub const Node = struct {
     }
 
     fn tick(self: *Self) !void {
-        self.handlePrintingIntervalMetrics();
+        var timer = try std.time.Timer.start();
+        const tick_start = timer.read();
 
+        const print_metrics_start = timer.read();
+        // self.handlePrintingIntervalMetrics();
+        const print_metrics_end = timer.read();
+
+        const prune_sessions_start = timer.read();
         self.pruneEmptySessions();
-        // try self.pruneDeadConnections();
+        const prune_sessions_end = timer.read();
+
+        const add_inbound_connections_start = timer.read();
         try self.maybeAddInboundConnections();
+        const add_inbound_connections_end = timer.read();
+
+        const gather_messages_start = timer.read();
         try self.gatherMessages();
+        const gather_messages_end = timer.read();
+
+        const process_messages_start = timer.read();
         try self.processMessages();
+        const process_messages_end = timer.read();
+
+        const aggregate_messages_start = timer.read();
         try self.aggregateMessages();
+        const aggregate_messages_end = timer.read();
+
+        const distribute_messages_start = timer.read();
         try self.distributeMessages();
+        const distribute_messages_end = timer.read();
+
+        const tick_end = timer.read();
+
+        const tick_total = (tick_end - tick_start) / std.time.ns_per_us;
+
+        if (tick_total > 500) {
+            log.info("tick: {}us, print_metrics: {}us, prune_sessions: {}us, add_inbound_connections: {}us, gather: {}us, process: {}us, aggregate: {}us, distribute: {}us", .{
+                tick_total,
+                (print_metrics_end - print_metrics_start) / std.time.ns_per_us,
+                (prune_sessions_end - prune_sessions_start) / std.time.ns_per_us,
+                (add_inbound_connections_end - add_inbound_connections_start) / std.time.ns_per_us,
+                (gather_messages_end - gather_messages_start) / std.time.ns_per_us,
+                (process_messages_end - process_messages_start) / std.time.ns_per_us,
+                (aggregate_messages_end - aggregate_messages_start) / std.time.ns_per_us,
+                (distribute_messages_end - distribute_messages_start) / std.time.ns_per_us,
+            });
+        }
     }
 
     fn handlePrintingIntervalMetrics(self: *Self) void {
@@ -418,6 +456,12 @@ pub const Node = struct {
                             defer worker.inbox_mutex.unlock();
 
                             if (worker.inbox.isEmpty()) continue;
+
+                            // const gathered_count = @min(worker.inbox.count, self.inbox.available());
+                            // log.info("node gathered {}/msgs from worker {}", .{
+                            //     gathered_count,
+                            //     worker.id,
+                            // });
 
                             self.inbox.concatenateAvailable(worker.inbox);
                         } else @panic("failed to get worker");

@@ -122,7 +122,7 @@ fn publish(args: PublishArgs) !void {
 
     std.debug.print("established connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
 
-    defer client.drain(5_000 * std.time.ns_per_ms);
+    // defer client.drain(5_000 * std.time.ns_per_ms);
 
     var buf: [32]u8 = undefined;
     if (args.count > 0) {
@@ -165,7 +165,7 @@ fn publish(args: PublishArgs) !void {
         });
 
         // this just keeps the connections open for a bit longer
-        // std.Thread.sleep(50 * std.time.ns_per_ms);
+        std.Thread.sleep(5_000 * std.time.ns_per_ms);
         return;
     }
 
