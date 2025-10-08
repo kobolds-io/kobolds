@@ -191,9 +191,9 @@ fn publish(args: PublishArgs) !void {
             next_deadline += period_ns;
 
             // client.publish(args.topic_name, "", .{}) catch {
-            const topic_name = "b" ** constants.message_max_topic_name_size;
+            // const topic_name = "b" ** constants.message_max_topic_name_size;
             const body = "a" ** constants.message_max_body_size;
-            client.publish(topic_name, body, .{}) catch {
+            client.publish(args.topic_name, body, .{}) catch {
                 // const ts = std.time.nanoTimestamp();
                 // const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
                 // client.publish(args.topic_name, args.body, .{}) catch {

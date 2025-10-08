@@ -115,7 +115,10 @@ fn subscribe(args: SubscribeArgs) !void {
             _ = message;
             messages_recv_count += 1;
 
-            std.debug.print("callback_1: messages_recv_count: {d}\n", .{messages_recv_count});
+            // std.debug.print("callback_1: messages_recv_count: {d}\n", .{messages_recv_count});
+            if (messages_recv_count % 1000 == 0) {
+                std.debug.print("callback_1: messages_recv_count: {d}\n", .{messages_recv_count});
+            }
         }
     }.callback;
 
@@ -131,10 +134,11 @@ fn subscribe(args: SubscribeArgs) !void {
             }
         }
     }.callback;
+    _ = callback_2;
 
     // const callback_1_id = try client.subscribe(args.topic_name, callback_1, .{});
-    _ = callback_1;
-    const callback_id = try client.subscribe(args.topic_name, callback_2, .{});
+    // _ = callback_1;
+    const callback_id = try client.subscribe(args.topic_name, callback_1, .{});
     defer client.unsubscribe(args.topic_name, callback_id, .{ .timeout_ms = 5_000 }) catch unreachable;
 
     while (!signal_handler.sigint_triggered) {
