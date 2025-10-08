@@ -18,8 +18,8 @@ pub const parser_max_buffer_size = (1024 * 256) * 2; // TODO: this number needs 
 // pub const parser_max_buffer_size = (1024 * 64) * 2; // TODO: this number needs to be adjusted
 // pub const parser_max_buffer_size = (1024 * 32) * 2; // TODO: this number needs to be adjusted
 // pub const parser_max_buffer_size = @sizeOf(Message) * 2; // TODO: this number needs to be adjusted
-// pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, @sizeOf(Message));
-pub const parser_messages_buffer_size = 100;
+pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, @sizeOf(Message));
+// pub const parser_messages_buffer_size = 1000;
 
 /// The number of bytes used as the recv buffer in each connection
 pub const connection_recv_buffer_size = (1024 * 256);
@@ -35,9 +35,9 @@ pub const connection_send_buffer_size = (1024 * 256);
 
 /// The number of microseconds the IO instance will wait until it flushes
 /// submissions and completions.
-pub const io_tick_us: u63 = 100;
-// pub const io_tick_us: u63 = 250;
-// pub const io_tick_us: u63 = 500_000; // testing only
+// pub const io_tick_us: u63 = 100;
+pub const io_tick_us: u63 = 250;
+// pub const io_tick_us: u63 = 10_000; // testing only
 
 /// Number of entries used for the submission and completion queues
 pub const io_uring_entries: u16 = 256;
@@ -45,7 +45,7 @@ pub const io_uring_entries: u16 = 256;
 /// Optionally verify if operations based on this boolean.
 pub const verify: bool = true;
 
-pub const default_node_memory_pool_capacity: usize = 100_000;
+pub const default_node_memory_pool_capacity: usize = 250_000;
 pub const default_client_memory_pool_capacity: usize = 10_000;
 pub const default_client_outbox_capacity: usize = default_client_memory_pool_capacity;
 pub const default_client_inbox_capacity: usize = default_client_memory_pool_capacity;

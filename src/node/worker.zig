@@ -231,7 +231,7 @@ pub const Worker = struct {
 
         const tick_total = (tick_end - tick_start) / std.time.ns_per_us;
 
-        if (tick_total > 500) {
+        if (tick_total > 10_000) {
             log.info("tick: {}us, tick_connections: {}us, process_inbound_messages: {}us, process_outbound_message: {}us", .{
                 tick_total,
                 (tick_connections_end - tick_connections_start) / std.time.ns_per_us,
@@ -267,6 +267,9 @@ pub const Worker = struct {
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
 
+        // var messages_processed: usize = 0;
+        // defer log.info("worker processed: {} messages", .{messages_processed});
+
         // loop over all connections and gather their messages
         var connections_iter = self.connections.iterator();
         while (connections_iter.next()) |entry| {
@@ -275,10 +278,18 @@ pub const Worker = struct {
 
             while (conn.inbox.dequeue()) |message| {
                 assert(message.refs() == 1);
+                // defer messages_processed += 1;
                 switch (message.fixed_headers.message_type) {
                     .session_init => try self.handleSessionInit(conn, message),
                     .session_join => try self.handleSessionJoin(conn, message),
                     else => {
+                        // NOTE: debugging only ------------------
+                        // defer {
+                        //     message.deref();
+                        //     self.node.memory_pool.destroy(message);
+                        // }
+                        // NOTE: debugging only ^^^^^^^^^^^^^^^^^^^^^
+
                         if (session_id_opt) |session_id| {
                             const envelope = Envelope{
                                 .message = message,

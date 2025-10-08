@@ -373,7 +373,7 @@ pub const Node = struct {
         const tick_start = timer.read();
 
         const print_metrics_start = timer.read();
-        // self.handlePrintingIntervalMetrics();
+        self.handlePrintingIntervalMetrics();
         const print_metrics_end = timer.read();
 
         const prune_sessions_start = timer.read();
@@ -401,10 +401,9 @@ pub const Node = struct {
         const distribute_messages_end = timer.read();
 
         const tick_end = timer.read();
-
         const tick_total = (tick_end - tick_start) / std.time.ns_per_us;
 
-        if (tick_total > 500) {
+        if (tick_total > 10_000) {
             log.info("tick: {}us, print_metrics: {}us, prune_sessions: {}us, add_inbound_connections: {}us, gather: {}us, process: {}us, aggregate: {}us, distribute: {}us", .{
                 tick_total,
                 (print_metrics_end - print_metrics_start) / std.time.ns_per_us,
