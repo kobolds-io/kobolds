@@ -403,7 +403,7 @@ pub const Node = struct {
         const tick_end = timer.read();
         const tick_total = (tick_end - tick_start) / std.time.ns_per_us;
 
-        if (tick_total > 10_000) {
+        if (tick_total > 100_000) {
             log.info("tick: {}us, print_metrics: {}us, prune_sessions: {}us, add_inbound_connections: {}us, gather: {}us, process: {}us, aggregate: {}us, distribute: {}us", .{
                 tick_total,
                 (print_metrics_end - print_metrics_start) / std.time.ns_per_us,

@@ -231,7 +231,7 @@ pub const Worker = struct {
 
         const tick_total = (tick_end - tick_start) / std.time.ns_per_us;
 
-        if (tick_total > 10_000) {
+        if (tick_total > 100_000) {
             log.info("tick: {}us, tick_connections: {}us, process_inbound_messages: {}us, process_outbound_message: {}us", .{
                 tick_total,
                 (tick_connections_end - tick_connections_start) / std.time.ns_per_us,

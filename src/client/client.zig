@@ -476,6 +476,8 @@ pub const Client = struct {
         self.outbox_mutex.lock();
         defer self.outbox_mutex.unlock();
 
+        if (self.outbox.isEmpty()) return;
+
         self.session_mutex.lock();
         defer self.session_mutex.unlock();
 
@@ -484,8 +486,6 @@ pub const Client = struct {
 
         self.connections_mutex.lock();
         defer self.connections_mutex.unlock();
-
-        log.info("enqueing {} messages in connections", .{self.outbox.count});
 
         while (self.outbox.dequeue()) |message| {
             assert(message.refs() == 1);
