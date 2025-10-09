@@ -471,14 +471,24 @@ pub const Node = struct {
     }
 
     fn processMessages(self: *Self) !void {
+        var processed_messages_count: i64 = 0;
+        var processed_bytes_count: i64 = 0;
+
+        defer {
+            _ = self.metrics.messages_processed.fetchAdd(processed_messages_count, .seq_cst);
+            self.metrics.bytes_processed += processed_bytes_count;
+        }
+
         while (self.inbox.dequeue()) |envelope| {
             assert(envelope.message.refs() == 1);
+
             defer {
-                _ = self.metrics.messages_processed.fetchAdd(1, .seq_cst);
-                self.metrics.bytes_processed += @intCast(envelope.message.packedSize());
                 envelope.message.deref();
                 if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
             }
+
+            processed_messages_count += 1;
+            processed_bytes_count += @intCast(envelope.message.packedSize());
 
             // ensure that the message
             switch (envelope.message.fixed_headers.message_type) {
