@@ -333,7 +333,11 @@ pub const Worker = struct {
 
                 // log.info("took {}us to leave the node", .{diff});
 
-                try conn.outbox.enqueue(envelope.message);
+                conn.outbox.enqueue(envelope.message) catch {
+                    log.warn("conn outbox full. skipping iteration", .{});
+                    self.outbox.prepend(envelope) catch unreachable;
+                    break;
+                };
             } else {
                 log.warn("could not get conn: {}, session: {}", .{ envelope.conn_id, envelope.session_id });
                 envelope.message.deref();

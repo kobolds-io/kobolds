@@ -45,7 +45,7 @@ pub const io_uring_entries: u16 = 256;
 /// Optionally verify if operations based on this boolean.
 pub const verify: bool = true;
 
-pub const default_node_memory_pool_capacity: usize = 10_000;
+pub const default_node_memory_pool_capacity: usize = 100_000;
 pub const default_client_memory_pool_capacity: usize = 5_000;
 pub const default_client_outbox_capacity: usize = default_client_memory_pool_capacity;
 pub const default_client_inbox_capacity: usize = default_client_memory_pool_capacity;
