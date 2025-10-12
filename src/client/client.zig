@@ -8,7 +8,7 @@ const atomic = std.atomic;
 const uuid = @import("uuid");
 const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
-const KID = @import("kid").KID;
+const kid = @import("kid");
 
 const IO = @import("../io.zig").IO;
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
@@ -92,7 +92,6 @@ pub const Client = struct {
     inbox_mutex: std.Thread.Mutex,
     inbox: *RingBuffer(*Message),
     io: *IO,
-    kid: KID,
     memory_pool: *MemoryPool(Message),
     metrics: ClientMetrics,
     mutex: std.Thread.Mutex,
@@ -144,6 +143,8 @@ pub const Client = struct {
         outbox.* = try RingBuffer(*Message).init(allocator, constants.default_client_outbox_capacity);
         errdefer outbox.deinit();
 
+        kid.configure(config.client_id, .{});
+
         return Self{
             // .advertiser_callbacks = std.AutoHashMap(u128, AdvertiserCallback).init(allocator),
             .allocator = allocator,
@@ -158,7 +159,6 @@ pub const Client = struct {
             .outbox = outbox,
             .outbox_mutex = std.Thread.Mutex{},
             .io = io,
-            .kid = KID.init(config.client_id, .{}),
             .memory_pool = memory_pool,
             .metrics = ClientMetrics{},
             .mutex = std.Thread.Mutex{},
@@ -774,7 +774,7 @@ pub const Client = struct {
 
         // create a temporary id that will be used to identify this connection until it receives a proper
         // connection_id from the remote node
-        const tmp_conn_id = self.kid.generate();
+        const tmp_conn_id = kid.generate();
         conn.* = try Connection.init(
             tmp_conn_id,
             self.io,
@@ -858,7 +858,7 @@ pub const Client = struct {
 
         const client_topic = try self.findOrCreateClientTopic(topic_name, .{});
 
-        const callback_id = self.kid.generate();
+        const callback_id = kid.generate();
         try client_topic.addCallback(callback_id, callback);
         errdefer _ = client_topic.removeCallback(callback_id);
 
@@ -870,7 +870,7 @@ pub const Client = struct {
             return callback_id;
         }
 
-        const transaction_id = self.kid.generate();
+        const transaction_id = kid.generate();
 
         const subscribe_message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(subscribe_message);
@@ -919,7 +919,7 @@ pub const Client = struct {
             return;
         }
 
-        const transaction_id = self.kid.generate();
+        const transaction_id = kid.generate();
 
         const unsubscribe_message = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(unsubscribe_message);
@@ -960,7 +960,7 @@ pub const Client = struct {
 
         // const client_topic = try self.findOrCreateClientTopic(topic_name, .{});
 
-        // const callback_id = self.kid.generate();
+        // const callback_id = kid.generate();
         // try client_topic.addCallback(callback_id, callback);
         // errdefer _ = client_topic.removeCallback(callback_id);
 

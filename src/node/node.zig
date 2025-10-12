@@ -8,7 +8,7 @@ const uuid = @import("uuid");
 const constants = @import("../constants.zig");
 const utils = @import("../utils.zig");
 
-const KID = @import("kid").KID;
+const kid = @import("kid");
 
 const IO = @import("../io.zig").IO;
 const Worker = @import("./worker.zig").Worker;
@@ -104,7 +104,6 @@ pub const Node = struct {
     done_channel: *UnbufferedChannel(bool),
     inbox: *RingBuffer(Envelope),
     io: *IO,
-    kid: KID,
     listeners: *std.AutoHashMap(usize, *Listener),
     memory_pool: *MemoryPool(Message),
     metrics: NodeMetrics,
@@ -173,6 +172,8 @@ pub const Node = struct {
         authenticator.* = try Authenticator.init(allocator, config.authenticator_config);
         errdefer authenticator.deinit();
 
+        kid.configure(config.node_id, .{});
+
         return Self{
             .allocator = allocator,
             .authenticator = authenticator,
@@ -183,7 +184,6 @@ pub const Node = struct {
             .done_channel = done_channel,
             .inbox = inbox,
             .io = io,
-            .kid = KID.init(config.node_id, .{}),
             .listeners = listeners,
             .memory_pool = memory_pool,
             .metrics = .{},
@@ -462,7 +462,7 @@ pub const Node = struct {
                             //     worker.id,
                             // });
 
-                            self.inbox.concatenateAvailable(worker.inbox);
+                            _ = self.inbox.concatenateAvailable(worker.inbox);
                         } else @panic("failed to get worker");
                     }
                 }
@@ -523,7 +523,7 @@ pub const Node = struct {
                 const session_outbox = try self.findOrCreateSessionOutbox(subscriber.session_id);
 
                 // we need to rewrite each envelope to use a different conn_id
-                session_outbox.concatenateAvailable(subscriber.queue);
+                _ = session_outbox.concatenateAvailable(subscriber.queue);
             }
         }
     }
@@ -931,7 +931,7 @@ pub const Node = struct {
 
         const subscribe_ack_envelope = Envelope{
             .message = subscribe_ack,
-            .message_id = self.kid.generate(),
+            .message_id = kid.generate(),
             .session_id = envelope.session_id,
             .conn_id = envelope.conn_id,
         };
@@ -964,7 +964,7 @@ pub const Node = struct {
 
         const unsubscribe_ack_envelope = Envelope{
             .message = unsubscribe_ack,
-            .message_id = self.kid.generate(),
+            .message_id = kid.generate(),
             .session_id = envelope.session_id,
             .conn_id = envelope.conn_id,
         };
@@ -1179,7 +1179,7 @@ pub const Node = struct {
         const session = try self.allocator.create(Session);
         errdefer self.allocator.destroy(session);
 
-        const session_id = self.kid.generate();
+        const session_id = kid.generate();
         session.* = try Session.init(self.allocator, session_id, peer_id, peer_type, .round_robin);
         errdefer session.deinit(self.allocator);
 

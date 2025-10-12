@@ -7,7 +7,7 @@ const assert = std.debug.assert;
 const constants = @import("../constants.zig");
 const uuid = @import("uuid");
 
-const KID = @import("kid").KID;
+const kid = @import("kid");
 const UnbufferedChannel = @import("stdx").UnbufferedChannel;
 const RingBuffer = @import("stdx").RingBuffer;
 
@@ -295,7 +295,7 @@ pub const Worker = struct {
                                 .message = message,
                                 .session_id = session_id,
                                 .conn_id = conn.connection_id,
-                                .message_id = self.node.kid.generate(),
+                                .message_id = kid.generate(),
                             };
 
                             self.inbox_mutex.lock();
@@ -354,7 +354,7 @@ pub const Worker = struct {
         const conn = try self.allocator.create(Connection);
         errdefer self.allocator.destroy(conn);
 
-        const conn_id = self.node.kid.generate();
+        const conn_id = kid.generate();
         conn.* = try Connection.init(
             conn_id,
             self.io,

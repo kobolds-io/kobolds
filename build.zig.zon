@@ -5,12 +5,12 @@
     .minimum_zig_version = "0.15.1",
     .dependencies = .{
         .stdx = .{
-            .url = "https://github.com/kobolds-io/stdx/archive/refs/tags/v0.0.12.tar.gz",
-            .hash = "stdx-0.0.12-nyLNAfxSAgDXLwaHzPcziuvZntqg3wDfVvJeMme5XTpN",
+            .url = "https://github.com/kobolds-io/stdx/archive/refs/tags/v0.1.0.tar.gz",
+            .hash = "stdx-0.0.12-nyLNAfBqAgAYmoKAM_brl7VzOIcDLtNVhsbdHUNfdeQ0",
         },
         .kid = .{
-            .url = "https://github.com/kobolds-io/kid/archive/refs/tags/v0.0.2.tar.gz",
-            .hash = "kid-0.0.2-vgAj1vUkAABKk-1wNrESCVfeFaK6QxZnfxJIo6pLv-oX",
+            .url = "https://github.com/kobolds-io/kid/archive/refs/tags/v0.0.3.tar.gz",
+            .hash = "kid-0.0.3-vgAj1r0kAABhhqalktJSxT8pSNDzm6fxOBQm8oKkorZD",
         },
         .zbench = .{
             .url = "https://github.com/hendriknielaender/zBench/archive/v0.11.1.tar.gz",

@@ -121,7 +121,7 @@ pub const Topic = struct {
 
             if (publisher.queue.isEmpty()) continue;
 
-            self.queue.concatenateAvailable(publisher.queue);
+            _ = self.queue.concatenateAvailable(publisher.queue);
         }
     }
 
