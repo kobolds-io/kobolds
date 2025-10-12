@@ -124,7 +124,7 @@ fn publish(args: PublishArgs) !void {
 
     // defer client.drain(5_000 * std.time.ns_per_ms);
 
-    var buf: [32]u8 = undefined;
+    // var buf: [32]u8 = undefined;
     if (args.count > 0) {
         signal_handler.registerSigintHandler();
 
@@ -136,13 +136,13 @@ fn publish(args: PublishArgs) !void {
             if (signal_handler.sigint_triggered) return;
 
             // const topic_name = "b" ** constants.message_max_topic_name_size;
-            const body = "a" ** constants.message_max_body_size;
+            // const body = "a" ** constants.message_max_body_size;
             // client.publish(topic_name, body, .{}) catch {
-            client.publish(args.topic_name, body, .{}) catch {
-                // const ts = std.time.nanoTimestamp();
-                // const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
-                // client.publish(args.topic_name, str, .{}) catch {
-                // client.publish(args.topic_name, args.body, .{}) catch {
+            // client.publish(args.topic_name, body, .{}) catch {
+            // const ts = std.time.nanoTimestamp();
+            // const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
+            // client.publish(args.topic_name, str, .{}) catch {
+            client.publish(args.topic_name, args.body, .{}) catch {
                 published -= 1;
                 continue;
             };
@@ -171,10 +171,10 @@ fn publish(args: PublishArgs) !void {
     }
 
     if (args.rate == 0) {
-        const ts = std.time.nanoTimestamp();
-        const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
-        try client.publish(args.topic_name, str, .{});
-        // try client.publish(args.topic_name, args.body, .{});
+        // const ts = std.time.nanoTimestamp();
+        // const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
+        // try client.publish(args.topic_name, str, .{});
+        try client.publish(args.topic_name, args.body, .{});
     } else {
         signal_handler.registerSigintHandler();
 
@@ -191,15 +191,15 @@ fn publish(args: PublishArgs) !void {
             // schedule next slot
             next_deadline += period_ns;
 
-            const topic_name = "b" ** constants.message_max_topic_name_size;
-            const body = "a" ** constants.message_max_body_size;
-            client.publish(topic_name, body, .{}) catch {
-                // client.publish(args.topic_name, body, .{}) catch {
-                // client.publish(args.topic_name, "", .{}) catch {
-                // const ts = std.time.nanoTimestamp();
-                // const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
-                // client.publish(args.topic_name, args.body, .{}) catch {
-                // client.publish(args.topic_name, str, .{}) catch {
+            // const topic_name = "b" ** constants.message_max_topic_name_size;
+            // const body = "a" ** constants.message_max_body_size;
+            // client.publish(topic_name, body, .{}) catch {
+            // client.publish(args.topic_name, body, .{}) catch {
+            // client.publish(args.topic_name, "", .{}) catch {
+            // const ts = std.time.nanoTimestamp();
+            // const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
+            // client.publish(args.topic_name, str, .{}) catch {
+            client.publish(args.topic_name, args.body, .{}) catch {
                 // std.debug.print("too many publishes\n", .{});
                 std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;
@@ -217,14 +217,14 @@ fn publish(args: PublishArgs) !void {
                 last_report = elapsed;
             }
 
-            // // pacing
-            // const now = std.time.nanoTimestamp();
-            // if (next_deadline > now) {
-            //     std.Thread.sleep(@intCast(next_deadline - now));
-            // } else {
-            //     // we fell behind — skip sleeping
-            //     next_deadline = now;
-            // }
+            // pacing
+            const now = std.time.nanoTimestamp();
+            if (next_deadline > now) {
+                std.Thread.sleep(@intCast(next_deadline - now));
+            } else {
+                // we fell behind — skip sleeping
+                next_deadline = now;
+            }
         }
     }
 }

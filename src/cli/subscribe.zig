@@ -122,23 +122,23 @@ fn subscribe(args: SubscribeArgs) !void {
         }
     }.callback;
 
-    const callback_2 = struct {
-        pub fn callback(message: *Message) void {
-            messages_recv_count += 1;
-            if (messages_recv_count % 1000 == 0) {
-                const end = std.time.nanoTimestamp();
-                const start = std.fmt.parseInt(i128, message.body(), 10) catch 0;
+    // const callback_2 = struct {
+    //     pub fn callback(message: *Message) void {
+    //         messages_recv_count += 1;
+    //         if (messages_recv_count % 1000 == 0) {
+    //             const end = std.time.nanoTimestamp();
+    //             const start = std.fmt.parseInt(i128, message.body(), 10) catch 0;
 
-                const diff = @divFloor(end - start, std.time.ns_per_us);
-                std.debug.print("messages_recv_count: {}, took: {d}us\n", .{ messages_recv_count, diff });
-            }
-        }
-    }.callback;
-    _ = callback_2;
+    //             const diff = @divFloor(end - start, std.time.ns_per_us);
+    //             std.debug.print("messages_recv_count: {}, took: {d}us\n", .{ messages_recv_count, diff });
+    //         }
+    //     }
+    // }.callback;
+    // _ = callback_2;
 
-    const topic_name = "b" ** constants.message_max_topic_name_size;
-    const callback_1_id = try client.subscribe(topic_name, callback_1, .{});
-    defer client.unsubscribe(args.topic_name, callback_1_id, .{ .timeout_ms = 5_000 }) catch unreachable;
+    // const topic_name = "b" ** constants.message_max_topic_name_size;
+    // const callback_1_id = try client.subscribe(topic_name, callback_1, .{});
+    // defer client.unsubscribe(args.topic_name, callback_1_id, .{ .timeout_ms = 5_000 }) catch unreachable;
 
     const callback_2_id = try client.subscribe(args.topic_name, callback_1, .{});
     defer client.unsubscribe(args.topic_name, callback_2_id, .{ .timeout_ms = 5_000 }) catch unreachable;
