@@ -7,7 +7,7 @@ const testing = std.testing;
 const hash = @import("../hash.zig");
 
 const uuid = @import("uuid");
-const KID = @import("kid").KID;
+const kid = @import("kid");
 const constants = @import("../constants.zig");
 
 const Message = @import("../protocol/message.zig").Message;
@@ -602,8 +602,6 @@ pub const Connection = struct {
 test "init/deinit" {
     const allocator = testing.allocator;
 
-    var kid = KID.init(0, .{});
-
     var io = try IO.init(16, 0);
     defer io.deinit();
 
@@ -620,7 +618,6 @@ test "init/deinit" {
 
 test "processing inbound messages" {
     const allocator = testing.allocator;
-    var kid = KID.init(0, .{});
 
     var io = try IO.init(16, 0);
     defer io.deinit();

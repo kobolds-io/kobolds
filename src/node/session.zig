@@ -3,7 +3,7 @@ const posix = std.posix;
 const testing = std.testing;
 const assert = std.debug.assert;
 
-const KID = @import("kid").KID;
+const kid = @import("kid");
 const IO = @import("../io.zig").IO;
 
 const MemoryPool = @import("stdx").MemoryPool;
@@ -208,8 +208,6 @@ test "add getNext remove" {
     defer session.deinit(allocator);
 
     try testing.expectEqual(0, session.connections.count());
-
-    var kid = KID.init(0, .{});
 
     var io = try IO.init(16, 0);
     defer io.deinit();
