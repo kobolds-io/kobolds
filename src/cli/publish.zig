@@ -196,10 +196,10 @@ fn publish(args: PublishArgs) !void {
             // client.publish(topic_name, body, .{}) catch {
             // client.publish(args.topic_name, body, .{}) catch {
             // client.publish(args.topic_name, "", .{}) catch {
-            // const ts = std.time.nanoTimestamp();
-            // const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
-            // client.publish(args.topic_name, str, .{}) catch {
-            client.publish(args.topic_name, args.body, .{}) catch {
+            const ts = std.time.nanoTimestamp();
+            const str = try std.fmt.bufPrint(&buf, "{d}", .{ts});
+            client.publish(args.topic_name, str, .{}) catch {
+                // client.publish(args.topic_name, args.body, .{}) catch {
                 // std.debug.print("too many publishes\n", .{});
                 std.Thread.sleep(1 * std.time.ns_per_ms);
                 continue;

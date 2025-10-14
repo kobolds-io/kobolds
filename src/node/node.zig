@@ -103,6 +103,7 @@ pub const Node = struct {
     connection_outboxes: std.AutoHashMapUnmanaged(u64, *RingBuffer(Envelope)),
     done_channel: *UnbufferedChannel(bool),
     inbox: *RingBuffer(Envelope),
+    outbox: *RingBuffer(Envelope),
     io: *IO,
     listeners: *std.AutoHashMap(usize, *Listener),
     memory_pool: *MemoryPool(Message),
@@ -160,6 +161,12 @@ pub const Node = struct {
         inbox.* = try RingBuffer(Envelope).init(allocator, config.memory_pool_capacity);
         errdefer inbox.deinit();
 
+        const outbox = try allocator.create(RingBuffer(Envelope));
+        errdefer allocator.destroy(outbox);
+
+        outbox.* = try RingBuffer(Envelope).init(allocator, config.memory_pool_capacity);
+        errdefer outbox.deinit();
+
         const listeners = try allocator.create(std.AutoHashMap(usize, *Listener));
         errdefer allocator.destroy(listeners);
 
@@ -183,6 +190,7 @@ pub const Node = struct {
             .connection_outboxes = .empty,
             .done_channel = done_channel,
             .inbox = inbox,
+            .outbox = outbox,
             .io = io,
             .listeners = listeners,
             .memory_pool = memory_pool,
@@ -243,6 +251,11 @@ pub const Node = struct {
             if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
         }
 
+        while (self.outbox.dequeue()) |envelope| {
+            envelope.message.deref();
+            if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+        }
+
         var connection_outboxes_iter = self.session_outboxes.valueIterator();
         while (connection_outboxes_iter.next()) |entry| {
             const outbox = entry.*;
@@ -263,6 +276,7 @@ pub const Node = struct {
         self.topics.deinit(self.allocator);
         self.services.deinit();
         self.inbox.deinit();
+        self.outbox.deinit();
         self.session_outboxes.deinit(self.allocator);
         self.connection_outboxes.deinit(self.allocator);
         self.authenticator.deinit();
@@ -274,6 +288,7 @@ pub const Node = struct {
         self.allocator.destroy(self.close_channel);
         self.allocator.destroy(self.done_channel);
         self.allocator.destroy(self.inbox);
+        self.allocator.destroy(self.outbox);
         self.allocator.destroy(self.io);
         self.allocator.destroy(self.listeners);
         self.allocator.destroy(self.memory_pool);
@@ -388,9 +403,13 @@ pub const Node = struct {
         try self.gatherMessages();
         const gather_messages_end = timer.read();
 
-        const process_messages_start = timer.read();
-        try self.processMessages();
-        const process_messages_end = timer.read();
+        const process_inbound_messages_start = timer.read();
+        try self.processInboundMessages();
+        const process_inbound_messages_end = timer.read();
+
+        const process_outbound_messages_start = timer.read();
+        try self.processOutboundMessages();
+        const process_outbound_messages_end = timer.read();
 
         const aggregate_messages_start = timer.read();
         try self.aggregateMessages();
@@ -403,14 +422,15 @@ pub const Node = struct {
         const tick_end = timer.read();
         const tick_total = (tick_end - tick_start) / std.time.ns_per_us;
 
-        if (tick_total > 100_000) {
-            log.info("tick: {}us, print_metrics: {}us, prune_sessions: {}us, add_inbound_connections: {}us, gather: {}us, process: {}us, aggregate: {}us, distribute: {}us", .{
+        if (tick_total > 10_000) {
+            log.info("tick: {}us, print_metrics: {}us, prune_sessions: {}us, add_inbound_connections: {}us, gather: {}us, process_inbound: {}us, process_outbound: {}us, aggregate: {}us, distribute: {}us", .{
                 tick_total,
                 (print_metrics_end - print_metrics_start) / std.time.ns_per_us,
                 (prune_sessions_end - prune_sessions_start) / std.time.ns_per_us,
                 (add_inbound_connections_end - add_inbound_connections_start) / std.time.ns_per_us,
                 (gather_messages_end - gather_messages_start) / std.time.ns_per_us,
-                (process_messages_end - process_messages_start) / std.time.ns_per_us,
+                (process_inbound_messages_end - process_inbound_messages_start) / std.time.ns_per_us,
+                (process_outbound_messages_end - process_outbound_messages_start) / std.time.ns_per_us,
                 (aggregate_messages_end - aggregate_messages_start) / std.time.ns_per_us,
                 (distribute_messages_end - distribute_messages_start) / std.time.ns_per_us,
             });
@@ -470,7 +490,7 @@ pub const Node = struct {
         }
     }
 
-    fn processMessages(self: *Self) !void {
+    fn processInboundMessages(self: *Self) !void {
         var processed_messages_count: i64 = 0;
         var processed_bytes_count: i64 = 0;
 
@@ -507,6 +527,10 @@ pub const Node = struct {
 
             try topic.tick();
         }
+    }
+
+    fn processOutboundMessages(self: *Self) !void {
+        _ = self;
     }
 
     fn aggregateMessages(self: *Self) !void {
@@ -872,27 +896,6 @@ pub const Node = struct {
         try worker.addOutboundConnection(config);
     }
 
-    fn handlePublish2(self: *Self, envelope: Envelope) !void {
-        assert(envelope.message.refs() == 1);
-
-        const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
-        if (topic.queue.available() == 0) try topic.tick(); // if there is no space, try to advance the topic
-
-        const publisher_key = utils.generateKey64(topic.topic_name, envelope.session_id);
-
-        var publisher: *Publisher = undefined;
-        if (topic.publishers.get(publisher_key)) |p| {
-            publisher = p;
-        } else {
-            const p = try topic.addPublisher(publisher_key, envelope.session_id);
-            publisher = p;
-        }
-
-        envelope.message.ref();
-        publisher.queue.enqueue(envelope) catch envelope.message.deref();
-    }
-
-    // faster than handle publish 2
     fn handlePublish(self: *Self, envelope: Envelope) !void {
         assert(envelope.message.refs() == 1);
 
@@ -901,6 +904,12 @@ pub const Node = struct {
 
         envelope.message.ref();
         topic.queue.enqueue(envelope) catch envelope.message.deref();
+
+        const received_at = std.time.nanoTimestamp();
+        const created_at = std.fmt.parseInt(i128, envelope.message.body(), 10) catch 0;
+
+        const diff = @divFloor(received_at - created_at, std.time.ns_per_us);
+        log.info("took: {d}us", .{diff});
     }
 
     fn handleSubscribe(self: *Self, envelope: Envelope) !void {

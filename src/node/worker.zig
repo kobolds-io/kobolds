@@ -231,7 +231,7 @@ pub const Worker = struct {
 
         const tick_total = (tick_end - tick_start) / std.time.ns_per_us;
 
-        if (tick_total > 100_000) {
+        if (tick_total > 1_000) {
             log.info("tick: {}us, tick_connections: {}us, process_inbound_messages: {}us, process_outbound_message: {}us", .{
                 tick_total,
                 (tick_connections_end - tick_connections_start) / std.time.ns_per_us,
@@ -289,6 +289,14 @@ pub const Worker = struct {
                         //     self.node.memory_pool.destroy(message);
                         // }
                         // NOTE: debugging only ^^^^^^^^^^^^^^^^^^^^^
+
+                        if (message.fixed_headers.message_type == .publish) {
+                            const received_at = std.time.nanoTimestamp();
+                            const created_at = std.fmt.parseInt(i128, message.body(), 10) catch 0;
+
+                            const diff = @divFloor(received_at - created_at, std.time.ns_per_us);
+                            log.info("took: {d}us", .{diff});
+                        }
 
                         if (session_id_opt) |session_id| {
                             const envelope = Envelope{

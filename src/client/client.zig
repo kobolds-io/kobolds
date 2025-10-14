@@ -492,6 +492,14 @@ pub const Client = struct {
 
             const conn = session.getNextConnection();
 
+            if (message.fixed_headers.message_type == .publish) {
+                const received_at = std.time.nanoTimestamp();
+                const created_at = std.fmt.parseInt(i128, message.body(), 10) catch 0;
+
+                const diff = @divFloor(received_at - created_at, std.time.ns_per_us);
+                log.info("took: {d}us", .{diff});
+            }
+
             conn.outbox.enqueue(message) catch {
                 self.outbox.prepend(message) catch unreachable;
                 return;
@@ -767,6 +775,9 @@ pub const Client = struct {
         const protocol = posix.IPPROTO.TCP;
         const socket = try posix.socket(address.any.family, socket_type, protocol);
         errdefer posix.close(socket);
+
+        const TCP_NODELAY = 1;
+        try posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, TCP_NODELAY)));
 
         // initialize the connection
         const conn = try self.allocator.create(Connection);

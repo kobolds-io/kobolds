@@ -261,6 +261,9 @@ pub const Listener = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
+        const TCP_NODELAY = 1;
+        posix.setsockopt(socket, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, TCP_NODELAY))) catch unreachable;
+
         self.sockets.append(socket) catch unreachable;
     }
 
