@@ -14,23 +14,23 @@ pub const message_max_size = @sizeOf(Message);
 
 /// The size of the parser's working buffer to be used for decoding messsages
 /// over multiple parse calls.
-pub const parser_max_buffer_size = (1024 * 256) * 2; // TODO: this number needs to be adjusted
+// pub const parser_max_buffer_size = (1024 * 256) * 2; // TODO: this number needs to be adjusted
 // pub const parser_max_buffer_size = (1024 * 64) * 2; // TODO: this number needs to be adjusted
-// pub const parser_max_buffer_size = (1024 * 32) * 2; // TODO: this number needs to be adjusted
+pub const parser_max_buffer_size = (1024 * 32) * 2; // TODO: this number needs to be adjusted
 // pub const parser_max_buffer_size = @sizeOf(Message) * 2; // TODO: this number needs to be adjusted
 pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, @sizeOf(Message));
 // pub const parser_messages_buffer_size = 1000;
 
 /// The number of bytes used as the recv buffer in each connection
-pub const connection_recv_buffer_size = (1024 * 256);
+// pub const connection_recv_buffer_size = (1024 * 256);
 // pub const connection_recv_buffer_size = (1024 * 64);
-// pub const connection_recv_buffer_size = (1024 * 32);
+pub const connection_recv_buffer_size = (1024 * 32);
 // pub const connection_recv_buffer_size = 300;
 
 // / The number of bytes used as the send buffer in each connection
-pub const connection_send_buffer_size = (1024 * 256);
+// pub const connection_send_buffer_size = (1024 * 256);
 // pub const connection_send_buffer_size = (1024 * 64);
-// pub const connection_send_buffer_size = (1024 * 32);
+pub const connection_send_buffer_size = (1024 * 32);
 // pub const connection_send_buffer_size = 300;
 
 /// The number of microseconds the IO instance will wait until it flushes
