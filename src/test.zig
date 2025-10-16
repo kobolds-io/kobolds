@@ -14,4 +14,5 @@ comptime {
     _ = @import("./protocol/message.zig");
     _ = @import("./protocol/parser.zig");
     _ = @import("./utils.zig");
+    _ = @import("./transport/tcp.zig");
 }
