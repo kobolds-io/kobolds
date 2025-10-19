@@ -409,6 +409,8 @@ pub const Connection = struct {
                     // instead of dealing with the overflow just prepend and try again
                     self.outbox.prepend(message) catch unreachable;
                     break;
+
+                    // NOTE: uncommenting the stuff below will use an outbound buffer
                     // self.send_buffer_list.appendSliceAssumeCapacity(self.tmp_serialization_buffer[0..bytes_available]);
 
                     // // save the remaining bytes for the next iteration
