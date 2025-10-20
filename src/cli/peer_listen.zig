@@ -56,15 +56,15 @@ fn listen(host: []const u8, port: u16, worker_threads: usize) !void {
     var peer_config = PeerConfig{
         .worker_threads = worker_threads,
         .peer_id = 1,
-        // .authenticator_config = .{
-        //     .token = .{
-        //         .clients = &.{
-        //             .{ .id = 10, .token = "asdf" }, // for now these are hardcoded
-        //             .{ .id = 11, .token = "asdf" },
-        //         },
-        //         .peers = &.{},
-        //     },
-        // },
+        .authenticator_config = .{
+            .token = .{
+                .clients = &.{
+                    .{ .id = 10, .token = "asdf" }, // for now these are hardcoded
+                    .{ .id = 11, .token = "asdf" },
+                },
+                .peers = &.{},
+            },
+        },
     };
 
     // This is just a test used to whitelist a certain inbound connection origins

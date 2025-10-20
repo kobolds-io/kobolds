@@ -476,9 +476,11 @@ pub const Worker = struct {
             if (self.connections.get(envelope.conn_id)) |conn| {
                 switch (envelope.message.fixed_headers.message_type) {
                     .auth_success => {
+                        assert(conn.protocol_state == .authenticating);
                         conn.protocol_state = .ready;
                     },
                     .auth_failure => {
+                        assert(conn.protocol_state == .authenticating);
                         conn.protocol_state = .terminating;
                     },
                     else => {},

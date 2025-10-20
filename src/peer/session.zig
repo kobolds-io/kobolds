@@ -31,7 +31,7 @@ pub const Session = struct {
     // id_seed: u64, // Assigned seed for peer-local ID generation
 
     // Connection management
-    connections: std.AutoHashMapUnmanaged(u64, *Connection), // Active TCP connections under this session
+    connections: std.AutoHashMapUnmanaged(u64, void), // Active TCP connections under this session
     // lease_expiry: i64, // Expiration timestamp (epoch ms)
     // max_connections: u16, // Policy: max connections allowed for this session
 
@@ -96,14 +96,14 @@ pub const Session = struct {
         self.subscriptions.deinit(allocator);
     }
 
-    pub fn addConnection(self: *Self, allocator: std.mem.Allocator, conn: *Connection) !void {
-        if (self.connections.contains(conn.connection_id)) return error.AlreadyExists;
+    pub fn addConnection(self: *Self, allocator: std.mem.Allocator, conn_id: u64) !void {
+        if (self.connections.contains(conn_id)) return error.AlreadyExists;
 
-        try self.connections.put(allocator, conn.connection_id, conn);
-        errdefer _ = self.connections.remove(conn.connection_id);
+        try self.connections.put(allocator, conn_id, {});
+        errdefer _ = self.connections.remove(conn_id);
 
         switch (self.load_balancer) {
-            .round_robin => |*lb| try lb.addItem(allocator, conn.connection_id),
+            .round_robin => |*lb| try lb.addItem(allocator, conn_id),
         }
     }
 

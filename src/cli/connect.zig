@@ -86,8 +86,15 @@ fn connect(args: ConnectArgs) !void {
     var client = try Client.init(allocator, client_config);
     defer client.deinit();
 
+    var timer = try std.time.Timer.start();
+    const connect_start = timer.read();
     try client.start();
     defer client.close();
+
+    // wait for the client to be connected
+    client.awaitConnected(5_000 * std.time.ns_per_ms);
+    const connect_end = timer.read();
+    std.debug.print("established connection took {}ms\n", .{(connect_end - connect_start) / std.time.ns_per_ms});
 
     signal_handler.registerSigintHandler();
 

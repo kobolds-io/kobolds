@@ -27,6 +27,10 @@ const PeerType = @import("../protocol/connection.zig").PeerType;
 const ChallengeMethod = @import("../protocol/message.zig").ChallengeMethod;
 const ChallengeAlgorithm = @import("../protocol/message.zig").ChallengeAlgorithm;
 
+const Authenticator = @import("./authenticator.zig").Authenticator;
+const AuthenticatorConfig = @import("./authenticator.zig").AuthenticatorConfig;
+const TokenEntry = @import("./authenticator.zig").TokenAuthStrategy.TokenEntry;
+
 /// Peer is the central construct for interacting with Kobolds.
 pub const Peer = struct {
     const Self = @This();
@@ -38,6 +42,7 @@ pub const Peer = struct {
         outbox_capacity: usize = constants.default_client_outbox_capacity,
         worker_threads: usize = 1,
         listener_configs: ?[]const ListenerConfig = null,
+        authenticator_config: AuthenticatorConfig = .{ .none = .{} },
     };
 
     const State = enum {
@@ -575,17 +580,54 @@ pub const Peer = struct {
 
         const session_outbox = try self.findOrCreateSessionOutbox(envelope.session_id.?);
 
+        // Ensure only one handshake per connection
+        const entry = self.handshakes.fetchRemove(envelope.conn_id) orelse return error.HandshakeMissing;
+
+        const handshake = entry.value;
+
         const reply = try self.memory_pool.create();
         errdefer self.memory_pool.destroy(reply);
 
-        reply.* = Message.new(.auth_success);
-        reply.extension_headers.auth_success.peer_id = @as(u64, self.id);
-        reply.extension_headers.auth_success.session_id = envelope.session_id.?;
-        const token = "a" ** 256;
-        reply.setBody(token);
+        switch (handshake.challenge_method) {
+            .token => {
+                const message = envelope.message;
+                if (self.authenticate(handshake, message)) {
+                    // conn.protocol_state = .ready;
 
-        reply.ref();
-        errdefer reply.deref();
+                    log.info("successfully authenticated (creating session)!", .{});
+                    const session_init = message.extension_headers.session_init;
+
+                    const session = try self.createSession(session_init.peer_id, session_init.peer_type);
+                    errdefer self.removeSession(session.session_id);
+
+                    try self.addConnectionToSession(session.session_id, envelope.conn_id);
+                    errdefer _ = self.removeConnectionFromSession(session.session_id, envelope.conn_id);
+
+                    reply.* = Message.new(.auth_success);
+                    reply.ref();
+                    errdefer reply.deref();
+
+                    reply.extension_headers.auth_success.peer_id = session.peer_id;
+                    reply.extension_headers.auth_success.session_id = session.session_id;
+                    reply.setBody(session.session_token);
+
+                    // try self.conns_sessions.put(self.allocator, conn.connection_id, session.session_id);
+                    // errdefer _ = self.conns_sessions.remove(conn.connection_id);
+
+                    // try conn.outbox.enqueue(reply);
+                } else {
+                    // conn.protocol_state = .terminating;
+
+                    reply.* = Message.new(.auth_failure);
+                    reply.ref();
+                    errdefer reply.deref();
+
+                    reply.extension_headers.auth_failure.error_code = .unauthorized;
+                    // try conn.outbox.enqueue(reply);
+                }
+            },
+            else => @panic("unsupported challenge_method"),
+        }
 
         const reply_envelope = Envelope{
             .conn_id = envelope.conn_id,
@@ -651,29 +693,47 @@ pub const Peer = struct {
     }
 
     fn authenticate(self: *Self, handshake: Handshake, message: *Message) bool {
-        _ = self;
-        _ = handshake;
-        _ = message;
-        return true;
-        // const auth_token_config = self.node.config.authenticator_config.token;
+        // return true;
+        const auth_token_config = self.config.authenticator_config.token;
 
-        // const session_init = message.extension_headers.session_init;
-        // switch (session_init.peer_type) {
-        //     .client => {
-        //         if (auth_token_config.clients) |client_token_entries| {
-        //             if (self.findClientToken(client_token_entries, session_init.peer_id)) |token_entry| {
-        //                 return switch (handshake.algorithm) {
-        //                     .hmac256 => self.verifyHMAC256(token_entry.token, handshake.nonce, message.body()),
-        //                     else => @panic("unsupported algorithm"),
-        //                 };
-        //             } else {
-        //                 log.err("could not authenticate", .{});
-        //                 return false;
-        //             }
-        //         }
-        //     },
-        //     .node => @panic("unsupported peer type"),
-        // }
+        const session_init = message.extension_headers.session_init;
+        switch (session_init.peer_type) {
+            .client => {
+                if (auth_token_config.clients) |client_token_entries| {
+                    if (self.findClientToken(client_token_entries, session_init.peer_id)) |token_entry| {
+                        return switch (handshake.algorithm) {
+                            .hmac256 => self.verifyHMAC256(token_entry.token, handshake.nonce, message.body()),
+                            else => @panic("unsupported algorithm"),
+                        };
+                    } else {
+                        log.err("could not authenticate", .{});
+                        return false;
+                    }
+                }
+            },
+            .node => @panic("unsupported peer type"),
+        }
+
+        return false;
+    }
+
+    fn findClientToken(_: *Self, clients: []const TokenEntry, peer_id: u64) ?TokenEntry {
+        for (clients) |token_entry| if (token_entry.id == peer_id) return token_entry;
+        return null;
+    }
+
+    fn verifyHMAC256(_: *Self, token: []const u8, nonce: u128, challenge_payload: []const u8) bool {
+        const HMAC = std.crypto.auth.hmac.sha2.HmacSha256;
+        var out: [HMAC.mac_length]u8 = undefined;
+        var nonce_buf: [@sizeOf(u128)]u8 = undefined;
+
+        std.mem.writeInt(u128, &nonce_buf, nonce, .big);
+
+        var hmac = HMAC.init(token);
+        hmac.update(&nonce_buf);
+        hmac.final(&out);
+
+        return std.mem.eql(u8, challenge_payload, &out);
     }
 
     fn initializeWorkers(self: *Self) !void {
@@ -794,12 +854,12 @@ pub const Peer = struct {
         return self.sessions.get(session_id);
     }
 
-    fn addConnectionToSession(self: *Self, session_id: u64, conn: *Connection) !void {
+    fn addConnectionToSession(self: *Self, session_id: u64, conn_id: u64) !void {
         self.sessions_mutex.lock();
         defer self.sessions_mutex.unlock();
 
         if (self.sessions.get(session_id)) |session| {
-            try session.addConnection(self.allocator, conn);
+            try session.addConnection(self.allocator, conn_id);
         } else {
             return error.SessionNotFound;
         }

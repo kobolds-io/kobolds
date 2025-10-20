@@ -36,7 +36,7 @@ pub const TokenAuthStrategy = struct {
 
     pub const Config = struct {
         clients: ?[]const TokenEntry,
-        nodes: ?[]const TokenEntry,
+        peers: ?[]const TokenEntry,
     };
 
     pub const TokenEntry = struct {
@@ -57,7 +57,7 @@ pub const TokenAuthStrategy = struct {
 
     allocator: std.mem.Allocator,
     clients: *std.array_list.Managed(TokenEntry),
-    nodes: *std.array_list.Managed(TokenEntry),
+    peers: *std.array_list.Managed(TokenEntry),
 
     pub fn init(allocator: std.mem.Allocator, config: Config) !Self {
         const clients = try allocator.create(std.array_list.Managed(TokenEntry));
@@ -76,14 +76,14 @@ pub const TokenAuthStrategy = struct {
             try clients.appendSlice(config.clients.?);
         }
 
-        if (config.nodes != null) {
-            try peers.appendSlice(config.nodes.?);
+        if (config.peers != null) {
+            try peers.appendSlice(config.peers.?);
         }
 
         return Self{
             .allocator = allocator,
             .clients = clients,
-            .nodes = peers,
+            .peers = peers,
         };
     }
 
@@ -105,9 +105,9 @@ pub const TokenAuthStrategy = struct {
 
     pub fn deinit(self: *Self) void {
         self.clients.deinit();
-        self.nodes.deinit();
+        self.peers.deinit();
         self.allocator.destroy(self.clients);
-        self.allocator.destroy(self.nodes);
+        self.allocator.destroy(self.peers);
     }
 };
 
