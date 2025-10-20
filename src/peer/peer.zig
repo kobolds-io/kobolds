@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
 const log = std.log.scoped(.peer);
+const posix = std.posix;
 
 const constants = @import("../constants.zig");
 const kid = @import("kid");
@@ -12,6 +13,8 @@ const RingBuffer = stdx.RingBuffer;
 const UnbufferedChannel = stdx.UnbufferedChannel;
 const IO = @import("../io.zig").IO;
 const LoadBalancer = @import("../load_balancers/load_balancer.zig").LoadBalancer;
+const Envelope = @import("./envelope.zig").Envelope;
+const Session = @import("./session.zig").Session;
 
 const Listener = @import("./listener.zig").Listener;
 const ListenerConfig = @import("./listener.zig").ListenerConfig;
@@ -19,6 +22,10 @@ const ListenerConfig = @import("./listener.zig").ListenerConfig;
 const Worker = @import("./worker.zig").Worker;
 
 const Message = @import("../protocol/message.zig").Message;
+const Connection = @import("../protocol/connection.zig").Connection;
+const PeerType = @import("../protocol/connection.zig").PeerType;
+const ChallengeMethod = @import("../protocol/message.zig").ChallengeMethod;
+const ChallengeAlgorithm = @import("../protocol/message.zig").ChallengeAlgorithm;
 
 /// Peer is the central construct for interacting with Kobolds.
 pub const Peer = struct {
@@ -30,13 +37,20 @@ pub const Peer = struct {
         inbox_capacity: usize = constants.default_client_inbox_capacity,
         outbox_capacity: usize = constants.default_client_outbox_capacity,
         worker_threads: usize = 1,
-        listener_configs: ?[]ListenerConfig = null,
+        listener_configs: ?[]const ListenerConfig = null,
     };
 
     const State = enum {
         running,
         closing,
         closed,
+    };
+
+    const Handshake = struct {
+        nonce: u128,
+        connection_id: u64,
+        challenge_method: ChallengeMethod,
+        algorithm: ChallengeAlgorithm,
     };
 
     allocator: std.mem.Allocator,
@@ -47,21 +61,23 @@ pub const Peer = struct {
     done_channel: *UnbufferedChannel(bool),
     id: u11,
     inbox_mutex: std.Thread.Mutex,
-    inbox: *RingBuffer(*Message),
+    inbox: *RingBuffer(Envelope),
     io: *IO,
     memory_pool: *MemoryPool(Message),
     // metrics: ClientMetrics,
+    session_outboxes: std.AutoHashMapUnmanaged(u64, *RingBuffer(Envelope)),
     outbox_mutex: std.Thread.Mutex,
-    outbox: *RingBuffer(*Message),
+    outbox: *RingBuffer(Envelope),
 
     listeners: *std.AutoHashMapUnmanaged(usize, *Listener),
     workers: *std.AutoHashMapUnmanaged(usize, *Worker),
     workers_load_balancer: LoadBalancer(usize),
     // services_mutex: std.Thread.Mutex,
     // services: std.StringHashMap(*ClientService),
-    // session_mutex: std.Thread.Mutex,
-    // session: ?*Session = null,
+    sessions: std.AutoHashMapUnmanaged(u64, *Session),
+    sessions_mutex: std.Thread.Mutex,
     state: State,
+    handshakes: std.AutoHashMapUnmanaged(u64, Handshake),
     // topics_mutex: std.Thread.Mutex,
     // topics: std.StringHashMap(*ClientTopic),
     // transactions_mutex: std.Thread.Mutex,
@@ -90,16 +106,16 @@ pub const Peer = struct {
         memory_pool.* = try MemoryPool(Message).init(allocator, config.memory_pool_capacity);
         errdefer memory_pool.deinit();
 
-        const inbox = try allocator.create(RingBuffer(*Message));
+        const inbox = try allocator.create(RingBuffer(Envelope));
         errdefer allocator.destroy(inbox);
 
-        inbox.* = try RingBuffer(*Message).init(allocator, config.inbox_capacity);
+        inbox.* = try RingBuffer(Envelope).init(allocator, config.inbox_capacity);
         errdefer inbox.deinit();
 
-        const outbox = try allocator.create(RingBuffer(*Message));
+        const outbox = try allocator.create(RingBuffer(Envelope));
         errdefer allocator.destroy(outbox);
 
-        outbox.* = try RingBuffer(*Message).init(allocator, config.outbox_capacity);
+        outbox.* = try RingBuffer(Envelope).init(allocator, config.outbox_capacity);
         errdefer outbox.deinit();
 
         const workers = try allocator.create(std.AutoHashMapUnmanaged(usize, *Worker));
@@ -132,11 +148,13 @@ pub const Peer = struct {
             .io = io,
             .memory_pool = memory_pool,
             .listeners = listeners,
+            .handshakes = .empty,
             // .metrics = ClientMetrics{},
             // .services_mutex = std.Thread.Mutex{},
             // .services = std.StringHashMap(*ClientService).init(allocator),
-            // .session_mutex = std.Thread.Mutex{},
-            // .session = null,
+            .sessions_mutex = std.Thread.Mutex{},
+            .sessions = .empty,
+            .session_outboxes = .empty,
             .state = .closed,
             // .topics_mutex = std.Thread.Mutex{},
             // .topics = std.StringHashMap(*ClientTopic).init(allocator),
@@ -201,20 +219,37 @@ pub const Peer = struct {
             self.allocator.destroy(listener);
         }
 
-        while (self.inbox.dequeue()) |message| {
+        while (self.inbox.dequeue()) |envelope| {
+            const message = envelope.message;
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
-        while (self.outbox.dequeue()) |message| {
+        while (self.outbox.dequeue()) |envelope| {
+            const message = envelope.message;
             message.deref();
             if (message.refs() == 0) self.memory_pool.destroy(message);
         }
 
-        // if (self.session) |session| {
-        //     session.deinit(self.allocator);
-        //     self.allocator.destroy(session);
-        // }
+        var sessions_iter = self.sessions.valueIterator();
+        while (sessions_iter.next()) |entry| {
+            const session = entry.*;
+            session.deinit(self.allocator);
+            self.allocator.destroy(session);
+        }
+
+        var session_outboxes_iter = self.session_outboxes.valueIterator();
+        while (session_outboxes_iter.next()) |entry| {
+            const outbox = entry.*;
+
+            while (outbox.dequeue()) |envelope| {
+                envelope.message.deref();
+                if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+            }
+
+            outbox.deinit();
+            self.allocator.destroy(outbox);
+        }
 
         // self.connections.deinit();
         // self.transactions.deinit(self.allocator);
@@ -224,6 +259,9 @@ pub const Peer = struct {
         self.listeners.deinit(self.allocator);
         self.memory_pool.deinit();
         self.outbox.deinit();
+        self.sessions.deinit(self.allocator);
+        self.session_outboxes.deinit(self.allocator);
+        self.handshakes.deinit(self.allocator);
         self.workers.deinit(self.allocator);
         switch (self.workers_load_balancer) {
             .round_robin => |*lb| lb.deinit(self.allocator),
@@ -329,7 +367,313 @@ pub const Peer = struct {
     }
 
     fn tick(self: *Self) !void {
+        try self.gatherInboundSockets();
+        try self.gatherEnvelopes();
+        try self.processInboundEnvelopes();
+        try self.distributeMessages();
+    }
+
+    fn gatherEnvelopes(self: *Self) !void {
+        switch (self.workers_load_balancer) {
+            .round_robin => |*lb| {
+                var iters: usize = 0;
+
+                while (iters < self.workers.count()) : (iters += 1) {
+                    if (self.inbox.available() == 0) return;
+
+                    if (lb.next()) |worker_id| {
+                        if (self.workers.get(worker_id)) |worker| {
+                            worker.inbox_mutex.lock();
+                            defer worker.inbox_mutex.unlock();
+
+                            if (worker.inbox.isEmpty()) continue;
+
+                            // const gathered_count = @min(worker.inbox.count, self.inbox.available());
+                            // log.info("node gathered {}/msgs from worker {}", .{
+                            //     gathered_count,
+                            //     worker.id,
+                            // });
+
+                            _ = self.inbox.concatenateAvailable(worker.inbox);
+                        } else @panic("failed to get worker");
+                    }
+                }
+            },
+        }
+    }
+
+    fn gatherInboundSockets(self: *Self) !void {
+        var workers_iter = self.workers.valueIterator();
+        while (workers_iter.next()) |entry| {
+            const worker = entry.*;
+
+            worker.inbound_sockets_mutex.lock();
+            defer worker.inbound_sockets_mutex.unlock();
+
+            if (worker.inbound_sockets.items.len > 0) {
+                while (worker.inbound_sockets.pop()) |socket| {
+                    try self.addInboundConnectionToNextWorker(socket);
+                }
+            }
+        }
+    }
+
+    fn distributeMessages(self: *Self) !void {
+        var workers_iter = self.workers.valueIterator();
+        while (workers_iter.next()) |worker_entry| {
+            const worker = worker_entry.*;
+
+            worker.outbox_mutex.lock();
+            defer worker.outbox_mutex.unlock();
+
+            if (worker.outbox.isFull()) continue;
+
+            // FIX: this should load balance accross connections. The issue with doing this is now I can't really
+            // enforce any sort of order....is that ok? I think in the case where message rate is infrequent, this
+            // really isn't an issue but in the case where we are sending hundreds or thousands of messages, this
+            // becomes pain in the booty.
+            // FIX: this is not safe!!! there is no lock on this and therefore is not safe
+            var conn_sessions_iter = worker.conns_sessions.iterator();
+            while (conn_sessions_iter.next()) |entry| {
+                const conn_id = entry.key_ptr.*;
+                const session_id = entry.value_ptr.*;
+
+                if (self.session_outboxes.get(session_id)) |outbox| {
+                    while (!outbox.isEmpty() and !worker.outbox.isFull()) {
+                        const prev_envelope = outbox.dequeue().?;
+
+                        const envelope = Envelope{
+                            .message = prev_envelope.message,
+                            .session_id = session_id,
+                            .conn_id = conn_id,
+                            .message_id = prev_envelope.message_id,
+                        };
+
+                        worker.outbox.enqueue(envelope) catch @panic("something modified this");
+                    }
+                }
+            }
+        }
+    }
+
+    fn addInboundConnectionToNextWorker(self: *Self, socket: posix.socket_t) !void {
+        assert(self.workers.count() > 0);
+        // we are just gonna try to close this socket if anything blows up
+        errdefer posix.close(socket);
+
+        // find the worker with the least number of connections
+        var worker_iter = self.workers.valueIterator();
+        var worker_with_min_connections: ?*Worker = null;
+        var min_connections: usize = 0;
+
+        while (worker_iter.next()) |worker_ptr| {
+            const worker = worker_ptr.*;
+            if (worker_with_min_connections == null) {
+                worker_with_min_connections = worker;
+                min_connections = worker.connections.count();
+                continue;
+            }
+
+            if (worker.connections.count() < min_connections) {
+                worker_with_min_connections = worker;
+                min_connections = worker.connections.count();
+            }
+        }
+
+        if (worker_with_min_connections == null) unreachable;
+        const worker = worker_with_min_connections.?;
+
+        // create the connection
+        // we are just gonna try to close this socket if anything blows up
+        errdefer self.io.close_socket(socket);
+
+        // initialize the connection
+        const conn = try self.allocator.create(Connection);
+        errdefer self.allocator.destroy(conn);
+
+        const conn_id = kid.generate();
+        conn.* = try Connection.init(
+            conn_id,
+            worker.io,
+            socket,
+            worker.allocator,
+            worker.memory_pool,
+            .{ .inbound = .{} },
+        );
+        errdefer conn.deinit();
+
+        conn.connection_state = .connected;
+        errdefer conn.connection_state = .closing;
+        errdefer conn.protocol_state = .terminating;
+
+        // create an auth_challenge for this connection
+        const auth_challenge = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(auth_challenge);
+
+        auth_challenge.* = Message.new(.auth_challenge);
+        auth_challenge.ref();
+        errdefer auth_challenge.deref();
+
+        auth_challenge.extension_headers.auth_challenge.challenge_method = .token;
+        // FIX: this should be prand at least
+        auth_challenge.extension_headers.auth_challenge.nonce = @as(u128, kid.generate());
+        auth_challenge.extension_headers.auth_challenge.connection_id = conn_id;
+
+        conn.protocol_state = .authenticating;
+
+        assert(auth_challenge.validate() == null);
+
+        // create a handshake for this connection
+        const handshake = Handshake{
+            .nonce = auth_challenge.extension_headers.auth_challenge.nonce,
+            .connection_id = conn_id,
+            .challenge_method = auth_challenge.extension_headers.auth_challenge.challenge_method,
+            .algorithm = auth_challenge.extension_headers.auth_challenge.algorithm,
+        };
+
+        try self.handshakes.put(self.allocator, conn.connection_id, handshake);
+        errdefer _ = self.handshakes.remove(conn.connection_id);
+
+        conn.outbox.enqueue(auth_challenge) catch @panic("connection does not have enough capacity in outbox");
+
+        try worker.addInboundConnection(conn);
+    }
+
+    fn processInboundEnvelopes(self: *Self) !void {
+        var processed_messages_count: i64 = 0;
+        var processed_bytes_count: i64 = 0;
+
+        // defer {
+        //     _ = self.metrics.messages_processed.fetchAdd(processed_messages_count, .seq_cst);
+        //     self.metrics.bytes_processed += processed_bytes_count;
+        // }
+
+        while (self.inbox.dequeue()) |envelope| {
+            assert(envelope.message.refs() == 1);
+
+            processed_messages_count += 1;
+            processed_bytes_count += @intCast(envelope.message.packedSize());
+
+            // ensure that the message
+            switch (envelope.message.fixed_headers.message_type) {
+                .session_init => try self.handleSessionInit(envelope),
+                // .publish => try self.handlePublish(envelope),
+                // .subscribe => try self.handleSubscribe(envelope),
+                // .unsubscribe => try self.handleUnsubscribe(envelope),
+                else => |t| {
+                    log.info("got t: {any}", .{t});
+                    envelope.message.deref();
+                    if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+                },
+            }
+        }
+    }
+
+    fn handleSessionInit(self: *Self, envelope: Envelope) !void {
+        assert(envelope.worker_id != null);
+        assert(envelope.session_id != null);
+
+        const session_outbox = try self.findOrCreateSessionOutbox(envelope.session_id.?);
+
+        const reply = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(reply);
+
+        reply.* = Message.new(.auth_success);
+        reply.extension_headers.auth_success.peer_id = @as(u64, self.id);
+        reply.extension_headers.auth_success.session_id = envelope.session_id.?;
+        const token = "a" ** 256;
+        reply.setBody(token);
+
+        reply.ref();
+        errdefer reply.deref();
+
+        const reply_envelope = Envelope{
+            .conn_id = envelope.conn_id,
+            .message = reply,
+            .session_id = envelope.session_id.?,
+            .message_id = kid.generate(),
+            .worker_id = null,
+        };
+
+        try session_outbox.enqueue(reply_envelope);
+
+        // // Ensure only one handshake per connection
+        // const entry = self.handshakes.fetchRemove(envelope.conn_id) orelse return error.HandshakeMissing;
+
+        // const handshake = entry.value;
+
+        // const reply = try self.memory_pool.create();
+        // errdefer self.memory_pool.destroy(reply);
+        // log.info("handshake {any}", .{handshake});
+
+        // switch (handshake.challenge_method) {
+        // .token => {
+        //     if (self.authenticate(handshake, envelope.message)) {
+        //         conn.protocol_state = .ready;
+
+        //         log.info("successfully authenticated (creating session)!", .{});
+        //         const session_init = message.extension_headers.session_init;
+
+        //         const session = try self.node.createSession(session_init.peer_id, session_init.peer_type);
+        //         errdefer self.node.removeSession(session.session_id);
+
+        //         try self.addConnectionToSession(session.session_id, conn);
+        //         errdefer _ = self.removeConnectionFromSession(session.session_id, conn.connection_id);
+
+        //         reply.* = Message.new(.auth_success);
+        //         reply.ref();
+        //         errdefer reply.deref();
+
+        //         reply.extension_headers.auth_success.peer_id = session.peer_id;
+        //         reply.extension_headers.auth_success.session_id = session.session_id;
+        //         reply.setBody(session.session_token);
+
+        //         // create a session outbox
+
+        //         try self.conns_sessions.put(self.allocator, conn.connection_id, session.session_id);
+        //         errdefer _ = self.conns_sessions.remove(conn.connection_id);
+
+        //         try conn.outbox.enqueue(reply);
+        //     } else {
+        //         conn.protocol_state = .terminating;
+
+        //         reply.* = Message.new(.auth_failure);
+        //         reply.ref();
+        //         errdefer reply.deref();
+
+        //         reply.extension_headers.auth_failure.error_code = .unauthorized;
+        //         try conn.outbox.enqueue(reply);
+        //     }
+        // },
+        // else => @panic("unsupported challenge_method"),
+        // }
+
+    }
+
+    fn authenticate(self: *Self, handshake: Handshake, message: *Message) bool {
         _ = self;
+        _ = handshake;
+        _ = message;
+        return true;
+        // const auth_token_config = self.node.config.authenticator_config.token;
+
+        // const session_init = message.extension_headers.session_init;
+        // switch (session_init.peer_type) {
+        //     .client => {
+        //         if (auth_token_config.clients) |client_token_entries| {
+        //             if (self.findClientToken(client_token_entries, session_init.peer_id)) |token_entry| {
+        //                 return switch (handshake.algorithm) {
+        //                     .hmac256 => self.verifyHMAC256(token_entry.token, handshake.nonce, message.body()),
+        //                     else => @panic("unsupported algorithm"),
+        //                 };
+        //             } else {
+        //                 log.err("could not authenticate", .{});
+        //                 return false;
+        //             }
+        //         }
+        //     },
+        //     .node => @panic("unsupported peer type"),
+        // }
     }
 
     fn initializeWorkers(self: *Self) !void {
@@ -347,6 +691,32 @@ pub const Peer = struct {
 
             switch (self.workers_load_balancer) {
                 .round_robin => |*lb| try lb.addItem(self.allocator, id),
+            }
+        }
+
+        if (self.config.listener_configs) |listener_configs| {
+            for (listener_configs, 0..listener_configs.len) |listener_config, id| {
+                switch (self.workers_load_balancer) {
+                    .round_robin => |*lb| {
+                        if (lb.next()) |worker_id| {
+                            const worker = self.workers.get(worker_id).?;
+                            worker.listeners_mutex.lock();
+                            defer worker.listeners_mutex.unlock();
+
+                            switch (listener_config.transport) {
+                                .tcp => {
+                                    const tcp_listener = try self.allocator.create(Listener);
+                                    errdefer self.allocator.destroy(tcp_listener);
+
+                                    tcp_listener.* = try Listener.init(self.allocator, self.io, id, listener_config);
+                                    errdefer tcp_listener.deinit();
+
+                                    try worker.listeners.put(worker.allocator, id, tcp_listener);
+                                },
+                            }
+                        }
+                    },
+                }
             }
         }
     }
@@ -390,6 +760,78 @@ pub const Peer = struct {
             }
         }
     }
+
+    fn createSession(self: *Self, peer_id: u64, peer_type: PeerType) !*Session {
+        self.sessions_mutex.lock();
+        defer self.sessions_mutex.unlock();
+
+        const session = try self.allocator.create(Session);
+        errdefer self.allocator.destroy(session);
+
+        const session_id = kid.generate();
+        session.* = try Session.init(self.allocator, session_id, peer_id, peer_type, .round_robin);
+        errdefer session.deinit(self.allocator);
+
+        try self.sessions.put(self.allocator, session_id, session);
+
+        return session;
+    }
+
+    fn removeSession(self: *Self, session_id: u64) void {
+        self.sessions_mutex.lock();
+        defer self.sessions_mutex.unlock();
+
+        if (self.sessions.get(session_id)) |session| {
+            session.deinit(self.allocator);
+            _ = self.sessions.remove(session_id);
+        }
+    }
+
+    fn getSession(self: *Self, session_id: u64) ?*Session {
+        self.sessions_mutex.lock();
+        defer self.sessions_mutex.unlock();
+
+        return self.sessions.get(session_id);
+    }
+
+    fn addConnectionToSession(self: *Self, session_id: u64, conn: *Connection) !void {
+        self.sessions_mutex.lock();
+        defer self.sessions_mutex.unlock();
+
+        if (self.sessions.get(session_id)) |session| {
+            try session.addConnection(self.allocator, conn);
+        } else {
+            return error.SessionNotFound;
+        }
+    }
+
+    fn removeConnectionFromSession(self: *Self, session_id: u64, conn_id: u64) bool {
+        self.sessions_mutex.lock();
+        defer self.sessions_mutex.unlock();
+
+        if (self.sessions.get(session_id)) |session| {
+            return session.removeConnection(conn_id);
+        }
+        return false;
+    }
+
+    fn findOrCreateSessionOutbox(self: *Self, session_id: u64) !*RingBuffer(Envelope) {
+        var session_outbox: *RingBuffer(Envelope) = undefined;
+        if (self.session_outboxes.get(session_id)) |queue| {
+            session_outbox = queue;
+        } else {
+            const queue = try self.allocator.create(RingBuffer(Envelope));
+            errdefer self.allocator.destroy(queue);
+
+            queue.* = try RingBuffer(Envelope).init(self.allocator, 1_000);
+            errdefer queue.deinit();
+
+            try self.session_outboxes.put(self.allocator, session_id, queue);
+            session_outbox = queue;
+        }
+
+        return session_outbox;
+    }
 };
 
 test "init/deinit" {
@@ -401,6 +843,11 @@ test "init/deinit" {
     try peer.start();
     defer peer.close();
 }
+
+// peer tick
+// 1. gather envelopes from workers
+// 2. if envelope is not connected to a session, then pass it to the peer
+//
 
 // Da Rulez:
 // 1. in order for a peer to connect to another peer, one of those peers must be listening on a port. That peer

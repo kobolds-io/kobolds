@@ -88,6 +88,11 @@ pub const Listener = struct {
 
     pub fn deinit(self: *Self) void {
         if (self.listener_socket) |listener_socket| {
+            log.info("closing listener {d} {s}:{d}", .{
+                self.id,
+                self.config.host,
+                self.config.port,
+            });
             self.io.close_socket(listener_socket);
             self.listener_socket = null;
         }
@@ -149,13 +154,17 @@ pub const Listener = struct {
         log.info("listening on {s}:{d}", .{ self.config.host, self.config.port });
     }
 
-    fn tick(self: *Self) !void {
+    pub fn tick(self: *Self) !void {
         switch (self.state) {
             .inactive => try self.handleInitListener(),
             .running => try self.handleAccept(),
             .closing => {
                 if (self.listener_socket) |listener_socket| {
-                    log.info("closing listener {s}:{d}", .{ self.config.host, self.config.port });
+                    log.info("closing listener {d} {s}:{d}", .{
+                        self.id,
+                        self.config.host,
+                        self.config.port,
+                    });
                     self.io.close_socket(listener_socket);
                     self.listener_socket = null;
                 }
