@@ -562,6 +562,7 @@ pub const Peer = struct {
             // ensure that the message
             switch (envelope.message.fixed_headers.message_type) {
                 .session_init => try self.handleSessionInit(envelope),
+                .session_join => try self.handleSessionJoin(envelope),
                 // .publish => try self.handlePublish(envelope),
                 // .subscribe => try self.handleSubscribe(envelope),
                 // .unsubscribe => try self.handleUnsubscribe(envelope),
@@ -601,30 +602,73 @@ pub const Peer = struct {
                     errdefer _ = self.removeConnectionFromSession(session.session_id, envelope.conn_id);
 
                     reply.* = Message.new(.auth_success);
-                    reply.ref();
-                    errdefer reply.deref();
 
                     reply.extension_headers.auth_success.peer_id = session.peer_id;
                     reply.extension_headers.auth_success.session_id = session.session_id;
                     reply.setBody(session.session_token);
-
-                    // try self.conns_sessions.put(self.allocator, conn.connection_id, session.session_id);
-                    // errdefer _ = self.conns_sessions.remove(conn.connection_id);
-
-                    // try conn.outbox.enqueue(reply);
                 } else {
-                    // conn.protocol_state = .terminating;
-
                     reply.* = Message.new(.auth_failure);
-                    reply.ref();
-                    errdefer reply.deref();
-
                     reply.extension_headers.auth_failure.error_code = .unauthorized;
-                    // try conn.outbox.enqueue(reply);
                 }
             },
             else => @panic("unsupported challenge_method"),
         }
+
+        reply.ref();
+        errdefer reply.deref();
+
+        log.info("init: session_id: {}", .{envelope.session_id});
+        const reply_envelope = Envelope{
+            .conn_id = envelope.conn_id,
+            .message = reply,
+            .session_id = envelope.session_id,
+            .message_id = kid.generate(),
+        };
+
+        try session_outbox.enqueue(reply_envelope);
+    }
+
+    fn handleSessionJoin(self: *Self, envelope: Envelope) !void {
+        const session_outbox = try self.findOrCreateSessionOutbox(envelope.session_id);
+
+        // Ensure only one handshake per connection
+        const handshake_entry = self.handshakes.fetchRemove(envelope.conn_id) orelse return error.HandshakeMissing;
+        const handshake = handshake_entry.value;
+
+        const reply = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(reply);
+
+        switch (handshake.challenge_method) {
+            .token => {
+                if (self.authenticateWithSession(handshake, envelope.message)) {
+                    log.info("successfully authenticated (joining session)!", .{});
+
+                    const session_join_headers = envelope.message.extension_headers.session_join;
+
+                    try self.addConnectionToSession(session_join_headers.session_id, envelope.conn_id);
+                    errdefer _ = self.removeConnectionFromSession(session_join_headers.session_id, envelope.conn_id);
+
+                    reply.* = Message.new(.auth_success);
+                    reply.ref();
+
+                    reply.extension_headers.auth_success.peer_id = session_join_headers.peer_id;
+                    reply.extension_headers.auth_success.session_id = session_join_headers.session_id;
+                } else {
+                    log.info("authentication unsuccessful", .{});
+
+                    reply.* = Message.new(.auth_failure);
+                    reply.ref();
+
+                    reply.extension_headers.auth_failure.error_code = .unauthorized;
+                }
+            },
+            else => @panic("unsupported challenge_method"),
+        }
+
+        reply.ref();
+        errdefer reply.deref();
+
+        log.info("join: session_id: {}", .{envelope.session_id});
 
         const reply_envelope = Envelope{
             .conn_id = envelope.conn_id,
@@ -634,62 +678,9 @@ pub const Peer = struct {
         };
 
         try session_outbox.enqueue(reply_envelope);
-
-        // // Ensure only one handshake per connection
-        // const entry = self.handshakes.fetchRemove(envelope.conn_id) orelse return error.HandshakeMissing;
-
-        // const handshake = entry.value;
-
-        // const reply = try self.memory_pool.create();
-        // errdefer self.memory_pool.destroy(reply);
-        // log.info("handshake {any}", .{handshake});
-
-        // switch (handshake.challenge_method) {
-        // .token => {
-        //     if (self.authenticate(handshake, envelope.message)) {
-        //         conn.protocol_state = .ready;
-
-        //         log.info("successfully authenticated (creating session)!", .{});
-        //         const session_init = message.extension_headers.session_init;
-
-        //         const session = try self.node.createSession(session_init.peer_id, session_init.peer_type);
-        //         errdefer self.node.removeSession(session.session_id);
-
-        //         try self.addConnectionToSession(session.session_id, conn);
-        //         errdefer _ = self.removeConnectionFromSession(session.session_id, conn.connection_id);
-
-        //         reply.* = Message.new(.auth_success);
-        //         reply.ref();
-        //         errdefer reply.deref();
-
-        //         reply.extension_headers.auth_success.peer_id = session.peer_id;
-        //         reply.extension_headers.auth_success.session_id = session.session_id;
-        //         reply.setBody(session.session_token);
-
-        //         // create a session outbox
-
-        //         try self.conns_sessions.put(self.allocator, conn.connection_id, session.session_id);
-        //         errdefer _ = self.conns_sessions.remove(conn.connection_id);
-
-        //         try conn.outbox.enqueue(reply);
-        //     } else {
-        //         conn.protocol_state = .terminating;
-
-        //         reply.* = Message.new(.auth_failure);
-        //         reply.ref();
-        //         errdefer reply.deref();
-
-        //         reply.extension_headers.auth_failure.error_code = .unauthorized;
-        //         try conn.outbox.enqueue(reply);
-        //     }
-        // },
-        // else => @panic("unsupported challenge_method"),
-        // }
-
     }
 
     fn authenticate(self: *Self, handshake: Handshake, message: *Message) bool {
-        // return true;
         const auth_token_config = self.config.authenticator_config.token;
 
         const session_init = message.extension_headers.session_init;
@@ -711,6 +702,24 @@ pub const Peer = struct {
         }
 
         return false;
+    }
+
+    fn authenticateWithSession(self: *Self, handshake: Handshake, message: *Message) bool {
+        const session_opt = self.getSession(message.extension_headers.session_join.session_id);
+        if (session_opt == null) return false;
+
+        const session = session_opt.?;
+
+        if (session.peer_id != message.extension_headers.session_join.peer_id) return false;
+        if (session.session_id != message.extension_headers.session_join.session_id) return false;
+
+        return switch (handshake.algorithm) {
+            .hmac256 => self.verifyHMAC256(session.session_token, handshake.nonce, message.body()),
+            else => |algorithm| {
+                log.err("use of unsupported algorithm {any}", .{algorithm});
+                return false;
+            },
+        };
     }
 
     fn findClientToken(_: *Self, clients: []const TokenEntry, peer_id: u64) ?TokenEntry {
@@ -818,8 +827,8 @@ pub const Peer = struct {
     }
 
     fn createSession(self: *Self, peer_id: u64, peer_type: PeerType) !*Session {
-        self.sessions_mutex.lock();
-        defer self.sessions_mutex.unlock();
+        // self.sessions_mutex.lock();
+        // defer self.sessions_mutex.unlock();
 
         const session = try self.allocator.create(Session);
         errdefer self.allocator.destroy(session);
@@ -834,8 +843,8 @@ pub const Peer = struct {
     }
 
     fn removeSession(self: *Self, session_id: u64) void {
-        self.sessions_mutex.lock();
-        defer self.sessions_mutex.unlock();
+        // self.sessions_mutex.lock();
+        // defer self.sessions_mutex.unlock();
 
         if (self.sessions.get(session_id)) |session| {
             session.deinit(self.allocator);
@@ -844,15 +853,15 @@ pub const Peer = struct {
     }
 
     fn getSession(self: *Self, session_id: u64) ?*Session {
-        self.sessions_mutex.lock();
-        defer self.sessions_mutex.unlock();
+        // self.sessions_mutex.lock();
+        // defer self.sessions_mutex.unlock();
 
         return self.sessions.get(session_id);
     }
 
     fn addConnectionToSession(self: *Self, session_id: u64, conn_id: u64) !void {
-        self.sessions_mutex.lock();
-        defer self.sessions_mutex.unlock();
+        // self.sessions_mutex.lock();
+        // defer self.sessions_mutex.unlock();
 
         if (self.sessions.get(session_id)) |session| {
             try session.addConnection(self.allocator, conn_id);
@@ -862,8 +871,8 @@ pub const Peer = struct {
     }
 
     fn removeConnectionFromSession(self: *Self, session_id: u64, conn_id: u64) bool {
-        self.sessions_mutex.lock();
-        defer self.sessions_mutex.unlock();
+        // self.sessions_mutex.lock();
+        // defer self.sessions_mutex.unlock();
 
         if (self.sessions.get(session_id)) |session| {
             return session.removeConnection(conn_id);

@@ -514,6 +514,7 @@ pub const Worker = struct {
                 // const diff = @divFloor(end - start, std.time.ns_per_us);
 
                 // log.info("took {}us to leave the node", .{diff});
+                // log.info("envelope.message {any}", .{envelope.message});
 
                 conn.outbox.enqueue(envelope.message) catch {
                     log.warn("conn outbox full. skipping iteration", .{});
@@ -636,6 +637,8 @@ pub const Worker = struct {
     // }
 
     fn handleInboundSessionInit(self: *Self, conn: *Connection, message: *Message) !void {
+        assert(conn.protocol_state == .authenticating);
+
         const session_id = kid.generate();
         try self.conns_sessions.put(self.allocator, conn.connection_id, session_id);
 
@@ -653,6 +656,8 @@ pub const Worker = struct {
     }
 
     fn handleInboundSessionJoin(self: *Self, conn: *Connection, message: *Message) !void {
+        assert(conn.protocol_state == .authenticating);
+
         const envelope = Envelope{
             .conn_id = conn.connection_id,
             .message_id = kid.generate(),
@@ -664,56 +669,6 @@ pub const Worker = struct {
         defer self.inbox_mutex.unlock();
 
         try self.inbox.enqueue(envelope);
-
-        // defer {
-        //     message.deref();
-        //     if (message.refs() == 0) self.node.memory_pool.destroy(message);
-        // }
-
-        // // Ensure only one handshake per connection
-        // const handshake_entry = self.handshakes.fetchRemove(conn.connection_id) orelse return error.HandshakeMissing;
-        // const handshake = handshake_entry.value;
-
-        // const reply = try self.memory_pool.create();
-        // errdefer self.memory_pool.destroy(reply);
-
-        // switch (handshake.challenge_method) {
-        //     .token => {
-        //         if (self.authenticateWithSession(handshake, message)) {
-        //             log.info("successfully authenticated (joining session)!", .{});
-
-        //             conn.protocol_state = .ready;
-        //             const session_join_headers = message.extension_headers.session_join;
-
-        //             try self.node.addConnectionToSession(session_join_headers.session_id, conn);
-        //             errdefer _ = self.node.removeConnectionFromSession(session_join_headers.session_id, conn.connection_id);
-
-        //             reply.* = Message.new(.auth_success);
-        //             reply.ref();
-        //             errdefer reply.deref();
-
-        //             reply.extension_headers.auth_success.peer_id = session_join_headers.peer_id;
-        //             reply.extension_headers.auth_success.session_id = session_join_headers.session_id;
-
-        //             try self.conns_sessions.put(self.allocator, conn.connection_id, session_join_headers.session_id);
-        //             errdefer _ = self.conns_sessions.remove(conn.connection_id);
-
-        //             try conn.outbox.enqueue(reply);
-        //         } else {
-        //             log.info("authentication unsuccessful", .{});
-
-        //             conn.protocol_state = .terminating;
-
-        //             reply.* = Message.new(.auth_failure);
-        //             reply.ref();
-        //             errdefer reply.deref();
-
-        //             reply.extension_headers.auth_failure.error_code = .unauthorized;
-        //             try conn.outbox.enqueue(reply);
-        //         }
-        //     },
-        //     else => @panic("unsupported challenge_method"),
-        // }
     }
 
     fn authenticate(self: *Self, handshake: Handshake, message: *Message) bool {
