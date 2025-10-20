@@ -420,7 +420,7 @@ pub const Worker = struct {
         var connections_iter = self.connections.iterator();
         while (connections_iter.next()) |entry| {
             const conn = entry.value_ptr.*;
-            // const session_id_opt = self.conns_sessions.get(conn.connection_id);
+            const session_id_opt = self.conns_sessions.get(conn.connection_id);
 
             while (conn.inbox.dequeue()) |message| {
                 assert(message.refs() == 1);
@@ -430,7 +430,30 @@ pub const Worker = struct {
                     .session_init => try self.handleInboundSessionInit(conn, message),
                     .session_join => try self.handleInboundSessionJoin(conn, message),
                     else => {
-                        @panic("ahhh");
+                        if (session_id_opt) |session_id| {
+                            const envelope = Envelope{
+                                .message = message,
+                                .session_id = session_id,
+                                .conn_id = conn.connection_id,
+                                .message_id = kid.generate(),
+                            };
+
+                            self.inbox_mutex.lock();
+                            defer self.inbox_mutex.unlock();
+
+                            self.inbox.enqueue(envelope) catch {
+                                conn.inbox.prepend(message) catch unreachable;
+                                break;
+                            };
+                        } else {
+                            // message was received but is not associated with a session. Dropping this message
+                            defer {
+                                message.deref();
+                                self.memory_pool.destroy(message);
+                            }
+
+                            log.warn("connection {} is not associated with session", .{conn.connection_id});
+                        }
                     },
                 }
             }
@@ -498,7 +521,7 @@ pub const Worker = struct {
                     break;
                 };
             } else {
-                log.warn("could not get conn: {}, session: {}", .{ envelope.conn_id, envelope.session_id.? });
+                log.warn("could not get conn: {}, session: {}", .{ envelope.conn_id, envelope.session_id });
                 envelope.message.deref();
                 if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
             }
@@ -614,7 +637,6 @@ pub const Worker = struct {
 
     fn handleInboundSessionInit(self: *Self, conn: *Connection, message: *Message) !void {
         const session_id = kid.generate();
-
         try self.conns_sessions.put(self.allocator, conn.connection_id, session_id);
 
         const envelope = Envelope{
@@ -622,7 +644,6 @@ pub const Worker = struct {
             .message_id = kid.generate(),
             .session_id = session_id,
             .message = message,
-            .worker_id = self.id,
         };
 
         self.inbox_mutex.lock();
@@ -635,8 +656,7 @@ pub const Worker = struct {
         const envelope = Envelope{
             .conn_id = conn.connection_id,
             .message_id = kid.generate(),
-            .session_id = null,
-            .worker_id = self.id,
+            .session_id = message.extension_headers.session_join.session_id,
             .message = message,
         };
 

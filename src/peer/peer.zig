@@ -575,10 +575,7 @@ pub const Peer = struct {
     }
 
     fn handleSessionInit(self: *Self, envelope: Envelope) !void {
-        assert(envelope.worker_id != null);
-        assert(envelope.session_id != null);
-
-        const session_outbox = try self.findOrCreateSessionOutbox(envelope.session_id.?);
+        const session_outbox = try self.findOrCreateSessionOutbox(envelope.session_id);
 
         // Ensure only one handshake per connection
         const entry = self.handshakes.fetchRemove(envelope.conn_id) orelse return error.HandshakeMissing;
@@ -632,9 +629,8 @@ pub const Peer = struct {
         const reply_envelope = Envelope{
             .conn_id = envelope.conn_id,
             .message = reply,
-            .session_id = envelope.session_id.?,
+            .session_id = envelope.session_id,
             .message_id = kid.generate(),
-            .worker_id = null,
         };
 
         try session_outbox.enqueue(reply_envelope);
