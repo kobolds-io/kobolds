@@ -525,6 +525,7 @@ pub const Client = struct {
 
             const peer_id = message.extension_headers.auth_success.peer_id;
             const session_id = message.extension_headers.auth_success.session_id;
+            log.info("session id: {}", .{session_id});
 
             session.* = try Session.init(self.allocator, session_id, peer_id, .node, .round_robin);
             errdefer session.deinit(self.allocator);
@@ -581,6 +582,7 @@ pub const Client = struct {
         errdefer self.memory_pool.destroy(session_message);
 
         if (self.session) |session| {
+            log.info("existing session: {}", .{session.session_id});
             session_message.* = Message.new(.session_join);
             session_message.extension_headers.session_join.peer_id = session.peer_id;
             session_message.extension_headers.session_join.session_id = session.session_id;

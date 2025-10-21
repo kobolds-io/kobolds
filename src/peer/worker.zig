@@ -499,7 +499,7 @@ pub const Worker = struct {
             if (self.connections.get(envelope.conn_id)) |conn| {
                 switch (envelope.message.fixed_headers.message_type) {
                     .auth_success => {
-                        assert(conn.protocol_state == .authenticating);
+                        log.info("conn.id: {}, env.conn_id: {}, conn.protocol_state: {any}", .{ conn.connection_id, envelope.conn_id, conn.protocol_state });
                         conn.protocol_state = .ready;
                     },
                     .auth_failure => {
@@ -528,65 +528,6 @@ pub const Worker = struct {
             }
         }
     }
-
-    // pub fn addInboundConnection(self: *Self, socket: posix.socket_t) !void {
-    //     // we are just gonna try to close this socket if anything blows up
-    //     errdefer self.io.close_socket(socket);
-
-    //     // initialize the connection
-    //     const conn = try self.allocator.create(Connection);
-    //     errdefer self.allocator.destroy(conn);
-
-    //     const conn_id = kid.generate();
-    //     conn.* = try Connection.init(
-    //         conn_id,
-    //         self.io,
-    //         socket,
-    //         self.allocator,
-    //         self.memory_pool,
-    //         .{ .inbound = .{} },
-    //     );
-    //     errdefer conn.deinit();
-
-    //     conn.connection_state = .connected;
-    //     errdefer conn.connection_state = .closing;
-    //     errdefer conn.protocol_state = .terminating;
-
-    //     self.connections_mutex.lock();
-    //     defer self.connections_mutex.unlock();
-
-    //     try self.connections.put(self.allocator, conn_id, conn);
-    //     errdefer _ = self.connections.remove(conn_id);
-
-    //     const auth_challenge = try self.memory_pool.create();
-    //     errdefer self.memory_pool.destroy(auth_challenge);
-
-    //     auth_challenge.* = Message.new(.auth_challenge);
-    //     auth_challenge.ref();
-    //     errdefer auth_challenge.deref();
-
-    //     auth_challenge.extension_headers.auth_challenge.challenge_method = .token;
-    //     auth_challenge.extension_headers.auth_challenge.nonce = uuid.v7.new(); // FIX: this should be prand at least
-    //     auth_challenge.extension_headers.auth_challenge.connection_id = conn_id;
-
-    //     conn.protocol_state = .authenticating;
-
-    //     assert(auth_challenge.validate() == null);
-
-    //     const handshake = Handshake{
-    //         .nonce = auth_challenge.extension_headers.auth_challenge.nonce,
-    //         .connection_id = conn_id,
-    //         .challenge_method = auth_challenge.extension_headers.auth_challenge.challenge_method,
-    //         .algorithm = auth_challenge.extension_headers.auth_challenge.algorithm,
-    //     };
-
-    //     try self.handshakes.put(self.allocator, conn.connection_id, handshake);
-    //     errdefer _ = self.handshakes.remove(conn.connection_id);
-
-    //     try conn.outbox.enqueue(auth_challenge);
-
-    //     log.info("worker: {d} added inbound connection {d}", .{ self.id, conn_id });
-    // }
 
     pub fn addInboundConnection(self: *Self, conn: *Connection) !void {
         // we are just gonna try to close this socket if anything blows up
@@ -640,6 +581,7 @@ pub const Worker = struct {
         assert(conn.protocol_state == .authenticating);
 
         const session_id = kid.generate();
+        log.info("inbound session_id: {}", .{session_id});
         try self.conns_sessions.put(self.allocator, conn.connection_id, session_id);
 
         const envelope = Envelope{
@@ -669,67 +611,6 @@ pub const Worker = struct {
         defer self.inbox_mutex.unlock();
 
         try self.inbox.enqueue(envelope);
-    }
-
-    fn authenticate(self: *Self, handshake: Handshake, message: *Message) bool {
-        const auth_token_config = self.node.config.authenticator_config.token;
-
-        const session_init = message.extension_headers.session_init;
-        switch (session_init.peer_type) {
-            .client => {
-                if (auth_token_config.clients) |client_token_entries| {
-                    if (self.findClientToken(client_token_entries, session_init.peer_id)) |token_entry| {
-                        return switch (handshake.algorithm) {
-                            .hmac256 => self.verifyHMAC256(token_entry.token, handshake.nonce, message.body()),
-                            else => @panic("unsupported algorithm"),
-                        };
-                    } else {
-                        log.err("could not authenticate", .{});
-                        return false;
-                    }
-                }
-            },
-            .node => @panic("unsupported peer type"),
-        }
-
-        return false;
-    }
-
-    fn authenticateWithSession(self: *Self, handshake: Handshake, message: *Message) bool {
-        const session_opt = self.node.getSession(message.extension_headers.session_join.session_id);
-        if (session_opt == null) return false;
-
-        const session = session_opt.?;
-
-        if (session.peer_id != message.extension_headers.session_join.peer_id) return false;
-        if (session.session_id != message.extension_headers.session_join.session_id) return false;
-
-        return switch (handshake.algorithm) {
-            .hmac256 => self.verifyHMAC256(session.session_token, handshake.nonce, message.body()),
-            else => |algorithm| {
-                log.err("use of unsupported algorithm {any}", .{algorithm});
-                return false;
-            },
-        };
-    }
-
-    fn findClientToken(_: *Self, clients: []const TokenEntry, peer_id: u64) ?TokenEntry {
-        for (clients) |token_entry| if (token_entry.id == peer_id) return token_entry;
-        return null;
-    }
-
-    fn verifyHMAC256(_: *Self, token: []const u8, nonce: u128, challenge_payload: []const u8) bool {
-        const HMAC = std.crypto.auth.hmac.sha2.HmacSha256;
-        var out: [HMAC.mac_length]u8 = undefined;
-        var nonce_buf: [@sizeOf(u128)]u8 = undefined;
-
-        std.mem.writeInt(u128, &nonce_buf, nonce, .big);
-
-        var hmac = HMAC.init(token);
-        hmac.update(&nonce_buf);
-        hmac.final(&out);
-
-        return std.mem.eql(u8, challenge_payload, &out);
     }
 };
 

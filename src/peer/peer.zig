@@ -375,7 +375,7 @@ pub const Peer = struct {
         try self.gatherInboundSockets();
         try self.gatherEnvelopes();
         try self.processInboundEnvelopes();
-        try self.distributeMessages();
+        try self.distributeSessionOutboxes();
     }
 
     fn gatherEnvelopes(self: *Self) !void {
@@ -423,7 +423,38 @@ pub const Peer = struct {
         }
     }
 
-    fn distributeMessages(self: *Self) !void {
+    fn processInboundEnvelopes(self: *Self) !void {
+        var processed_messages_count: i64 = 0;
+        var processed_bytes_count: i64 = 0;
+
+        // defer {
+        //     _ = self.metrics.messages_processed.fetchAdd(processed_messages_count, .seq_cst);
+        //     self.metrics.bytes_processed += processed_bytes_count;
+        // }
+
+        while (self.inbox.dequeue()) |envelope| {
+            assert(envelope.message.refs() == 1);
+
+            processed_messages_count += 1;
+            processed_bytes_count += @intCast(envelope.message.packedSize());
+
+            // ensure that the message
+            switch (envelope.message.fixed_headers.message_type) {
+                .session_init => try self.handleSessionInit(envelope),
+                .session_join => try self.handleSessionJoin(envelope),
+                // .publish => try self.handlePublish(envelope),
+                // .subscribe => try self.handleSubscribe(envelope),
+                // .unsubscribe => try self.handleUnsubscribe(envelope),
+                else => |t| {
+                    log.info("got t: {any}", .{t});
+                    envelope.message.deref();
+                    if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+                },
+            }
+        }
+    }
+
+    fn distributeSessionOutboxes(self: *Self) !void {
         var workers_iter = self.workers.valueIterator();
         while (workers_iter.next()) |worker_entry| {
             const worker = worker_entry.*;
@@ -446,6 +477,13 @@ pub const Peer = struct {
                 if (self.session_outboxes.get(session_id)) |outbox| {
                     while (!outbox.isEmpty() and !worker.outbox.isFull()) {
                         const prev_envelope = outbox.dequeue().?;
+
+                        // switch (prev_envelope.message.fixed_headers.message_type) {
+                        //     .auth_success, .auth_failure => {
+                        //         // we need to know if this connection is a part of this worker
+                        //     },
+                        //     else => {},
+                        // }
 
                         const envelope = Envelope{
                             .message = prev_envelope.message,
@@ -544,37 +582,6 @@ pub const Peer = struct {
         try worker.addInboundConnection(conn);
     }
 
-    fn processInboundEnvelopes(self: *Self) !void {
-        var processed_messages_count: i64 = 0;
-        var processed_bytes_count: i64 = 0;
-
-        // defer {
-        //     _ = self.metrics.messages_processed.fetchAdd(processed_messages_count, .seq_cst);
-        //     self.metrics.bytes_processed += processed_bytes_count;
-        // }
-
-        while (self.inbox.dequeue()) |envelope| {
-            assert(envelope.message.refs() == 1);
-
-            processed_messages_count += 1;
-            processed_bytes_count += @intCast(envelope.message.packedSize());
-
-            // ensure that the message
-            switch (envelope.message.fixed_headers.message_type) {
-                .session_init => try self.handleSessionInit(envelope),
-                .session_join => try self.handleSessionJoin(envelope),
-                // .publish => try self.handlePublish(envelope),
-                // .subscribe => try self.handleSubscribe(envelope),
-                // .unsubscribe => try self.handleUnsubscribe(envelope),
-                else => |t| {
-                    log.info("got t: {any}", .{t});
-                    envelope.message.deref();
-                    if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
-                },
-            }
-        }
-    }
-
     fn handleSessionInit(self: *Self, envelope: Envelope) !void {
         const session_outbox = try self.findOrCreateSessionOutbox(envelope.session_id);
 
@@ -595,7 +602,7 @@ pub const Peer = struct {
                     log.info("successfully authenticated (creating session)!", .{});
                     const session_init = message.extension_headers.session_init;
 
-                    const session = try self.createSession(session_init.peer_id, session_init.peer_type);
+                    const session = try self.createSession(envelope.session_id, session_init.peer_id, session_init.peer_type);
                     errdefer self.removeSession(session.session_id);
 
                     try self.addConnectionToSession(session.session_id, envelope.conn_id);
@@ -617,7 +624,6 @@ pub const Peer = struct {
         reply.ref();
         errdefer reply.deref();
 
-        log.info("init: session_id: {}", .{envelope.session_id});
         const reply_envelope = Envelope{
             .conn_id = envelope.conn_id,
             .message = reply,
@@ -667,8 +673,6 @@ pub const Peer = struct {
 
         reply.ref();
         errdefer reply.deref();
-
-        log.info("join: session_id: {}", .{envelope.session_id});
 
         const reply_envelope = Envelope{
             .conn_id = envelope.conn_id,
@@ -826,14 +830,13 @@ pub const Peer = struct {
         }
     }
 
-    fn createSession(self: *Self, peer_id: u64, peer_type: PeerType) !*Session {
+    fn createSession(self: *Self, session_id: u64, peer_id: u64, peer_type: PeerType) !*Session {
         // self.sessions_mutex.lock();
         // defer self.sessions_mutex.unlock();
 
         const session = try self.allocator.create(Session);
         errdefer self.allocator.destroy(session);
 
-        const session_id = kid.generate();
         session.* = try Session.init(self.allocator, session_id, peer_id, peer_type, .round_robin);
         errdefer session.deinit(self.allocator);
 
