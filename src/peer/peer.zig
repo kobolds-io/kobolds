@@ -30,6 +30,7 @@ const ChallengeAlgorithm = @import("../protocol/message.zig").ChallengeAlgorithm
 const Authenticator = @import("./authenticator.zig").Authenticator;
 const AuthenticatorConfig = @import("./authenticator.zig").AuthenticatorConfig;
 const TokenEntry = @import("./authenticator.zig").TokenAuthStrategy.TokenEntry;
+const PeerMetrics = @import("./metrics.zig").PeerMetrics;
 
 /// Peer is the central construct for interacting with Kobolds.
 pub const Peer = struct {
@@ -69,8 +70,9 @@ pub const Peer = struct {
     inbox: *RingBuffer(Envelope),
     io: *IO,
     memory_pool: *MemoryPool(Message),
-    // metrics: ClientMetrics,
+    metrics: PeerMetrics,
     session_outboxes: std.AutoHashMapUnmanaged(u64, *RingBuffer(Envelope)),
+    connection_outboxes: std.AutoHashMapUnmanaged(u64, *RingBuffer(Envelope)),
     outbox_mutex: std.Thread.Mutex,
     outbox: *RingBuffer(Envelope),
 
@@ -154,12 +156,13 @@ pub const Peer = struct {
             .memory_pool = memory_pool,
             .listeners = listeners,
             .handshakes = .empty,
-            // .metrics = ClientMetrics{},
+            .metrics = .{},
             // .services_mutex = std.Thread.Mutex{},
             // .services = std.StringHashMap(*ClientService).init(allocator),
             .sessions_mutex = std.Thread.Mutex{},
             .sessions = .empty,
             .session_outboxes = .empty,
+            .connection_outboxes = .empty,
             .state = .closed,
             // .topics_mutex = std.Thread.Mutex{},
             // .topics = std.StringHashMap(*ClientTopic).init(allocator),
@@ -256,6 +259,18 @@ pub const Peer = struct {
             self.allocator.destroy(outbox);
         }
 
+        var connection_outboxes_iter = self.connection_outboxes.valueIterator();
+        while (connection_outboxes_iter.next()) |entry| {
+            const outbox = entry.*;
+
+            while (outbox.dequeue()) |envelope| {
+                envelope.message.deref();
+                if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+            }
+
+            outbox.deinit();
+            self.allocator.destroy(outbox);
+        }
         // self.connections.deinit();
         // self.transactions.deinit(self.allocator);
         // self.topics.deinit();
@@ -266,6 +281,7 @@ pub const Peer = struct {
         self.outbox.deinit();
         self.sessions.deinit(self.allocator);
         self.session_outboxes.deinit(self.allocator);
+        self.connection_outboxes.deinit(self.allocator);
         self.handshakes.deinit(self.allocator);
         self.workers.deinit(self.allocator);
         switch (self.workers_load_balancer) {
@@ -372,10 +388,11 @@ pub const Peer = struct {
     }
 
     fn tick(self: *Self) !void {
+        self.handlePrintingIntervalMetrics();
         try self.gatherInboundSockets();
         try self.gatherEnvelopes();
         try self.processInboundEnvelopes();
-        try self.distributeSessionOutboxes();
+        try self.distributeEnvelopes();
     }
 
     fn gatherEnvelopes(self: *Self) !void {
@@ -427,10 +444,10 @@ pub const Peer = struct {
         var processed_messages_count: i64 = 0;
         var processed_bytes_count: i64 = 0;
 
-        // defer {
-        //     _ = self.metrics.messages_processed.fetchAdd(processed_messages_count, .seq_cst);
-        //     self.metrics.bytes_processed += processed_bytes_count;
-        // }
+        defer {
+            _ = self.metrics.messages_processed.fetchAdd(processed_messages_count, .seq_cst);
+            self.metrics.bytes_processed += processed_bytes_count;
+        }
 
         while (self.inbox.dequeue()) |envelope| {
             assert(envelope.message.refs() == 1);
@@ -442,7 +459,7 @@ pub const Peer = struct {
             switch (envelope.message.fixed_headers.message_type) {
                 .session_init => try self.handleSessionInit(envelope),
                 .session_join => try self.handleSessionJoin(envelope),
-                // .publish => try self.handlePublish(envelope),
+                .publish => try self.handlePublish(envelope),
                 // .subscribe => try self.handleSubscribe(envelope),
                 // .unsubscribe => try self.handleUnsubscribe(envelope),
                 else => |t| {
@@ -454,7 +471,11 @@ pub const Peer = struct {
         }
     }
 
-    fn distributeSessionOutboxes(self: *Self) !void {
+    // FIX: this should load balance accross connections. The issue with doing this is now I can't really
+    // enforce any sort of order....is that ok? I think in the case where message rate is infrequent, this
+    // really isn't an issue but in the case where we are sending hundreds or thousands of messages, this
+    // becomes pain in the booty.
+    fn distributeEnvelopes(self: *Self) !void {
         var workers_iter = self.workers.valueIterator();
         while (workers_iter.next()) |worker_entry| {
             const worker = worker_entry.*;
@@ -464,11 +485,9 @@ pub const Peer = struct {
 
             if (worker.outbox.isFull()) continue;
 
-            // FIX: this should load balance accross connections. The issue with doing this is now I can't really
-            // enforce any sort of order....is that ok? I think in the case where message rate is infrequent, this
-            // really isn't an issue but in the case where we are sending hundreds or thousands of messages, this
-            // becomes pain in the booty.
-            // FIX: this is not safe!!! there is no lock on this and therefore is not safe
+            worker.conns_sessions_mutex.lock();
+            defer worker.conns_sessions_mutex.unlock();
+
             var conn_sessions_iter = worker.conns_sessions.iterator();
             while (conn_sessions_iter.next()) |entry| {
                 const conn_id = entry.key_ptr.*;
@@ -494,6 +513,16 @@ pub const Peer = struct {
 
                         worker.outbox.enqueue(envelope) catch @panic("something modified this");
                     }
+                }
+
+                if (self.connection_outboxes.get(conn_id)) |outbox| {
+                    while (outbox.dequeue()) |envelope| {
+                        worker.outbox.enqueue(envelope) catch {
+                            outbox.prepend(envelope) catch unreachable;
+                        };
+                    }
+
+                    if (outbox.isEmpty()) assert(self.removeConnectionOutbox(conn_id));
                 }
             }
         }
@@ -583,7 +612,12 @@ pub const Peer = struct {
     }
 
     fn handleSessionInit(self: *Self, envelope: Envelope) !void {
-        const session_outbox = try self.findOrCreateSessionOutbox(envelope.session_id);
+        defer {
+            envelope.message.deref();
+            if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+        }
+
+        const conn_outbox = try self.findOrCreateConnectionOutbox(envelope.conn_id);
 
         // Ensure only one handshake per connection
         const entry = self.handshakes.fetchRemove(envelope.conn_id) orelse return error.HandshakeMissing;
@@ -631,11 +665,16 @@ pub const Peer = struct {
             .message_id = kid.generate(),
         };
 
-        try session_outbox.enqueue(reply_envelope);
+        try conn_outbox.enqueue(reply_envelope);
     }
 
     fn handleSessionJoin(self: *Self, envelope: Envelope) !void {
-        const session_outbox = try self.findOrCreateSessionOutbox(envelope.session_id);
+        defer {
+            envelope.message.deref();
+            if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+        }
+
+        const conn_outbox = try self.findOrCreateConnectionOutbox(envelope.conn_id);
 
         // Ensure only one handshake per connection
         const handshake_entry = self.handshakes.fetchRemove(envelope.conn_id) orelse return error.HandshakeMissing;
@@ -655,7 +694,6 @@ pub const Peer = struct {
                     errdefer _ = self.removeConnectionFromSession(session_join_headers.session_id, envelope.conn_id);
 
                     reply.* = Message.new(.auth_success);
-                    reply.ref();
 
                     reply.extension_headers.auth_success.peer_id = session_join_headers.peer_id;
                     reply.extension_headers.auth_success.session_id = session_join_headers.session_id;
@@ -663,7 +701,6 @@ pub const Peer = struct {
                     log.info("authentication unsuccessful", .{});
 
                     reply.* = Message.new(.auth_failure);
-                    reply.ref();
 
                     reply.extension_headers.auth_failure.error_code = .unauthorized;
                 }
@@ -681,7 +718,28 @@ pub const Peer = struct {
             .message_id = kid.generate(),
         };
 
-        try session_outbox.enqueue(reply_envelope);
+        try conn_outbox.enqueue(reply_envelope);
+    }
+
+    fn handlePublish(self: *Self, envelope: Envelope) !void {
+        assert(envelope.message.refs() == 1);
+
+        defer {
+            envelope.message.deref();
+            if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+        }
+
+        // const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
+        // if (topic.queue.available() == 0) try topic.tick(); // if there is no space, try to advance the topic
+
+        // envelope.message.ref();
+        // topic.queue.enqueue(envelope) catch envelope.message.deref();
+
+        // const received_at = std.time.nanoTimestamp();
+        // const created_at = std.fmt.parseInt(i128, envelope.message.body(), 10) catch 0;
+
+        // const diff = @divFloor(received_at - created_at, std.time.ns_per_us);
+        // log.info("took: {d}us", .{diff});
     }
 
     fn authenticate(self: *Self, handshake: Handshake, message: *Message) bool {
@@ -830,6 +888,30 @@ pub const Peer = struct {
         }
     }
 
+    fn handlePrintingIntervalMetrics(self: *Self) void {
+        const now_ms = std.time.milliTimestamp();
+        const difference = now_ms - self.metrics.last_printed_at_ms;
+        if (difference >= 1_000) {
+            self.metrics.last_printed_at_ms = std.time.milliTimestamp();
+
+            const messages_processed = self.metrics.messages_processed.load(.seq_cst);
+            const messages_processed_delta = messages_processed - self.metrics.last_messages_processed_printed;
+            self.metrics.last_messages_processed_printed = messages_processed;
+
+            const bytes_processed = self.metrics.bytes_processed;
+            const bytes_processed_delta = bytes_processed - self.metrics.last_bytes_processed_printed;
+            self.metrics.last_bytes_processed_printed = bytes_processed;
+
+            log.info("messages_processed: {d}, bytes_processed: {d}, messages_delta: {d}, bytes_delta: {d}, memory_pool: {d}", .{
+                messages_processed,
+                bytes_processed,
+                messages_processed_delta,
+                bytes_processed_delta,
+                self.memory_pool.available(),
+            });
+        }
+    }
+
     fn createSession(self: *Self, session_id: u64, peer_id: u64, peer_type: PeerType) !*Session {
         // self.sessions_mutex.lock();
         // defer self.sessions_mutex.unlock();
@@ -899,6 +981,40 @@ pub const Peer = struct {
         }
 
         return session_outbox;
+    }
+
+    fn findOrCreateConnectionOutbox(self: *Self, conn_id: u64) !*RingBuffer(Envelope) {
+        var connection_outbox: *RingBuffer(Envelope) = undefined;
+        if (self.connection_outboxes.get(conn_id)) |queue| {
+            connection_outbox = queue;
+        } else {
+            const queue = try self.allocator.create(RingBuffer(Envelope));
+            errdefer self.allocator.destroy(queue);
+
+            queue.* = try RingBuffer(Envelope).init(self.allocator, 5);
+            errdefer queue.deinit();
+
+            try self.connection_outboxes.put(self.allocator, conn_id, queue);
+            connection_outbox = queue;
+        }
+
+        return connection_outbox;
+    }
+
+    fn removeConnectionOutbox(self: *Self, conn_id: u64) bool {
+        if (self.connection_outboxes.get(conn_id)) |queue| {
+            while (queue.dequeue()) |envelope| {
+                const message = envelope.message;
+                message.deref();
+                if (message.refs() == 0) self.memory_pool.destroy(message);
+            }
+
+            queue.deinit();
+            self.allocator.destroy(queue);
+            return self.connection_outboxes.remove(conn_id);
+        }
+
+        return false;
     }
 };
 

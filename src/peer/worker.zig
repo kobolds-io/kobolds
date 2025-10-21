@@ -63,6 +63,7 @@ pub const Worker = struct {
     outbox_mutex: std.Thread.Mutex,
     outbox: *RingBuffer(Envelope),
     state: WorkerState,
+    conns_sessions_mutex: std.Thread.Mutex,
     conns_sessions: std.AutoHashMapUnmanaged(u64, u64),
     handshakes: std.AutoHashMapUnmanaged(u64, Handshake),
 
@@ -109,6 +110,7 @@ pub const Worker = struct {
             .inbound_sockets_mutex = std.Thread.Mutex{},
             .inbound_sockets = .empty,
             .handshakes = .empty,
+            .conns_sessions_mutex = std.Thread.Mutex{},
             .conns_sessions = .empty,
             .done_channel = done_channel,
             .id = id,
@@ -499,15 +501,20 @@ pub const Worker = struct {
             if (self.connections.get(envelope.conn_id)) |conn| {
                 switch (envelope.message.fixed_headers.message_type) {
                     .auth_success => {
-                        log.info("conn.id: {}, env.conn_id: {}, conn.protocol_state: {any}", .{ conn.connection_id, envelope.conn_id, conn.protocol_state });
+                        // log.info("conn_id: {}, env.conn_id: {}, conn.protocol_state: {any}", .{ conn.connection_id, envelope.conn_id, conn.protocol_state });
+
+                        // log.info("auth success!", .{});
                         conn.protocol_state = .ready;
                     },
                     .auth_failure => {
+                        // log.info("auth failure!", .{});
                         assert(conn.protocol_state == .authenticating);
                         conn.protocol_state = .terminating;
                     },
                     else => {},
                 }
+
+                // log.info("conn.connection_id: {}, envelope.conn_id: {}", .{ conn.connection_id, envelope.conn_id });
 
                 // const end = std.time.nanoTimestamp();
                 // const start = std.fmt.parseInt(i128, envelope.message.body(), 10) catch 0;
@@ -582,6 +589,10 @@ pub const Worker = struct {
 
         const session_id = kid.generate();
         log.info("inbound session_id: {}", .{session_id});
+
+        self.conns_sessions_mutex.lock();
+        defer self.conns_sessions_mutex.unlock();
+
         try self.conns_sessions.put(self.allocator, conn.connection_id, session_id);
 
         const envelope = Envelope{
@@ -600,10 +611,16 @@ pub const Worker = struct {
     fn handleInboundSessionJoin(self: *Self, conn: *Connection, message: *Message) !void {
         assert(conn.protocol_state == .authenticating);
 
+        self.conns_sessions_mutex.lock();
+        defer self.conns_sessions_mutex.unlock();
+
+        const session_id = message.extension_headers.session_join.session_id;
+        try self.conns_sessions.put(self.allocator, conn.connection_id, session_id);
+
         const envelope = Envelope{
             .conn_id = conn.connection_id,
             .message_id = kid.generate(),
-            .session_id = message.extension_headers.session_join.session_id,
+            .session_id = session_id,
             .message = message,
         };
 

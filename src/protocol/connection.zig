@@ -546,19 +546,21 @@ pub const Connection = struct {
 
                 assert(message_ptr.refs() == 1);
 
-                if (message.fixed_headers.message_type == .publish) {
-                    const received_at = std.time.nanoTimestamp();
-                    const created_at = std.fmt.parseInt(i128, message_ptr.body(), 10) catch 0;
+                // if (message.fixed_headers.message_type == .publish) {
+                //     const received_at = std.time.nanoTimestamp();
+                //     const created_at = std.fmt.parseInt(i128, message_ptr.body(), 10) catch 0;
 
-                    const diff = @divFloor(received_at - created_at, std.time.ns_per_us);
-                    log.info("took: {d}us", .{diff});
-                }
+                //     const diff = @divFloor(received_at - created_at, std.time.ns_per_us);
+                //     log.info("took: {d}us", .{diff});
+                // }
             }
 
             const messages_enqueued = self.inbox.enqueueMany(message_ptrs);
 
             if (messages_enqueued < message_ptrs.len) {
-                log.err("could not enqueue all message ptrs. dropping {d} messages", .{message_ptrs[messages_enqueued..].len});
+                log.err("could not enqueue all message ptrs. dropping {d} messages", .{
+                    message_ptrs[messages_enqueued..].len,
+                });
                 for (message_ptrs[messages_enqueued..]) |message_ptr| {
                     message_ptr.deref();
                     self.memory_pool.destroy(message_ptr);

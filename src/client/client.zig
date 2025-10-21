@@ -492,13 +492,13 @@ pub const Client = struct {
 
             const conn = session.getNextConnection();
 
-            if (message.fixed_headers.message_type == .publish) {
-                const received_at = std.time.nanoTimestamp();
-                const created_at = std.fmt.parseInt(i128, message.body(), 10) catch 0;
+            // if (message.fixed_headers.message_type == .publish) {
+            //     const received_at = std.time.nanoTimestamp();
+            //     const created_at = std.fmt.parseInt(i128, message.body(), 10) catch 0;
 
-                const diff = @divFloor(received_at - created_at, std.time.ns_per_us);
-                log.info("took: {d}us", .{diff});
-            }
+            //     const diff = @divFloor(received_at - created_at, std.time.ns_per_us);
+            //     log.info("took: {d}us", .{diff});
+            // }
 
             conn.outbox.enqueue(message) catch {
                 self.outbox.prepend(message) catch unreachable;

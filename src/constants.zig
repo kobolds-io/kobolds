@@ -19,6 +19,7 @@ pub const message_max_size = @sizeOf(Message);
 pub const parser_max_buffer_size = (1024 * 32) * 2; // TODO: this number needs to be adjusted
 // pub const parser_max_buffer_size = @sizeOf(Message) * 2; // TODO: this number needs to be adjusted
 pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, @sizeOf(Message));
+// pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, 256);
 // pub const parser_messages_buffer_size = 1000;
 
 /// The number of bytes used as the recv buffer in each connection
