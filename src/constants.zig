@@ -18,8 +18,8 @@ pub const message_max_size = @sizeOf(Message);
 // pub const parser_max_buffer_size = (1024 * 64) * 2; // TODO: this number needs to be adjusted
 pub const parser_max_buffer_size = (1024 * 32) * 2; // TODO: this number needs to be adjusted
 // pub const parser_max_buffer_size = @sizeOf(Message) * 2; // TODO: this number needs to be adjusted
-pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, @sizeOf(Message));
-// pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, 256);
+// pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, @sizeOf(Message));
+pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, 256);
 // pub const parser_messages_buffer_size = 1000;
 
 /// The number of bytes used as the recv buffer in each connection
@@ -37,8 +37,8 @@ pub const connection_send_buffer_size = (1024 * 32);
 /// The number of microseconds the IO instance will wait until it flushes
 /// submissions and completions.
 // pub const io_tick_us: u63 = 1;
-pub const io_tick_us: u63 = 100;
-// pub const io_tick_us: u63 = 250;
+// pub const io_tick_us: u63 = 100;
+pub const io_tick_us: u63 = 250;
 // pub const io_tick_us: u63 = 100_000; // testing only
 
 /// Number of entries used for the submission and completion queues
