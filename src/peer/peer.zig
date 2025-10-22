@@ -32,6 +32,9 @@ const AuthenticatorConfig = @import("./authenticator.zig").AuthenticatorConfig;
 const TokenEntry = @import("./authenticator.zig").TokenAuthStrategy.TokenEntry;
 const PeerMetrics = @import("./metrics.zig").PeerMetrics;
 
+const Topic = @import("../pubsub/topic.zig").Topic;
+const TopicOptions = @import("../pubsub/topic.zig").TopicOptions;
+
 /// Peer is the central construct for interacting with Kobolds.
 pub const Peer = struct {
     const Self = @This();
@@ -85,10 +88,7 @@ pub const Peer = struct {
     sessions_mutex: std.Thread.Mutex,
     state: State,
     handshakes: std.AutoHashMapUnmanaged(u64, Handshake),
-    // topics_mutex: std.Thread.Mutex,
-    // topics: std.StringHashMap(*ClientTopic),
-    // transactions_mutex: std.Thread.Mutex,
-    // transactions: std.AutoHashMapUnmanaged(u64, *Transaction),
+    topics: std.StringHashMapUnmanaged(*Topic),
 
     pub fn init(allocator: std.mem.Allocator, config: Config) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -140,12 +140,9 @@ pub const Peer = struct {
         kid.configure(config.peer_id, .{});
 
         return Self{
-            // .advertiser_callbacks = std.AutoHashMap(u128, AdvertiserCallback).init(allocator),
             .allocator = allocator,
             .close_channel = close_channel,
             .config = config,
-            // .connections_mutex = std.Thread.Mutex{},
-            // .connections = std.AutoHashMap(u64, *Connection).init(allocator),
             .done_channel = done_channel,
             .id = config.peer_id,
             .inbox = inbox,
@@ -157,17 +154,12 @@ pub const Peer = struct {
             .listeners = listeners,
             .handshakes = .empty,
             .metrics = .{},
-            // .services_mutex = std.Thread.Mutex{},
-            // .services = std.StringHashMap(*ClientService).init(allocator),
             .sessions_mutex = std.Thread.Mutex{},
             .sessions = .empty,
             .session_outboxes = .empty,
             .connection_outboxes = .empty,
             .state = .closed,
-            // .topics_mutex = std.Thread.Mutex{},
-            // .topics = std.StringHashMap(*ClientTopic).init(allocator),
-            // .transactions_mutex = std.Thread.Mutex{},
-            // .transactions = .empty,
+            .topics = .empty,
             .workers = workers,
             .workers_load_balancer = LoadBalancer(usize){
                 .round_robin = .init(),
@@ -186,15 +178,15 @@ pub const Peer = struct {
         //     self.allocator.destroy(connection);
         // }
 
-        // var topics_iterator = self.topics.valueIterator();
-        // while (topics_iterator.next()) |entry| {
-        //     const topic = entry.*;
+        var topics_iterator = self.topics.valueIterator();
+        while (topics_iterator.next()) |entry| {
+            const topic = entry.*;
 
-        //     self.allocator.free(topic.topic_name);
+            self.allocator.free(topic.topic_name);
 
-        //     topic.deinit();
-        //     self.allocator.destroy(topic);
-        // }
+            topic.deinit();
+            self.allocator.destroy(topic);
+        }
 
         // var transactions_iterator = self.transactions.valueIterator();
         // while (transactions_iterator.next()) |entry| {
@@ -274,15 +266,16 @@ pub const Peer = struct {
         // self.connections.deinit();
         // self.transactions.deinit(self.allocator);
         // self.topics.deinit();
+        self.connection_outboxes.deinit(self.allocator);
+        self.handshakes.deinit(self.allocator);
         self.inbox.deinit();
         self.io.deinit();
         self.listeners.deinit(self.allocator);
         self.memory_pool.deinit();
         self.outbox.deinit();
-        self.sessions.deinit(self.allocator);
         self.session_outboxes.deinit(self.allocator);
-        self.connection_outboxes.deinit(self.allocator);
-        self.handshakes.deinit(self.allocator);
+        self.sessions.deinit(self.allocator);
+        self.topics.deinit(self.allocator);
         self.workers.deinit(self.allocator);
         switch (self.workers_load_balancer) {
             .round_robin => |*lb| lb.deinit(self.allocator),
@@ -735,6 +728,12 @@ pub const Peer = struct {
         // envelope.message.ref();
         // topic.queue.enqueue(envelope) catch envelope.message.deref();
 
+        // const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
+        // if (topic.queue.available() == 0) try topic.tick(); // if there is no space, try to advance the topic
+
+        // envelope.message.ref();
+        // topic.queue.enqueue(envelope) catch envelope.message.deref();
+
         // const received_at = std.time.nanoTimestamp();
         // const created_at = std.fmt.parseInt(i128, envelope.message.body(), 10) catch 0;
 
@@ -963,6 +962,26 @@ pub const Peer = struct {
             return session.removeConnection(conn_id);
         }
         return false;
+    }
+
+    fn findOrCreateTopic(self: *Self, topic_name: []const u8, options: TopicOptions) !*Topic {
+        _ = options;
+
+        if (self.topics.get(topic_name)) |t| {
+            return t;
+        } else {
+            const topic = try self.allocator.create(Topic);
+            errdefer self.allocator.destroy(topic);
+
+            const t_name = try self.allocator.dupe(u8, topic_name);
+            errdefer self.allocator.free(t_name);
+
+            topic.* = try Topic.init(self.allocator, self.memory_pool, t_name, .{});
+            errdefer topic.deinit();
+
+            try self.topics.put(self.allocator, t_name, topic);
+            return topic;
+        }
     }
 
     fn findOrCreateSessionOutbox(self: *Self, session_id: u64) !*RingBuffer(Envelope) {
