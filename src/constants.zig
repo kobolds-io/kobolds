@@ -38,7 +38,8 @@ pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, @sizeO
 /// submissions and completions.
 // pub const io_tick_us: u63 = 1;
 // pub const io_tick_us: u63 = 100;
-pub const io_tick_us: u63 = 250;
+// pub const io_tick_us: u63 = 250;
+pub const io_tick_us: u63 = 1_000;
 // pub const io_tick_us: u63 = 100_000; // testing only
 
 /// Number of entries used for the submission and completion queues
