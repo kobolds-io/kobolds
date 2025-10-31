@@ -6,6 +6,7 @@ const posix = std.posix;
 
 const constants = @import("../constants.zig");
 const kid = @import("kid");
+const utils = @import("../utils.zig");
 
 const stdx = @import("stdx");
 const MemoryPool = stdx.MemoryPool;
@@ -32,8 +33,9 @@ const AuthenticatorConfig = @import("./authenticator.zig").AuthenticatorConfig;
 const TokenEntry = @import("./authenticator.zig").TokenAuthStrategy.TokenEntry;
 const PeerMetrics = @import("./metrics.zig").PeerMetrics;
 
-const Topic = @import("../pubsub/topic.zig").Topic;
-const TopicOptions = @import("../pubsub/topic.zig").TopicOptions;
+const Topic = @import("./topic.zig").Topic;
+const TopicOptions = @import("./topic.zig").TopicOptions;
+const Subscriber = @import("./subscriber.zig").Subscriber;
 
 /// Peer is the central construct for interacting with Kobolds.
 pub const Peer = struct {
@@ -65,30 +67,25 @@ pub const Peer = struct {
     allocator: std.mem.Allocator,
     close_channel: *UnbufferedChannel(bool),
     config: Config,
-    // connections_mutex: std.Thread.Mutex,
-    // connections: std.AutoHashMap(u64, *Connection),
+    connection_outboxes: std.AutoHashMapUnmanaged(u64, *RingBuffer(Envelope)),
     done_channel: *UnbufferedChannel(bool),
+    handshakes: std.AutoHashMapUnmanaged(u64, Handshake),
     id: u11,
     inbox_mutex: std.Thread.Mutex,
     inbox: *RingBuffer(Envelope),
     io: *IO,
+    listeners: *std.AutoHashMapUnmanaged(usize, *Listener),
     memory_pool: *MemoryPool(Message),
     metrics: PeerMetrics,
-    session_outboxes: std.AutoHashMapUnmanaged(u64, *RingBuffer(Envelope)),
-    connection_outboxes: std.AutoHashMapUnmanaged(u64, *RingBuffer(Envelope)),
     outbox_mutex: std.Thread.Mutex,
     outbox: *RingBuffer(Envelope),
-
-    listeners: *std.AutoHashMapUnmanaged(usize, *Listener),
-    workers: *std.AutoHashMapUnmanaged(usize, *Worker),
-    workers_load_balancer: LoadBalancer(usize),
-    // services_mutex: std.Thread.Mutex,
-    // services: std.StringHashMap(*ClientService),
-    sessions: std.AutoHashMapUnmanaged(u64, *Session),
+    session_outboxes: std.AutoHashMapUnmanaged(u64, *RingBuffer(Envelope)),
     sessions_mutex: std.Thread.Mutex,
+    sessions: std.AutoHashMapUnmanaged(u64, *Session),
     state: State,
-    handshakes: std.AutoHashMapUnmanaged(u64, Handshake),
     topics: std.StringHashMapUnmanaged(*Topic),
+    workers_load_balancer: LoadBalancer(usize),
+    workers: *std.AutoHashMapUnmanaged(usize, *Worker),
 
     pub fn init(allocator: std.mem.Allocator, config: Config) !Self {
         const close_channel = try allocator.create(UnbufferedChannel(bool));
@@ -143,21 +140,21 @@ pub const Peer = struct {
             .allocator = allocator,
             .close_channel = close_channel,
             .config = config,
+            .connection_outboxes = .empty,
             .done_channel = done_channel,
+            .handshakes = .empty,
             .id = config.peer_id,
             .inbox = inbox,
             .inbox_mutex = std.Thread.Mutex{},
-            .outbox = outbox,
-            .outbox_mutex = std.Thread.Mutex{},
             .io = io,
-            .memory_pool = memory_pool,
             .listeners = listeners,
-            .handshakes = .empty,
+            .memory_pool = memory_pool,
             .metrics = .{},
-            .sessions_mutex = std.Thread.Mutex{},
-            .sessions = .empty,
+            .outbox_mutex = std.Thread.Mutex{},
+            .outbox = outbox,
             .session_outboxes = .empty,
-            .connection_outboxes = .empty,
+            .sessions = .empty,
+            .sessions_mutex = std.Thread.Mutex{},
             .state = .closed,
             .topics = .empty,
             .workers = workers,
@@ -168,16 +165,6 @@ pub const Peer = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        // var connections_iterator = self.connections.valueIterator();
-        // while (connections_iterator.next()) |entry| {
-        //     const connection = entry.*;
-
-        //     assert(connection.connection_state == .closed);
-
-        //     connection.deinit();
-        //     self.allocator.destroy(connection);
-        // }
-
         var topics_iterator = self.topics.valueIterator();
         while (topics_iterator.next()) |entry| {
             const topic = entry.*;
@@ -188,23 +175,6 @@ pub const Peer = struct {
             self.allocator.destroy(topic);
         }
 
-        // var transactions_iterator = self.transactions.valueIterator();
-        // while (transactions_iterator.next()) |entry| {
-        //     const transaction = entry.*;
-
-        //     self.allocator.destroy(transaction.signal);
-        //     self.allocator.destroy(transaction);
-        // }
-
-        // var services_iterator = self.services.valueIterator();
-        // while (services_iterator.next()) |entry| {
-        //     const service = entry.*;
-
-        //     self.allocator.free(service.topic_name);
-
-        //     service.deinit();
-        //     self.allocator.destroy(service);
-        // }
         var workers_iterator = self.workers.valueIterator();
         while (workers_iterator.next()) |entry| {
             const worker = entry.*;
@@ -385,6 +355,8 @@ pub const Peer = struct {
         try self.gatherInboundSockets();
         try self.gatherEnvelopes();
         try self.processInboundEnvelopes();
+        try self.tickTopics();
+        try self.aggregateMessages();
         try self.distributeEnvelopes();
     }
 
@@ -445,6 +417,11 @@ pub const Peer = struct {
         while (self.inbox.dequeue()) |envelope| {
             assert(envelope.message.refs() == 1);
 
+            defer {
+                envelope.message.deref();
+                if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
+            }
+
             processed_messages_count += 1;
             processed_bytes_count += @intCast(envelope.message.packedSize());
 
@@ -453,13 +430,41 @@ pub const Peer = struct {
                 .session_init => try self.handleSessionInit(envelope),
                 .session_join => try self.handleSessionJoin(envelope),
                 .publish => try self.handlePublish(envelope),
-                // .subscribe => try self.handleSubscribe(envelope),
+                .subscribe => try self.handleSubscribe(envelope),
                 // .unsubscribe => try self.handleUnsubscribe(envelope),
                 else => |t| {
                     log.info("got t: {any}", .{t});
-                    envelope.message.deref();
-                    if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
                 },
+            }
+        }
+    }
+
+    fn tickTopics(self: *Self) !void {
+        // aggregate all topic messages to the subscriber's session_outboxes
+        var topics_iter = self.topics.valueIterator();
+        while (topics_iter.next()) |topic_entry| {
+            const topic: *Topic = topic_entry.*;
+
+            try topic.tick();
+        }
+    }
+
+    fn aggregateMessages(self: *Self) !void {
+        // aggregate all topic messages to the subscriber's session_outboxes
+        var topics_iter = self.topics.valueIterator();
+        while (topics_iter.next()) |topic_entry| {
+            const topic: *Topic = topic_entry.*;
+            if (topic.subscribers.count() == 0) continue;
+
+            var subscribers_iter = topic.subscribers.valueIterator();
+            while (subscribers_iter.next()) |subscriber_entry| {
+                const subscriber: *Subscriber = subscriber_entry.*;
+                if (subscriber.queue.isEmpty()) continue;
+
+                const session_outbox = try self.findOrCreateSessionOutbox(subscriber.session_id);
+
+                // we need to rewrite each envelope to use a different conn_id
+                _ = session_outbox.concatenateAvailable(subscriber.queue);
             }
         }
     }
@@ -504,12 +509,15 @@ pub const Peer = struct {
                             .message_id = prev_envelope.message_id,
                         };
 
+                        log.debug("sending envelope.message to session_outbox: {any}", .{envelope.message.fixed_headers});
+
                         worker.outbox.enqueue(envelope) catch @panic("something modified this");
                     }
                 }
 
                 if (self.connection_outboxes.get(conn_id)) |outbox| {
                     while (outbox.dequeue()) |envelope| {
+                        log.debug("sending envelope.message to connection_outbox: {any}", .{envelope.message.fixed_headers});
                         worker.outbox.enqueue(envelope) catch {
                             outbox.prepend(envelope) catch unreachable;
                         };
@@ -605,11 +613,6 @@ pub const Peer = struct {
     }
 
     fn handleSessionInit(self: *Self, envelope: Envelope) !void {
-        defer {
-            envelope.message.deref();
-            if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
-        }
-
         const conn_outbox = try self.findOrCreateConnectionOutbox(envelope.conn_id);
 
         // Ensure only one handshake per connection
@@ -662,11 +665,6 @@ pub const Peer = struct {
     }
 
     fn handleSessionJoin(self: *Self, envelope: Envelope) !void {
-        defer {
-            envelope.message.deref();
-            if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
-        }
-
         const conn_outbox = try self.findOrCreateConnectionOutbox(envelope.conn_id);
 
         // Ensure only one handshake per connection
@@ -715,30 +713,59 @@ pub const Peer = struct {
     }
 
     fn handlePublish(self: *Self, envelope: Envelope) !void {
-        assert(envelope.message.refs() == 1);
+        const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
+        if (topic.queue.available() == 0) try topic.tick(); // if there is no space, try to advance the topic
 
-        defer {
-            envelope.message.deref();
-            if (envelope.message.refs() == 0) self.memory_pool.destroy(envelope.message);
-        }
+        envelope.message.ref();
+        topic.queue.enqueue(envelope) catch envelope.message.deref();
 
-        // const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
-        // if (topic.queue.available() == 0) try topic.tick(); // if there is no space, try to advance the topic
+        // // if (@mod(self.metrics.messages_processed.load(.seq_cst), 1_000) == 0) {
+        const received_at = std.time.nanoTimestamp();
+        const created_at = std.fmt.parseInt(i128, envelope.message.body(), 10) catch 0;
 
-        // envelope.message.ref();
-        // topic.queue.enqueue(envelope) catch envelope.message.deref();
+        const diff = @divFloor(received_at - created_at, std.time.ns_per_us);
+        log.info("took: {d}us", .{diff});
+        // // }
+    }
 
-        // const topic = try self.findOrCreateTopic(envelope.message.topicName(), .{});
-        // if (topic.queue.available() == 0) try topic.tick(); // if there is no space, try to advance the topic
+    fn handleSubscribe(self: *Self, envelope: Envelope) !void {
+        const topic_name = envelope.message.topicName();
+        const topic = try self.findOrCreateTopic(topic_name, .{});
 
-        // envelope.message.ref();
-        // topic.queue.enqueue(envelope) catch envelope.message.deref();
+        const reply = try self.memory_pool.create();
+        errdefer self.memory_pool.destroy(reply);
 
-        // const received_at = std.time.nanoTimestamp();
-        // const created_at = std.fmt.parseInt(i128, envelope.message.body(), 10) catch 0;
+        reply.* = Message.new(.subscribe_ack);
+        reply.extension_headers.subscribe_ack.transaction_id = envelope.message.extension_headers.subscribe.transaction_id;
+        reply.extension_headers.subscribe_ack.error_code = .ok;
 
-        // const diff = @divFloor(received_at - created_at, std.time.ns_per_us);
-        // log.info("took: {d}us", .{diff});
+        reply.ref();
+        errdefer reply.deref();
+
+        const subscriber_key = utils.generateKey64(topic_name, envelope.session_id);
+        _ = topic.addSubscriber(subscriber_key, envelope.session_id) catch |err| switch (err) {
+            error.AlreadyExists => {
+                log.err("subscriber already exists: {any}", .{err});
+                reply.extension_headers.subscribe_ack.error_code = .failure;
+            },
+            else => {
+                log.err("could not add subscriber: {any}", .{err});
+                return err;
+            },
+        };
+
+        const session_outbox = try self.findOrCreateSessionOutbox(envelope.session_id);
+
+        const reply_envelope = Envelope{
+            .conn_id = envelope.conn_id,
+            .message = reply,
+            .message_id = kid.generate(),
+            .session_id = envelope.session_id,
+        };
+
+        log.info("subscribion to topic {s} added for session: {}", .{ topic_name, envelope.session_id });
+
+        try session_outbox.enqueue(reply_envelope);
     }
 
     fn authenticate(self: *Self, handshake: Handshake, message: *Message) bool {
