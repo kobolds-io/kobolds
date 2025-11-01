@@ -3,7 +3,7 @@ const Message = @import("./protocol/message.zig").Message;
 
 /// the maximum size of a message body
 // pub const message_max_body_size = 1024 * 8; // 8kb
-pub const message_max_body_size = std.math.maxInt(u16); // 16kb
+pub const message_max_body_size = std.math.maxInt(u16); // 64kb
 
 // pub const message_max_body_size = 256; // testing only
 
@@ -38,8 +38,8 @@ pub const parser_messages_buffer_size = @divFloor(parser_max_buffer_size, @sizeO
 
 /// The number of microseconds the IO instance will wait until it flushes
 /// submissions and completions.
-pub const io_tick_us: u63 = 1;
-// pub const io_tick_us: u63 = 100;
+// pub const io_tick_us: u63 = 1;
+pub const io_tick_us: u63 = 100;
 // pub const io_tick_us: u63 = 250;
 // pub const io_tick_us: u63 = 1_000;
 // pub const io_tick_us: u63 = 100_000; // testing only

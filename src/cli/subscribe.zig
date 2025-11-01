@@ -142,7 +142,7 @@ fn subscribe(args: SubscribeArgs) !void {
     // defer client.unsubscribe(args.topic_name, callback_1_id, .{ .timeout_ms = 5_000 }) catch unreachable;
 
     const callback_2_id = try client.subscribe(args.topic_name, callback_2, .{});
-    defer client.unsubscribe(args.topic_name, callback_2_id, .{ .timeout_ms = 5_000 }) catch unreachable;
+    defer client.unsubscribe(args.topic_name, callback_2_id, .{ .timeout_ms = 1_000 }) catch unreachable;
 
     while (!signal_handler.sigint_triggered) {
         std.Thread.sleep(100 * std.time.ns_per_ms);
