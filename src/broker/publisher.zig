@@ -1,11 +1,12 @@
 const std = @import("std");
-const utils = @import("../utils.zig");
 const uuid = @import("uuid");
+const utils = @import("../utils.zig");
+const constants = @import("../constants.zig");
 
 const RingBuffer = @import("stdx").RingBuffer;
-const Envelope = @import("../peer/envelope.zig").Envelope;
+const Envelope = @import("./envelope.zig").Envelope;
 
-pub const Subscriber = struct {
+pub const Publisher = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,

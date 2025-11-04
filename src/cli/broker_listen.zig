@@ -2,11 +2,11 @@ const std = @import("std");
 const clap = @import("clap");
 const signal_handler = @import("../signal_handler.zig");
 
-const Peer = @import("../peer/peer.zig").Peer;
-const PeerConfig = Peer.Config;
-const ListenerConfig = @import("../peer/listener.zig").ListenerConfig;
+const Broker = @import("../broker/broker.zig").Broker;
+const PeerConfig = Broker.Config;
+const ListenerConfig = @import("../broker/listener.zig").ListenerConfig;
+const AllowedInboundConnectionConfig = @import("../broker/listener.zig").AllowedInboundConnectionConfig;
 const OutboundConnectionConfig = @import("../protocol/connection.zig").OutboundConnectionConfig;
-const AllowedInboundConnectionConfig = @import("../peer/listener.zig").AllowedInboundConnectionConfig;
 
 pub fn ListenCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
 
@@ -55,7 +55,7 @@ fn listen(host: []const u8, port: u16, worker_threads: usize) !void {
 
     var peer_config = PeerConfig{
         .worker_threads = worker_threads,
-        .peer_id = 1,
+        .broker_id = 1,
         .authenticator_config = .{
             .token = .{
                 .clients = &.{
@@ -94,7 +94,7 @@ fn listen(host: []const u8, port: u16, worker_threads: usize) !void {
     // const outbound_connection_configs = [_]OutboundConnectionConfig{outbound_peer_connection_config};
     // peer_config.outbound_configs = &outbound_connection_configs;
 
-    var peer = try Peer.init(allocator, peer_config);
+    var peer = try Broker.init(allocator, peer_config);
     defer peer.deinit();
 
     try peer.start();

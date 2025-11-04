@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
-const log = std.log.scoped(.peer);
+const log = std.log.scoped(.broker);
 const posix = std.posix;
 
 const constants = @import("../constants.zig");
@@ -31,18 +31,18 @@ const ChallengeAlgorithm = @import("../protocol/message.zig").ChallengeAlgorithm
 const Authenticator = @import("./authenticator.zig").Authenticator;
 const AuthenticatorConfig = @import("./authenticator.zig").AuthenticatorConfig;
 const TokenEntry = @import("./authenticator.zig").TokenAuthStrategy.TokenEntry;
-const PeerMetrics = @import("./metrics.zig").PeerMetrics;
+const BrokerMetrics = @import("./metrics.zig").BrokerMetrics;
 
 const Topic = @import("./topic.zig").Topic;
 const TopicOptions = @import("./topic.zig").TopicOptions;
 const Subscriber = @import("./subscriber.zig").Subscriber;
 
-/// Peer is the central construct for interacting with Kobolds.
-pub const Peer = struct {
+/// Broker is the central construct for interacting with Kobolds.
+pub const Broker = struct {
     const Self = @This();
 
     pub const Config = struct {
-        peer_id: u11 = 0,
+        broker_id: u11 = 0,
         memory_pool_capacity: usize = constants.default_client_memory_pool_capacity,
         inbox_capacity: usize = constants.default_client_inbox_capacity,
         outbox_capacity: usize = constants.default_client_outbox_capacity,
@@ -76,7 +76,7 @@ pub const Peer = struct {
     io: *IO,
     listeners: *std.AutoHashMapUnmanaged(usize, *Listener),
     memory_pool: *MemoryPool(Message),
-    metrics: PeerMetrics,
+    metrics: BrokerMetrics,
     outbox_mutex: std.Thread.Mutex,
     outbox: *RingBuffer(Envelope),
     session_outboxes: std.AutoHashMapUnmanaged(u64, *RingBuffer(Envelope)),
@@ -134,7 +134,7 @@ pub const Peer = struct {
         listeners.* = .empty;
         errdefer listeners.deinit(allocator);
 
-        kid.configure(config.peer_id, .{});
+        kid.configure(config.broker_id, .{});
 
         return Self{
             .allocator = allocator,
@@ -143,7 +143,7 @@ pub const Peer = struct {
             .connection_outboxes = .empty,
             .done_channel = done_channel,
             .handshakes = .empty,
-            .id = config.peer_id,
+            .id = config.broker_id,
             .inbox = inbox,
             .inbox_mutex = std.Thread.Mutex{},
             .io = io,
@@ -277,7 +277,7 @@ pub const Peer = struct {
 
         // Start the core thread
         var ready_channel = UnbufferedChannel(bool).new();
-        const core_thread = try std.Thread.spawn(.{}, Peer.run, .{ self, &ready_channel });
+        const core_thread = try std.Thread.spawn(.{}, Broker.run, .{ self, &ready_channel });
         core_thread.detach();
 
         _ = ready_channel.tryReceive(100 * std.time.ns_per_ms) catch |err| {
@@ -316,18 +316,18 @@ pub const Peer = struct {
         }
 
         _ = self.done_channel.receive();
-        log.info("peer {d}: closed", .{self.id});
+        log.info("broker {d}: closed", .{self.id});
     }
 
     pub fn run(self: *Self, ready_channel: *UnbufferedChannel(bool)) void {
         self.state = .running;
         ready_channel.send(true);
-        log.info("peer {d} running", .{self.id});
+        log.info("broker {d} running", .{self.id});
         while (true) {
             // check if the close channel has received a close command
             const close_channel_received = self.close_channel.tryReceive(0) catch false;
             if (close_channel_received) {
-                log.info("peer {d} closing", .{self.id});
+                log.info("broker {d} closing", .{self.id});
                 self.state = .closing;
             }
 
@@ -786,7 +786,7 @@ pub const Peer = struct {
                     }
                 }
             },
-            .node => @panic("unsupported peer type"),
+            .node => @panic("unsupported broker type"),
         }
 
         return false;
@@ -1067,52 +1067,52 @@ pub const Peer = struct {
 test "init/deinit" {
     const allocator = testing.allocator;
 
-    var peer = try Peer.init(allocator, .{});
-    defer peer.deinit();
+    var broker = try Broker.init(allocator, .{});
+    defer broker.deinit();
 
-    try peer.start();
-    defer peer.close();
+    try broker.start();
+    defer broker.close();
 }
 
-// peer tick
+// broker tick
 // 1. gather envelopes from workers
-// 2. if envelope is not connected to a session, then pass it to the peer
+// 2. if envelope is not connected to a session, then pass it to the broker
 //
 
 // Da Rulez:
-// 1. in order for a peer to connect to another peer, one of those peers must be listening on a port. That peer
-// 2. peer can have `n` connections per session. A session can only be connected to a single peer
-// 3. a peer can dynamically listen and unlisten for new connection. Unlistening from connections does not disconnect
+// 1. in order for a broker to connect to another broker, one of those brokers must be listening on a port. That broker
+// 2. broker can have `n` connections per session. A session can only be connected to a single broker
+// 3. a broker can dynamically listen and unlisten for new connection. Unlistening from connections does not disconnect
 //     connections that have already been established through that listening port.
-// 4. peers are simple mediums to communicate with eachother. A peer is not a router. A peer is both a client and a
-//     server with `n` symetrical connections to another peer.
+// 4. brokers are simple mediums to communicate with eachother. A broker is not a router. A broker is both a client and a
+//     server with `n` symetrical connections to another broker.
 // 5.
 //
-// const peer = try Peer.init(allocator, config)
-// defer peer.deinit();
+// const broker = try broker.init(allocator, config)
+// defer broker.deinit();
 //
 // spawn a background thread to handle all the io and stuff.
-// try peer.start();
-// defer peer.close(); // close will destroy all subscriptions, advertisments and all that ungracefully so best to do it deliberatly
+// try broker.start();
+// defer broker.close(); // close will destroy all subscriptions, advertisments and all that ungracefully so best to do it deliberatly
 //
-// // if there was a listener that wasn't spawned w/ the peer_config, then spawn a separate one here. Should
+// // if there was a listener that wasn't spawned w/ the broker_config, then spawn a separate one here. Should
 // spawn a new thread per listener
-// const listener_id = try peer.listen(listener_config)
-// defer peer.unlisten(listener_id);
+// const listener_id = try broker.listen(listener_config)
+// defer broker.unlisten(listener_id);
 //
 // // create a session and initialize the outbound connection
 // // this is a synchronous connect
-// const session_id = try peer.connect(outbound_config)
-// try peer.awaitConnected(session_id, timeout_ns);
+// const session_id = try broker.connect(outbound_config)
+// try broker.awaitConnected(session_id, timeout_ns);
 //
 // // disconnect all connections associated with this session
-// defer peer.disconnect(session_id);
+// defer broker.disconnect(session_id);
 //
-// // subscribe to this topic with this session. Sessions can only be connected to a single "peer" so this is pretty safe
-// const callback_id = peer.subscribe(session_id, topic_name, callback);
+// // subscribe to this topic with this session. Sessions can only be connected to a single "broker" so this is pretty safe
+// const callback_id = broker.subscribe(session_id, topic_name, callback);
 //
 // // unsubscribe this function from this session
-// defer _ = peer.unsubscribe(session_id, callback_id);
+// defer _ = broker.unsubscribe(session_id, callback_id);
 //
 //
-// try peer.publish(session_id, topic, body, opts)
+// try broker.publish(session_id, topic, body, opts)

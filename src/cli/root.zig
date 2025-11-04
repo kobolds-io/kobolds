@@ -2,7 +2,7 @@ const std = @import("std");
 const clap = @import("clap");
 
 const ListenCommand = @import("./listen.zig").ListenCommand;
-const PeerListenCommand = @import("./peer_listen.zig").ListenCommand;
+const BrokerListenCommand = @import("./broker_listen.zig").ListenCommand;
 const ConnectCommand = @import("./connect.zig").ConnectCommand;
 const PublishCommand = @import("./publish.zig").PublishCommand;
 const SubscribeCommand = @import("./subscribe.zig").SubscribeCommand;
@@ -12,7 +12,7 @@ pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator)
     const RootSubCommands = enum {
         help,
         listen,
-        peer_listen,
+        broker_listen,
         connect,
         publish,
         subscribe,
@@ -55,7 +55,7 @@ pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator)
     switch (command) {
         .help => return clap.helpToFile(.stderr(), clap.Help, &root_params, .{}),
         .listen => try ListenCommand(allocator, iter),
-        .peer_listen => try PeerListenCommand(allocator, iter),
+        .broker_listen => try BrokerListenCommand(allocator, iter),
         .connect => try ConnectCommand(allocator, iter),
         .publish => try PublishCommand(allocator, iter),
         .subscribe => try SubscribeCommand(allocator, iter),
