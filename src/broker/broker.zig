@@ -719,13 +719,11 @@ pub const Broker = struct {
         envelope.message.ref();
         topic.queue.enqueue(envelope) catch envelope.message.deref();
 
-        // // if (@mod(self.metrics.messages_processed.load(.seq_cst), 1_000) == 0) {
-        const received_at = std.time.nanoTimestamp();
-        const created_at = std.fmt.parseInt(i128, envelope.message.body(), 10) catch 0;
-
-        const diff = @divFloor(received_at - created_at, std.time.ns_per_us);
-        log.info("took: {d}us", .{diff});
-        // // }
+        // NOTE: This is just some timeing checks
+        // const received_at = std.time.nanoTimestamp();
+        // const created_at = std.fmt.parseInt(i128, envelope.message.body(), 10) catch 0;
+        // const diff = @divFloor(received_at - created_at, std.time.ns_per_us);
+        // log.info("took: {d}us", .{diff});
     }
 
     fn handleSubscribe(self: *Self, envelope: Envelope) !void {

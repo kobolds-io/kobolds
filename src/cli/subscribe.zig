@@ -113,36 +113,35 @@ fn subscribe(args: SubscribeArgs) !void {
     const callback_1 = struct {
         pub fn callback(message: *Message) void {
             _ = message;
-            messages_recv_count += 1;
+            // messages_recv_count += 1;
 
-            // std.debug.print("callback_1: messages_recv_count: {d}\n", .{messages_recv_count});
-            if (messages_recv_count % 1000 == 0) {
-                std.debug.print("callback_1: messages_recv_count: {d}\n", .{messages_recv_count});
-            }
-        }
-    }.callback;
-    _ = callback_1;
-
-    const callback_2 = struct {
-        pub fn callback(message: *Message) void {
-            messages_recv_count += 1;
+            // // std.debug.print("callback_1: messages_recv_count: {d}\n", .{messages_recv_count});
             // if (messages_recv_count % 1000 == 0) {
-            const end = std.time.nanoTimestamp();
-            const start = std.fmt.parseInt(i128, message.body(), 10) catch 0;
-
-            const diff = @divFloor(end - start, std.time.ns_per_us);
-            std.debug.print("messages_recv_count: {}, took: {d}us\n", .{ messages_recv_count, diff });
+            //     std.debug.print("callback_1: messages_recv_count: {d}\n", .{messages_recv_count});
             // }
         }
     }.callback;
+
+    const topic_name = "b" ** constants.message_max_topic_name_size;
+    const callback_1_id = try client.subscribe(topic_name, callback_1, .{});
+    defer client.unsubscribe(args.topic_name, callback_1_id, .{ .timeout_ms = 5_000 }) catch unreachable;
+
+    // const callback_2 = struct {
+    //     pub fn callback(message: *Message) void {
+    //         messages_recv_count += 1;
+    //         // if (messages_recv_count % 1000 == 0) {
+    //         const end = std.time.nanoTimestamp();
+    //         const start = std.fmt.parseInt(i128, message.body(), 10) catch 0;
+
+    //         const diff = @divFloor(end - start, std.time.ns_per_us);
+    //         std.debug.print("messages_recv_count: {}, took: {d}us\n", .{ messages_recv_count, diff });
+    //         // }
+    //     }
+    // }.callback;
     // _ = callback_2;
 
-    // const topic_name = "b" ** constants.message_max_topic_name_size;
-    // const callback_1_id = try client.subscribe(topic_name, callback_1, .{});
-    // defer client.unsubscribe(args.topic_name, callback_1_id, .{ .timeout_ms = 5_000 }) catch unreachable;
-
-    const callback_2_id = try client.subscribe(args.topic_name, callback_2, .{});
-    defer client.unsubscribe(args.topic_name, callback_2_id, .{ .timeout_ms = 1_000 }) catch unreachable;
+    // const callback_2_id = try client.subscribe(args.topic_name, callback_2, .{});
+    // defer client.unsubscribe(args.topic_name, callback_2_id, .{ .timeout_ms = 1_000 }) catch unreachable;
 
     while (!signal_handler.sigint_triggered) {
         std.Thread.sleep(100 * std.time.ns_per_ms);
