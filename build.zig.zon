@@ -1,0 +1,39 @@
+.{
+    .name = .kobolds,
+    .version = "0.0.0",
+    .fingerprint = 0xe49805f77986a28c, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{
+        .stdx = .{
+            .url = "https://github.com/kobolds-io/stdx/archive/refs/tags/v0.2.0.tar.gz",
+            .hash = "stdx-0.2.0-nyLNAc-NAgBBO1TNctRUZjdBZzMk_-TjSMe9OAj3dvsn",
+        },
+        .kid = .{
+            .url = "https://github.com/kobolds-io/kid/archive/refs/tags/v0.0.3.tar.gz",
+            .hash = "kid-0.0.3-vgAj1r0kAABhhqalktJSxT8pSNDzm6fxOBQm8oKkorZD",
+        },
+        .zbench = .{
+            .url = "https://github.com/hendriknielaender/zBench/archive/v0.11.2.tar.gz",
+            .hash = "zbench-0.11.2-YTdc7zolAQDlBF9i0ywXIvDjafL3Kg27S-aFUq6dU5zy",
+        },
+        .clap = .{
+            .url = "https://github.com/Hejsil/zig-clap/archive/refs/tags/0.11.0.tar.gz",
+            .hash = "clap-0.11.0-oBajB-HnAQDPCKYzwF7rO3qDFwRcD39Q0DALlTSz5H7e",
+        },
+    },
+    // Specifies the set of files and directories that are included in this package.
+    // Only files and directories listed here are included in the `hash` that
+    // is computed for this package. Only files listed here will remain on disk
+    // when using the zig package manager. As a rule of thumb, one should list
+    // files required for compilation plus any license(s).
+    // Paths are relative to the build root. Use the empty string (`""`) to refer to
+    // the build root itself.
+    // A directory listed here means that all files within, recursively, are included.
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+        "README.md",
+    },
+}
