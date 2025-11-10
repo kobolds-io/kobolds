@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
+const hash = @import("../hash.zig");
 
 const ProtocolVersion = @import("protocol.zig").ProtocolVersion;
 
@@ -37,9 +38,6 @@ pub const Frame = struct {
     pub fn toBytes(self: Self, buf: []u8) usize {
         assert(buf.len >= self.packedSize());
 
-        // reset the frame_headers.checksum
-        self.frame_headers.checksum = 0;
-
         var i: usize = 0;
         const frame_header_bytes = self.frame_headers.toBytes(buf);
         i += frame_header_bytes;
@@ -50,7 +48,7 @@ pub const Frame = struct {
         return i;
     }
 
-    fn toChecksumPayload(self: Self, buf: []u8) usize {
+    fn toChecksumPayload(self: Self, buf: []u8) []u8 {
         assert(buf.len <= self.packedSize() - @sizeOf(self.frame_headers.checksum));
     }
 
@@ -123,6 +121,8 @@ pub const FrameHeaders = struct {
         std.mem.writeInt(u16, buf[i..][0..@sizeOf(u16)], self.payload_length, .big);
         i += @sizeOf(u16);
 
+        // figure out the checksum
+        const checksum = hash.checksumCrc32(buf[0..i]);
         std.mem.writeInt(u32, buf[i..][0..@sizeOf(u32)], self.checksum, .big);
         i += @sizeOf(u32);
 
