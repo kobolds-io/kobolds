@@ -35,6 +35,38 @@ pub fn verifyCrc32(sum: u32, data: []const u8) bool {
     return sum == checksumCrc32(data);
 }
 
+// pub fn generateKey64(topic_name: []const u8, id: u64) u64 {
+//     var buf: [constants.message_max_topic_name_size + @sizeOf(u64)]u8 = undefined;
+//     var fba = std.heap.FixedBufferAllocator.init(&buf);
+//     const fba_allocator = fba.allocator();
+
+//     // a failure here would be unrecoverable
+//     var bytes_list = std.array_list.Managed(u8).initCapacity(fba_allocator, buf.len) catch unreachable;
+
+//     bytes_list.appendSliceAssumeCapacity(topic_name);
+//     bytes_list.appendSliceAssumeCapacity(&u64ToBytes(id));
+//     defer bytes_list.deinit();
+
+//     // we are just going to use the same checksum hasher as we do for messages.
+//     return hash.xxHash64Checksum(bytes_list.items);
+// }
+
+// pub fn generateKey128(topic_name: []const u8, id: u128) u128 {
+//     var buf: [constants.message_max_topic_name_size + @sizeOf(u128)]u8 = undefined;
+//     var fba = std.heap.FixedBufferAllocator.init(&buf);
+//     const fba_allocator = fba.allocator();
+
+//     // a failure here would be unrecoverable
+//     var bytes_list = std.array_list.Managed(u8).initCapacity(fba_allocator, buf.len) catch unreachable;
+
+//     bytes_list.appendSliceAssumeCapacity(topic_name);
+//     bytes_list.appendSliceAssumeCapacity(&u128ToBytes(id));
+//     defer bytes_list.deinit();
+
+//     // we are just going to use the same checksum hasher as we do for messages.
+//     return hash.xxHash64Checksum(bytes_list.items);
+// }
+
 test xxHash64Checksum {
     const test_1 = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     const test_2 = [16]u8{ 8, 7, 6, 5, 4, 3, 2, 1, 1, 2, 3, 4, 5, 6, 7, 8 };
