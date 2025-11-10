@@ -8,6 +8,7 @@ pub fn build(b: *std.Build) void {
 
     setupExecutable(b, target, optimize);
     setupTests(b, target, optimize);
+    setupBenchmarks(b, target, optimize);
 }
 
 fn setupExecutable(
@@ -90,4 +91,45 @@ fn setupTests(
     const test_step = b.step("test", "Run unit tests");
 
     test_step.dependOn(&run_unit_tests.step);
+}
+
+fn setupBenchmarks(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) void {
+    const bench_lib = b.addTest(.{
+        .name = "bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("./src/bench.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    const zbench_dep = b.dependency("zbench", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zbench_mod = zbench_dep.module("zbench");
+
+    const stdx_dep = b.dependency("stdx", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const stdx_mod = stdx_dep.module("stdx");
+
+    const kid_dep = b.dependency("kid", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const kid_mod = kid_dep.module("kid");
+
+    bench_lib.root_module.addImport("kid", kid_mod);
+    bench_lib.root_module.addImport("zbench", zbench_mod);
+    bench_lib.root_module.addImport("stdx", stdx_mod);
+
+    const run_bench_tests = b.addRunArtifact(bench_lib);
+    const bench_test_step = b.step("bench", "Run benchmark tests");
+    bench_test_step.dependOn(&run_bench_tests.step);
 }
