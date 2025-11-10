@@ -52,7 +52,7 @@ pub const Frame = struct {
         write_offset += self.payload.len;
 
         // calculate a checksum for all the bytes in the buffer BEFORE the checksum
-        const checksum = check.checksumCrc32(buf[0..write_offset]);
+        const checksum = check.xxHash32Checksum(buf[0..write_offset]);
         self.checksum = checksum;
 
         std.mem.writeInt(u32, buf[write_offset..][0..@sizeOf(u32)], self.checksum, .big);
@@ -82,7 +82,7 @@ pub const Frame = struct {
 
         // recalculate the checksum to verify the integrity of the frame. This checksum calculation
         // only includes the frame_headers and the payload, not the checksum itself.
-        if (!check.verifyCrc32(checksum, data[0..read_offset])) return error.InvalidChecksum;
+        if (!check.xxHash32Verify(checksum, data[0..read_offset])) return error.InvalidChecksum;
 
         read_offset += @sizeOf(u32);
 
