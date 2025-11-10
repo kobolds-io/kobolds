@@ -112,7 +112,7 @@ pub const FrameHeaders = struct {
     frame_type: FrameType = .message,
 
     /// Bitmask containing flags describing this frame and its contents
-    flags: FrameHeaderFlags = .{},
+    flags: FrameHeadersFlags = .{},
 
     /// sequence number of the is frame.
     sequence: u16 = 0,
@@ -124,7 +124,7 @@ pub const FrameHeaders = struct {
     pub fn packedSize() usize {
         return @sizeOf(u16) +
             1 + // protocol_version and flags combine to a single byte
-            @sizeOf(FrameHeaderFlags) +
+            @sizeOf(FrameHeadersFlags) +
             @sizeOf(u16) +
             @sizeOf(u16);
     }
@@ -173,7 +173,7 @@ pub const FrameHeaders = struct {
 
         read_offset += 1;
 
-        const flags: FrameHeaderFlags = @bitCast(data[read_offset]);
+        const flags: FrameHeadersFlags = @bitCast(data[read_offset]);
         read_offset += 1;
 
         const sequence = std.mem.readInt(u16, data[read_offset..][0..@sizeOf(u16)], .big);
@@ -193,7 +193,7 @@ pub const FrameHeaders = struct {
     }
 };
 
-pub const FrameHeaderFlags = packed struct {
+pub const FrameHeadersFlags = packed struct {
     continuation: bool = false,
     compressed: bool = false,
     encrypted: bool = false,
