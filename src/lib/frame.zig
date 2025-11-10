@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
-const hash = @import("../hash.zig");
+const hash = @import("./hash.zig");
 
 const ProtocolVersion = @import("protocol.zig").ProtocolVersion;
 
@@ -10,17 +10,20 @@ pub const Frame = struct {
 
     pub const Options = struct {};
 
+    /// Metadata about the frame
     frame_headers: FrameHeaders = .{},
-    payload: []u8,
+
+    /// Body of the frame. May contain a `Message` or a segment of a message.
+    payload: []const u8,
+
+    /// Checksum of the frame header + payload
+    checksum: u32 = 0,
 
     pub fn packedSize(self: Self) usize {
-        var payload_len: usize = 0;
-        payload_len = self.payload.len;
-
-        return FrameHeaders.packedSize() + payload_len;
+        return FrameHeaders.packedSize() + self.payload.len + @sizeOf(u32);
     }
 
-    pub fn new(payload: []u8, opts: Options) Self {
+    pub fn new(payload: []const u8, opts: Options) Self {
         // NOTE: for now, we just discard the options As features are implemented for each flag,
         // they will be handled.
         _ = opts;
@@ -32,31 +35,62 @@ pub const Frame = struct {
                 .payload_length = @intCast(payload.len),
             },
             .payload = payload,
+            .checksum = 0,
         };
     }
 
-    pub fn toBytes(self: Self, buf: []u8) usize {
+    /// Converts the struct into bytes and orders them. Endieness is Big.
+    /// Order is as follows: [ frame_header | payload | checksum ]
+    pub fn toBytes(self: *Self, buf: []u8) usize {
         assert(buf.len >= self.packedSize());
 
-        var i: usize = 0;
+        var write_offset: usize = 0;
         const frame_header_bytes = self.frame_headers.toBytes(buf);
-        i += frame_header_bytes;
+        write_offset += frame_header_bytes;
 
-        @memcpy(buf[i .. i + self.payload.len], self.payload);
-        i += self.payload.len;
+        @memcpy(buf[write_offset .. write_offset + self.payload.len], self.payload);
+        write_offset += self.payload.len;
 
-        return i;
+        // calculate a checksum for all the bytes in the buffer BEFORE the checksum
+        const checksum = hash.checksumCrc32(buf[0..write_offset]);
+        self.checksum = checksum;
+
+        std.mem.writeInt(u32, buf[write_offset..][0..@sizeOf(u32)], self.checksum, .big);
+        write_offset += @sizeOf(u32);
+
+        return write_offset;
     }
 
-    fn toChecksumPayload(self: Self, buf: []u8) []u8 {
-        assert(buf.len <= self.packedSize() - @sizeOf(self.frame_headers.checksum));
-    }
+    /// Reads bytes from a buffer and casts those bytes into a Frame. The order must be the same
+    /// order of the `Frame.toBytes` function.
+    pub fn fromBytes(data: []const u8) !Self {
+        if (data.len < FrameHeaders.packedSize()) return error.Truncated;
 
-    pub fn fromBytes(data: []u8) !Self {
-        _ = data;
+        var read_offset: usize = 0;
 
-        return error.NotImplemented;
-        // return Self{};
+        const frame_headers = try FrameHeaders.fromBytes(data[read_offset..]);
+        read_offset += FrameHeaders.packedSize();
+
+        const payload_len = frame_headers.payload_length;
+        if (data.len < read_offset + payload_len) return error.Truncated;
+
+        // reference the slice of the data as not copy
+        const payload = data[read_offset .. read_offset + payload_len];
+        read_offset += payload_len;
+
+        const checksum = std.mem.readInt(u32, data[read_offset..][0..@sizeOf(u32)], .big);
+
+        // recalculate the checksum to verify the integrity of the frame. This checksum calculation
+        // only includes the frame_headers and the payload, not the checksum itself.
+        if (!hash.verifyCrc32(checksum, data[0..read_offset])) return error.InvalidChecksum;
+
+        read_offset += @sizeOf(u32);
+
+        return Self{
+            .frame_headers = frame_headers,
+            .payload = payload,
+            .checksum = checksum,
+        };
     }
 };
 
@@ -65,7 +99,7 @@ pub const FrameHeaders = struct {
 
     comptime {
         // if this ever changes we will explode during compile time
-        assert(12 == FrameHeaders.packedSize());
+        assert(8 == FrameHeaders.packedSize());
     }
 
     /// A magical resync value "KB" (kobold)
@@ -86,77 +120,67 @@ pub const FrameHeaders = struct {
     /// length of the payload in bytes
     payload_length: u16 = 0,
 
-    /// Checksum of the frame header + payload
-    checksum: u32 = 0,
-
+    /// Returns the number of bytes this struct consumes once serialized to bytes
     pub fn packedSize() usize {
         return @sizeOf(u16) +
             1 + // protocol_version and flags combine to a single byte
             @sizeOf(FrameHeaderFlags) +
             @sizeOf(u16) +
-            @sizeOf(u16) +
-            @sizeOf(u32);
+            @sizeOf(u16);
     }
 
     /// Write the bytes that make up the FrameHeader to the buffer.
-    /// [magic, protocol_version + frame_type, flags, sequence, payload_length, checksum]
+    /// [ magic | protocol_version + frame_type | flags | sequence | payload_length ]
     pub fn toBytes(self: Self, buf: []u8) usize {
         assert(buf.len >= FrameHeaders.packedSize());
 
-        var i: usize = 0;
+        var write_offset: usize = 0;
 
-        std.mem.writeInt(u16, buf[i..][0..@sizeOf(u16)], self.magic, .big);
-        i += @sizeOf(u16);
+        std.mem.writeInt(u16, buf[write_offset..][0..@sizeOf(u16)], self.magic, .big);
+        write_offset += @sizeOf(u16);
 
         // both protocol_version and frame_type are u4s so we combine them into a u8
-        buf[i] = (@as(u8, @intFromEnum(self.protocol_version)) << 4) | @as(u8, @intFromEnum(self.frame_type));
-        i += 1;
+        buf[write_offset] = (@as(u8, @intFromEnum(self.protocol_version)) << 4) | @as(u8, @intFromEnum(self.frame_type));
+        write_offset += 1;
 
-        buf[i] = @as(u8, @bitCast(self.flags));
-        i += 1;
+        buf[write_offset] = @as(u8, @bitCast(self.flags));
+        write_offset += 1;
 
-        std.mem.writeInt(u16, buf[i..][0..@sizeOf(u16)], self.sequence, .big);
-        i += @sizeOf(u16);
+        std.mem.writeInt(u16, buf[write_offset..][0..@sizeOf(u16)], self.sequence, .big);
+        write_offset += @sizeOf(u16);
 
-        std.mem.writeInt(u16, buf[i..][0..@sizeOf(u16)], self.payload_length, .big);
-        i += @sizeOf(u16);
+        std.mem.writeInt(u16, buf[write_offset..][0..@sizeOf(u16)], self.payload_length, .big);
+        write_offset += @sizeOf(u16);
 
-        // figure out the checksum
-        const checksum = hash.checksumCrc32(buf[0..i]);
-        std.mem.writeInt(u32, buf[i..][0..@sizeOf(u32)], self.checksum, .big);
-        i += @sizeOf(u32);
-
-        return i;
+        return write_offset;
     }
 
     /// Read the bytes that make up a FrameHeader from the buffer.
     /// [magic, protocol_version + frame_type, flags, sequence, payload_length, checksum]
     pub fn fromBytes(data: []const u8) !Self {
-        var i: usize = 0;
+        if (data.len < Self.packedSize()) return error.Truncated;
+        var read_offset: usize = 0;
 
-        const magic = std.mem.readInt(u16, data[i..][0..@sizeOf(u16)], .big);
-        i += @sizeOf(u16);
+        const magic = std.mem.readInt(u16, data[read_offset..][0..@sizeOf(u16)], .big);
+        read_offset += @sizeOf(u16);
 
-        const protocol_version_and_frame_type = data[i];
+        const protocol_version_and_frame_type = data[read_offset];
         const protocol_version_bits: u4 = @intCast(protocol_version_and_frame_type >> 4);
         const protocol_version = ProtocolVersion.fromBits(protocol_version_bits);
 
-        const frame_type_bits: u4 = @intCast(protocol_version_and_frame_type >> 0xF);
-        const frame_type = FrameType.fromBits(frame_type_bits);
+        const frame_type_bits: u4 = @intCast(protocol_version_and_frame_type & 0xF);
+        const frame_type = try FrameType.fromBits(frame_type_bits);
 
-        i += 1;
+        read_offset += 1;
 
-        const flags: FrameHeaderFlags = @bitCast(@as(u4, data[i] & 0xF));
-        i += 1;
+        const flags: FrameHeaderFlags = @bitCast(data[read_offset]);
+        read_offset += 1;
 
-        const sequence = std.mem.readInt(u16, data[i..][0..@sizeOf(u16)], .big);
-        i += @sizeOf(u16);
+        const sequence = std.mem.readInt(u16, data[read_offset..][0..@sizeOf(u16)], .big);
+        read_offset += @sizeOf(u16);
 
-        const payload_length = std.mem.readInt(u16, data[i..][0..@sizeOf(u16)], .big);
-        i += @sizeOf(u16);
-
-        const checksum = std.mem.readInt(u32, data[i..][0..@sizeOf(u32)], .big);
-        i += @sizeOf(u32);
+        const payload_length = std.mem.readInt(u16, data[read_offset..][0..@sizeOf(u16)], .big);
+        read_offset += @sizeOf(u16);
 
         return FrameHeaders{
             .magic = magic,
@@ -165,7 +189,6 @@ pub const FrameHeaders = struct {
             .flags = flags,
             .sequence = sequence,
             .payload_length = payload_length,
-            .checksum = checksum,
         };
     }
 };
@@ -178,30 +201,31 @@ pub const FrameHeaderFlags = packed struct {
 };
 
 pub const FrameType = enum(u4) {
-    const Self = @This();
-
     message,
     handshake,
     ack,
     nack,
     heartbeat,
 
-    pub fn fromBits(bits: u4) Self {
+    pub fn fromBits(bits: u4) !FrameType {
         return switch (bits) {
             0 => .message,
             1 => .handshake,
             2 => .ack,
             3 => .nack,
             4 => .heartbeat,
+            else => error.UnsupportedFrameType,
         };
     }
 };
 
 test "frame size" {
     var payload = [_]u8{ 1, 2, 3, 4, 5, 6 };
-    const frame = Frame.new(&payload, .{});
+    var frame = Frame.new(&payload, .{});
 
-    var buf: [@sizeOf(Frame)]u8 = undefined;
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    var buf: [100]u8 = undefined;
 
     const n = frame.toBytes(&buf);
 
@@ -211,28 +235,52 @@ test "frame size" {
 test "frame header size" {
     var buf: [FrameHeaders.packedSize()]u8 = undefined;
 
-    try testing.expectEqual(12, buf.len);
+    try testing.expectEqual(FrameHeaders.packedSize(), buf.len);
 
     const frame_header = FrameHeaders{};
 
     const n = frame_header.toBytes(&buf);
 
-    try testing.expectEqual(12, n);
+    try testing.expectEqual(FrameHeaders.packedSize(), n);
 }
 
 test "create a frame from bytes" {
     var payload = [_]u8{ 1, 2, 3, 4, 5, 6 };
-    const before_frame = Frame.new(&payload, .{});
+    var before_frame = Frame.new(&payload, .{});
 
-    var buf: [@sizeOf(Frame)]u8 = undefined;
-
+    // convert the frame to bytes
+    var buf: [100]u8 = undefined;
     const n = before_frame.toBytes(&buf);
 
-    std.debug.print("bytes: {any}\n", .{buf[0..n]});
+    try testing.expectEqual(before_frame.packedSize(), n);
 
-    const after_frame = try Frame.fromBytes(buf[0..n]);
-    std.debug.print("frame: {any}\n", .{after_frame});
+    // convert the frame from bytes
+    const after_frame = try Frame.fromBytes(buf[0..]);
 
-    // pull the data from the bytes
+    try testing.expectEqual(after_frame.packedSize(), n);
 
+    // validate that the fields are all the same
+    try testing.expectEqual(before_frame.frame_headers.magic, after_frame.frame_headers.magic);
+    try testing.expectEqual(
+        before_frame.frame_headers.protocol_version,
+        after_frame.frame_headers.protocol_version,
+    );
+    try testing.expectEqual(
+        before_frame.frame_headers.frame_type,
+        after_frame.frame_headers.frame_type,
+    );
+    try testing.expectEqual(
+        before_frame.frame_headers.flags,
+        after_frame.frame_headers.flags,
+    );
+    try testing.expectEqual(
+        before_frame.frame_headers.sequence,
+        after_frame.frame_headers.sequence,
+    );
+    try testing.expectEqual(
+        before_frame.frame_headers.payload_length,
+        after_frame.frame_headers.payload_length,
+    );
+    try testing.expect(std.mem.eql(u8, before_frame.payload, after_frame.payload));
+    try testing.expectEqual(before_frame.checksum, after_frame.checksum);
 }
