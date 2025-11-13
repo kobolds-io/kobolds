@@ -257,38 +257,10 @@ pub const Worker = struct {
     }
 
     pub fn tick(self: *Self) !void {
-        // var timer = try std.time.Timer.start();
-        // const tick_start = timer.read();
-
-        // const tick_connections_start = timer.read();
         try self.tickConnections();
-        // const tick_connections_end = timer.read();
-
-        // const tick_listeners_start = timer.read();
         try self.tickListeners();
-        // const tick_listeners_end = timer.read();
-
-        // const process_inbound_messages_start = timer.read();
         try self.processInboundMessages();
-        // const process_inbound_messages_end = timer.read();
-
-        // const process_outbound_messages_start = timer.read();
         try self.processOutboundMessages();
-        // const process_outbound_messages_end = timer.read();
-
-        // const tick_end = timer.read();
-
-        // const tick_total = (tick_end - tick_start) / std.time.ns_per_us;
-
-        // if (tick_total > 10_000) {
-        //     log.info("tick: {}us, tick_connections: {}us, tick_listeners: {}us, process_inbound_messages: {}us, process_outbound_message: {}us", .{
-        //         tick_total,
-        //         (tick_connections_end - tick_connections_start) / std.time.ns_per_us,
-        //         (tick_listeners_end - tick_listeners_start) / std.time.ns_per_us,
-        //         (process_inbound_messages_end - process_inbound_messages_start) / std.time.ns_per_us,
-        //         (process_outbound_messages_end - process_outbound_messages_start) / std.time.ns_per_us,
-        //     });
-        // }
     }
 
     fn tickConnections(self: *Self) !void {

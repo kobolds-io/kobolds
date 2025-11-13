@@ -43,7 +43,7 @@ pub const Broker = struct {
 
     pub const Config = struct {
         broker_id: u11 = 0,
-        memory_pool_capacity: usize = constants.default_client_memory_pool_capacity,
+        memory_pool_capacity: usize = constants.default_node_memory_pool_capacity,
         inbox_capacity: usize = constants.default_client_inbox_capacity,
         outbox_capacity: usize = constants.default_client_outbox_capacity,
         worker_threads: usize = 1,

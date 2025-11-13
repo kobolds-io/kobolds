@@ -2,8 +2,8 @@ const std = @import("std");
 const Message = @import("./protocol/message.zig").Message;
 
 /// the maximum size of a message body
-// pub const message_max_body_size = 1024 * 8; // 8kb
-pub const message_max_body_size = std.math.maxInt(u16); // 64kb
+pub const message_max_body_size = 1024 * 8; // 8kb
+// pub const message_max_body_size = std.math.maxInt(u16); // 64kb
 
 // pub const message_max_body_size = 256; // testing only
 
@@ -50,7 +50,7 @@ pub const io_uring_entries: u16 = 256;
 /// Optionally verify if operations based on this boolean.
 pub const verify: bool = true;
 
-pub const default_node_memory_pool_capacity: usize = 10_000;
+pub const default_node_memory_pool_capacity: usize = 100_000;
 pub const default_client_memory_pool_capacity: usize = 10_000;
 pub const default_client_outbox_capacity: usize = default_client_memory_pool_capacity;
 pub const default_client_inbox_capacity: usize = default_client_memory_pool_capacity;
