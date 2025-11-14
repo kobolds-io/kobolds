@@ -3,6 +3,7 @@ FROM alpine:3.20
 RUN apk add --no-cache \
 	curl \
 	tar \
+	xz \
 	build-base \
 	musl-dev
 
@@ -17,6 +18,6 @@ RUN curl -L "$ZIG_URL" -o zig.tar.xz \
 ENV PATH="/opt/zig:${PATH}"
 
 WORKDIR /app
+
 COPY . .
 
-CMD ["zig", "build", "test", "test:verbose"]
