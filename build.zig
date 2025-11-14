@@ -72,6 +72,20 @@ fn setupTests(
         }),
     });
 
+    const runner = b.addExecutable(.{
+        .name = "runner",
+        .root_source_file = b.path("src/test_runner.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    runner.addAllPackageTests();
+
+    const run_verbose_test = b.addRunArtifact(runner);
+    run_verbose.addArg("--verbose");
+    b.step("test:verbose", "Run tests with verbose output")
+        .dependOn(&run_verbose_test.step);
+
     const stdx_dep = b.dependency("stdx", .{
         .target = target,
         .optimize = optimize,
