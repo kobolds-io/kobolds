@@ -1,21 +1,21 @@
 const std = @import("std");
 const clap = @import("clap");
 
-// const ListenCommand = @import("./listen.zig").ListenCommand;
+const ListenCommand = @import("./listen.zig").ListenCommand;
 // const BrokerListenCommand = @import("./broker_listen.zig").ListenCommand;
-// const ConnectCommand = @import("./connect.zig").ConnectCommand;
-// const PublishCommand = @import("./publish.zig").PublishCommand;
-// const SubscribeCommand = @import("./subscribe.zig").SubscribeCommand;
+const ConnectCommand = @import("./connect.zig").ConnectCommand;
+const PublishCommand = @import("./publish.zig").PublishCommand;
+const SubscribeCommand = @import("./subscribe.zig").SubscribeCommand;
 // const AdvertiseCommand = @import("./advertise.zig").AdvertiseCommand;
 
 pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
     const RootSubCommands = enum {
         help,
-        // listen,
+        listen,
         // broker_listen,
-        // connect,
-        // publish,
-        // subscribe,
+        connect,
+        publish,
+        subscribe,
         // advertise,
     };
 
@@ -54,11 +54,11 @@ pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator)
     const command = parsed_root_args.positionals[0] orelse return error.MissingCommand;
     switch (command) {
         .help => return clap.helpToFile(.stderr(), clap.Help, &root_params, .{}),
-        // .listen => try ListenCommand(allocator, iter),
+        .listen => try ListenCommand(allocator, iter),
         // .broker_listen => try BrokerListenCommand(allocator, iter),
-        // .connect => try ConnectCommand(allocator, iter),
-        // .publish => try PublishCommand(allocator, iter),
-        // .subscribe => try SubscribeCommand(allocator, iter),
+        .connect => try ConnectCommand(allocator, iter),
+        .publish => try PublishCommand(allocator, iter),
+        .subscribe => try SubscribeCommand(allocator, iter),
         // .advertise => try AdvertiseCommand(allocator, iter),
     }
 }
