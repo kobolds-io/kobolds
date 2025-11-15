@@ -1,5 +1,7 @@
 pub const MessageType = enum(u8) {
     unsupported,
+    ping,
+    pong,
     // auth_challenge,
     // session_init,
     // session_join,
@@ -17,7 +19,9 @@ pub const MessageType = enum(u8) {
 
     pub fn fromByte(byte: u8) MessageType {
         return switch (byte) {
-            1 => .auth_challenge,
+            1 => .ping,
+            2 => .pong,
+            // 1 => .auth_challenge,
             // 2 => .session_init,
             // 3 => .session_join,
             // 4 => .auth_failure,
