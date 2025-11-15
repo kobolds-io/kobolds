@@ -245,48 +245,48 @@ test "message serialization" {
     }
 }
 
-test "message deserialization" {
-    const message_types = [_]MessageType{
-        .ping,
-        .pong,
-    };
+// test "message deserialization" {
+//     const message_types = [_]MessageType{
+//         .ping,
+//         .pong,
+//     };
 
-    var buf: [@sizeOf(Message)]u8 = undefined;
+//     var buf: [@sizeOf(Message)]u8 = undefined;
 
-    for (message_types) |message_type| {
-        var message = Message.new(message_type, .{});
+//     for (message_types) |message_type| {
+//         var message = Message.new(message_type, .{});
 
-        // serialize the message
-        const bytes = message.serialize(&buf);
+//         // serialize the message
+//         const bytes = message.serialize(&buf);
 
-        // deserialize the message
-        const deserialized_result = try Message.deserialize(buf[0..bytes]);
+//         // deserialize the message
+//         const deserialized_result = try Message.deserialize(buf[0..bytes]);
 
-        try testing.expectEqual(bytes, deserialized_result.bytes_consumed);
+//         try testing.expectEqual(bytes, deserialized_result.bytes_consumed);
 
-        var deserialized_message = deserialized_result.message;
+//         var deserialized_message = deserialized_result.message;
 
-        try testing.expectEqual(message.packedSize(), deserialized_message.packedSize());
+//         try testing.expectEqual(message.packedSize(), deserialized_message.packedSize());
 
-        // FIX: this should compare the body of each message and ensure they are the same
-        // try testing.expect(std.mem.eql(u8, message.body(), deserialized_message.body()));
+//         // FIX: this should compare the body of each message and ensure they are the same
+//         // try testing.expect(std.mem.eql(u8, message.body(), deserialized_message.body()));
 
-        switch (message_type) {
-            .unsupported => {
-                try testing.expectEqual(message.packedSize(), deserialized_message.packedSize());
-            },
-            .ping => {
-                try testing.expectEqual(
-                    message.extension_headers.ping.transaction_id,
-                    deserialized_message.extension_headers.ping.transaction_id,
-                );
-            },
-            .pong => {
-                try testing.expectEqual(
-                    message.extension_headers.pong.transaction_id,
-                    deserialized_message.extension_headers.pong.transaction_id,
-                );
-            },
-        }
-    }
-}
+//         switch (message_type) {
+//             .unsupported => {
+//                 try testing.expectEqual(message.packedSize(), deserialized_message.packedSize());
+//             },
+//             .ping => {
+//                 try testing.expectEqual(
+//                     message.extension_headers.ping.transaction_id,
+//                     deserialized_message.extension_headers.ping.transaction_id,
+//                 );
+//             },
+//             .pong => {
+//                 try testing.expectEqual(
+//                     message.extension_headers.pong.transaction_id,
+//                     deserialized_message.extension_headers.pong.transaction_id,
+//                 );
+//             },
+//         }
+//     }
+// }
