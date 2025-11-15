@@ -4,8 +4,8 @@ const clap = @import("clap");
 const ListenCommand = @import("./listen.zig").ListenCommand;
 // const BrokerListenCommand = @import("./broker_listen.zig").ListenCommand;
 const ConnectCommand = @import("./connect.zig").ConnectCommand;
-// const PublishCommand = @import("./publish.zig").PublishCommand;
-// const SubscribeCommand = @import("./subscribe.zig").SubscribeCommand;
+const PublishCommand = @import("./publish.zig").PublishCommand;
+const SubscribeCommand = @import("./subscribe.zig").SubscribeCommand;
 // const AdvertiseCommand = @import("./advertise.zig").AdvertiseCommand;
 
 pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
@@ -14,8 +14,8 @@ pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator)
         listen,
         // broker_listen,
         connect,
-        // publish,
-        // subscribe,
+        publish,
+        subscribe,
         // advertise,
     };
 
@@ -57,8 +57,8 @@ pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator)
         .listen => try ListenCommand(allocator, iter),
         // .broker_listen => try BrokerListenCommand(allocator, iter),
         .connect => try ConnectCommand(allocator, iter),
-        // .publish => try PublishCommand(allocator, iter),
-        // .subscribe => try SubscribeCommand(allocator, iter),
+        .publish => try PublishCommand(allocator, iter),
+        .subscribe => try SubscribeCommand(allocator, iter),
         // .advertise => try AdvertiseCommand(allocator, iter),
     }
 }
