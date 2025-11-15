@@ -11,6 +11,7 @@ pub const Frame = struct {
 
     pub const Options = struct {
         flags: FrameHeadersFlags = .{},
+        sequence: u16 = 0,
     };
 
     /// Metadata about the frame
@@ -36,7 +37,9 @@ pub const Frame = struct {
             .frame_headers = FrameHeaders{
                 .payload_length = @intCast(payload.len),
                 .flags = opts.flags,
+                .sequence = opts.sequence,
             },
+
             .payload = payload,
             .checksum = 0,
         };
@@ -268,33 +271,31 @@ pub const FrameParser = struct {
                 // FIX: this should have all errors handled!
                 else => unreachable,
             };
-            read_offset += frame.packedSize();
+
+            const bytes_consumed = frame.packedSize();
+
+            // NOTE: we are using asserts here because these would be critical systems failures.
+            // I think it would be better to crash instead of trying to recover from this.
+            //
+            // This would meant that the `Frame.fromBytes` function did something incorrectly
+            assert(bytes_consumed > 0);
+
+            // ensure that we have not consumed more things than would b possible
+            assert(read_offset + bytes_consumed <= self.buffer.items.len);
 
             // add the frame to the frames slice
             frames[count] = frame;
             count += 1;
+            read_offset += bytes_consumed;
+        }
+
+        // if some work was done where bytes were consumed, the advance the self.buffer
+        if (read_offset > 0) {
+            std.mem.copyForwards(u8, self.buffer.items, self.buffer.items[read_offset..]);
+            self.buffer.items.len -= read_offset;
         }
 
         return count;
-    }
-
-    pub fn consume(self: *Self, n: usize) !void {
-        if (n > self.buffer.items.len) return error.InvalidConsume;
-
-        if (n == self.buffer.items.len) {
-            // reset the buffer
-            self.buffer.items.len = 0;
-            return;
-        }
-
-        const remaining = self.buffer.items.len - n;
-        // move the remaining bytes to the front of the buffer
-        std.mem.copyForwards(
-            u8,
-            self.buffer.items[0..remaining],
-            self.buffer.items[n .. n + remaining],
-        );
-        self.buffer.items.len = remaining;
     }
 
     fn resyncToNextMagic(_: *Self, data: []const u8) usize {
@@ -317,6 +318,88 @@ pub const FrameParser = struct {
         }
 
         return i;
+    }
+};
+
+pub const Reassembler = struct {
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
+    accumulator: std.ArrayList(u8),
+    expected_sequence: u16 = 0,
+    is_assembling: bool = false,
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return Self{
+            .allocator = allocator,
+            .accumulator = .empty,
+            .expected_sequence = 0,
+            .is_assembling = false,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.accumulator.deinit(self.allocator);
+    }
+
+    pub fn assemble(self: *Self, allocator: std.mem.Allocator, frame: Frame) !?[]const u8 {
+        const flags = frame.frame_headers.flags;
+        const sequence = frame.frame_headers.sequence;
+
+        // check if we are currently assembling a message
+        if (!self.is_assembling) {
+            // start assembling a new message
+            self.expected_sequence = 0;
+            self.is_assembling = true;
+        }
+
+        // check if the incoming frame's sequence is in the correct order
+        // Hard fail if we did not receive the message in the correct order. The caller can use
+        // the error returned and tell the client to retransmit
+        if (self.expected_sequence != sequence) {
+            self.is_assembling = false;
+            self.expected_sequence = 0;
+            return error.FrameOutOfOrder;
+        }
+
+        // consider this sequence consumed
+        self.expected_sequence += 1;
+
+        // this is just another segment of the message
+        if (flags.continuation) {
+            try self.accumulator.appendSlice(self.allocator, frame.payload);
+            return null;
+        }
+
+        // if there are no more frames that are part of this message
+        if (self.accumulator.items.len == 0) {
+            // this is full message inside of a single frame
+            var message_bytes = try std.ArrayList(u8).initCapacity(
+                allocator,
+                frame.payload.len,
+            );
+            message_bytes.appendSliceAssumeCapacity(frame.payload);
+
+            self.is_assembling = false;
+            self.expected_sequence = 0;
+
+            return message_bytes.items;
+        } else {
+            // this is the final segment of the message
+            try self.accumulator.appendSlice(self.allocator, frame.payload);
+
+            // initialize an array list containing the entire message
+            var message_bytes = try std.ArrayList(u8).initCapacity(
+                allocator,
+                self.accumulator.items.len,
+            );
+            message_bytes.appendSliceAssumeCapacity(self.accumulator.items);
+
+            self.is_assembling = false;
+            self.expected_sequence = 0;
+
+            return message_bytes.items;
+        }
     }
 };
 
@@ -478,8 +561,136 @@ test "frame parse multiple frames" {
     try testing.expect(std.mem.eql(u8, frames[1].payload, frame_2.payload));
     try testing.expect(std.mem.eql(u8, frames[2].payload, frame_3.payload));
 
-    // consume the bytes that we've plucked out
-    try frame_parser.consume(buf.len);
+    try testing.expectEqual(0, frame_parser.buffer.items.len);
+}
+
+test "reassembly single frame message" {
+    const allocator = testing.allocator;
+
+    var frame_parser = FrameParser.init(allocator);
+    defer frame_parser.deinit();
+
+    var frame_payload = [_]u8{ 1, 1, 1, 1, 1 };
+    var frame = Frame.new(&frame_payload, .{});
+
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    var buf: [100]u8 = undefined;
+
+    // write all three frames to the buffer
+    const frame_bytes = frame.toBytes(&buf);
+
+    var frames: [5]Frame = undefined;
+
+    // parse the entire buffer
+    const frames_parsed = try frame_parser.parse(&frames, buf[0..frame_bytes]);
+
+    var reassembler = Reassembler.init(allocator);
+    defer reassembler.deinit();
+
+    for (frames[0..frames_parsed]) |f| {
+        if (try reassembler.assemble(allocator, f)) |message_bytes| {
+            defer allocator.free(message_bytes);
+
+            try testing.expect(std.mem.eql(u8, &frame_payload, message_bytes));
+        }
+    }
+}
+
+test "reassembly of multi frame message" {
+    const allocator = testing.allocator;
+
+    var frame_parser = FrameParser.init(allocator);
+    defer frame_parser.deinit();
+
+    var frame_payload = [_]u8{ 1, 1, 1, 1, 1 };
+    var frame_1 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = true },
+        .sequence = 0,
+    });
+    var frame_2 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = true },
+        .sequence = 1,
+    });
+    var frame_3 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = false },
+        .sequence = 2,
+    });
+
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    var buf: [100]u8 = undefined;
+
+    // write all three frames to the buffer
+    const frame_1_n = frame_1.toBytes(&buf);
+    const frame_2_n = frame_2.toBytes(buf[frame_1_n..]);
+    _ = frame_3.toBytes(buf[frame_1_n + frame_2_n ..]);
+
+    var frames: [5]Frame = undefined;
+
+    // parse the entire buffer
+    const frames_parsed = try frame_parser.parse(&frames, &buf);
+
+    try testing.expectEqual(3, frames_parsed);
 
     try testing.expectEqual(0, frame_parser.buffer.items.len);
+
+    var reassembler = Reassembler.init(allocator);
+    defer reassembler.deinit();
+
+    // I don't think I like this API
+    for (frames[0..frames_parsed]) |f| {
+        if (try reassembler.assemble(allocator, f)) |message_bytes| {
+            std.debug.print("message_bytes: {any}\n", .{message_bytes});
+
+            defer allocator.free(message_bytes);
+        }
+    }
+}
+
+test "reassembly fails if out of order" {
+    const allocator = testing.allocator;
+
+    var frame_parser = FrameParser.init(allocator);
+    defer frame_parser.deinit();
+
+    var frame_payload = [_]u8{ 1, 1, 1, 1, 1 };
+    var frame_1 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = true },
+        .sequence = 0,
+    });
+    var frame_2 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = true },
+        .sequence = 1,
+    });
+    var frame_3 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = false },
+        .sequence = 2,
+    });
+
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    var buf: [100]u8 = undefined;
+
+    // write all three frames to the buffer
+    const frame_1_n = frame_1.toBytes(&buf);
+    const frame_2_n = frame_2.toBytes(buf[frame_1_n..]);
+    _ = frame_3.toBytes(buf[frame_1_n + frame_2_n ..]);
+
+    var frames: [5]Frame = undefined;
+
+    // parse the entire buffer
+    const frames_parsed = try frame_parser.parse(&frames, &buf);
+
+    try testing.expectEqual(3, frames_parsed);
+
+    try testing.expectEqual(0, frame_parser.buffer.items.len);
+
+    var reassembler = Reassembler.init(allocator);
+    defer reassembler.deinit();
+
+    try testing.expect(try reassembler.assemble(allocator, frames[0]) == null);
+
+    // we are purposefully sending a frame out of order here
+    try testing.expectError(error.FrameOutOfOrder, reassembler.assemble(allocator, frames[2]));
 }
