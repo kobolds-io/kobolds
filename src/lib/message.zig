@@ -79,6 +79,10 @@ pub const Message = struct {
 
     pub fn deserialize(data: []const u8) !DeserializeResult {
         _ = data;
+        // NOTE: all of the data for this message should be contained inside of data?????
+        //     if this is true, then we may be potentially doubling the amount of memory needed for
+        //     this message. Alternatively, the frame would have more information regarding this
+        //     message. The next body_chunk could be a chunk on disk OR it could be in memory.
 
         // FIX: not implemented
         unreachable;
