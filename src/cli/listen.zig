@@ -6,7 +6,9 @@ pub fn ListenCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterato
     // The parameters for the subcommand.
     const params = comptime clap.parseParamsComptime(
         \\-h, --help                              Display this help and exit.
-        \\-p, --ping                              Pong - just for testing.  
+        \\-H, --host <host>                       Host to bind to (default 127.0.0.1)
+        \\-p, --port <port>                       Port to bind to (default 8000)
+        \\-w, --worker-threads <worker_threads>   Number of worker threads to spawn (default 3)
     );
 
     const listen_parsers = .{
@@ -30,5 +32,17 @@ pub fn ListenCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterato
         return clap.helpToFile(.stderr(), clap.Help, &params, .{});
     }
 
-    std.debug.print("Pong listen", .{});
+    const args = ListenArgs{
+        .host = parsed_args.args.host orelse "127.0.0.1",
+        .port = parsed_args.args.port orelse 8000,
+        .worker_threads = parsed_args.args.@"worker-threads" orelse 3,
+    };
+
+    std.debug.print("Listening... \n Port: {s} \n Host: {} \n Worker Threads: {} \n", .{ args.host, args.port, args.worker_threads });
 }
+
+const ListenArgs = struct {
+    host: []const u8,
+    port: u16,
+    worker_threads: usize,
+};

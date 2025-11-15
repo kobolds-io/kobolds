@@ -5,7 +5,12 @@ pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
     // The parameters for the subcommand.
     const params = comptime clap.parseParamsComptime(
         \\-h, --help                             Display this help and exit.
-        \\-p, --ping                             Pong - just for testing.  
+        \\-H, --host        <host>               Node host (default 127.0.0.1)
+        \\-p, --port        <port>               Node port (default 8000)
+        \\-i, --client-id   <client_id>          id of the client (default: 1) 
+        \\-t, --token       <token>              Authentication token (default: ""),
+        \\--max-connections <max_connections>    Maximum number of connections to open (default: 1)
+        \\--min-connections <min_connections>    Minimum number of connections to open (default: 1)
     );
 
     const connect_parsers = .{
@@ -32,5 +37,23 @@ pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
         return clap.helpToFile(.stderr(), clap.Help, &params, .{});
     }
 
-    std.debug.print("Pong connection", .{});
+    const args = ConnectArgs{
+        .host = parsed_args.args.host orelse "127.0.0.1",
+        .port = parsed_args.args.port orelse 8000,
+        .client_id = parsed_args.args.@"client-id" orelse 1,
+        .token = parsed_args.args.token orelse "",
+        .max_connections = parsed_args.args.@"max-connections" orelse 1,
+        .min_connections = parsed_args.args.@"min-connections" orelse 1,
+    };
+
+    std.debug.print("Connecting... \n Host: {s} \n Port: {} \n Client ID: {} \n Token: {s} \n Max Connections: {} \n Min Connections: {} \n", .{ args.host, args.port, args.client_id, args.token, args.max_connections, args.min_connections });
 }
+
+const ConnectArgs = struct {
+    host: []const u8,
+    port: u16,
+    client_id: u11,
+    token: []const u8,
+    max_connections: u16,
+    min_connections: u16,
+};
