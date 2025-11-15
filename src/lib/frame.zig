@@ -226,7 +226,7 @@ pub const FrameType = enum(u4) {
     }
 };
 
-pub const FrameDisassembler = struct {
+pub const FrameParser = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
@@ -243,17 +243,11 @@ pub const FrameDisassembler = struct {
         self.buffer.deinit(self.allocator);
     }
 
-    pub fn feed(self: *Self, data: []const u8) !void {
-        try self.buffer.appendSlice(self.allocator, data);
-    }
-
     pub fn parse(self: *Self, frames: []Frame, data: []const u8) !usize {
         // FIX: there should be a constant that is defined that caps the buffer items capacity
         if (self.buffer.items.len + data.len > 10_000) return error.BufferMaxCapacityExceeded;
 
         try self.buffer.appendSlice(self.allocator, data);
-
-        std.debug.print("self.buffer {any}\n", .{self.buffer.items});
 
         var count: usize = 0;
         var read_offset: usize = 0;
@@ -271,6 +265,7 @@ pub const FrameDisassembler = struct {
                     assert(read_offset <= self.buffer.items.len);
                     continue;
                 },
+                // FIX: this should have all errors handled!
                 else => unreachable,
             };
             read_offset += frame.packedSize();
@@ -278,11 +273,28 @@ pub const FrameDisassembler = struct {
             // add the frame to the frames slice
             frames[count] = frame;
             count += 1;
-
-            std.debug.print("frame headers: {any}\n", .{frame});
         }
 
         return count;
+    }
+
+    pub fn consume(self: *Self, n: usize) !void {
+        if (n > self.buffer.items.len) return error.InvalidConsume;
+
+        if (n == self.buffer.items.len) {
+            // reset the buffer
+            self.buffer.items.len = 0;
+            return;
+        }
+
+        const remaining = self.buffer.items.len - n;
+        // move the remaining bytes to the front of the buffer
+        std.mem.copyForwards(
+            u8,
+            self.buffer.items[0..remaining],
+            self.buffer.items[n .. n + remaining],
+        );
+        self.buffer.items.len = remaining;
     }
 
     fn resyncToNextMagic(_: *Self, data: []const u8) usize {
@@ -374,10 +386,10 @@ test "create a frame from bytes" {
     try testing.expectEqual(before_frame.checksum, after_frame.checksum);
 }
 
-test "frame disassembly happy path" {
+test "frame parsing happy path" {
     const allocator = testing.allocator;
 
-    var disassembler = FrameDisassembler.init(allocator);
+    var disassembler = FrameParser.init(allocator);
     defer disassembler.deinit();
 
     // make an arbitrary frame
@@ -398,10 +410,10 @@ test "frame disassembly happy path" {
     try testing.expectEqual(1, frames_parsed);
 }
 
-test "frame disassembly bad frame" {
+test "frame parse a bad frame and resync to magic" {
     const allocator = testing.allocator;
 
-    var disassembler = FrameDisassembler.init(allocator);
+    var disassembler = FrameParser.init(allocator);
     defer disassembler.deinit();
 
     // make an arbitrary frame
@@ -432,4 +444,42 @@ test "frame disassembly bad frame" {
 
     // ensure that the good frame was the one that was parsed
     try testing.expect(std.mem.eql(u8, frames[0].payload, good_frame.payload));
+}
+
+test "frame parse multiple frames" {
+    const allocator = testing.allocator;
+
+    var frame_parser = FrameParser.init(allocator);
+    defer frame_parser.deinit();
+
+    var frame_payload = [_]u8{ 1, 1, 1, 1, 1 };
+    var frame_1 = Frame.new(&frame_payload, .{});
+    var frame_2 = Frame.new(&frame_payload, .{});
+    var frame_3 = Frame.new(&frame_payload, .{});
+
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    var buf: [100]u8 = undefined;
+
+    // write all three frames to the buffer
+    const frame_1_n = frame_1.toBytes(&buf);
+    const frame_2_n = frame_2.toBytes(buf[frame_1_n..]);
+    _ = frame_3.toBytes(buf[frame_1_n + frame_2_n ..]);
+
+    var frames: [5]Frame = undefined;
+
+    // parse the entire buffer
+    const frames_parsed = try frame_parser.parse(&frames, &buf);
+
+    try testing.expectEqual(3, frames_parsed);
+
+    // ensure that the good frame was the one that was parsed
+    try testing.expect(std.mem.eql(u8, frames[0].payload, frame_1.payload));
+    try testing.expect(std.mem.eql(u8, frames[1].payload, frame_2.payload));
+    try testing.expect(std.mem.eql(u8, frames[2].payload, frame_3.payload));
+
+    // consume the bytes that we've plucked out
+    try frame_parser.consume(buf.len);
+
+    try testing.expectEqual(0, frame_parser.buffer.items.len);
 }
