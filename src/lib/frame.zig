@@ -2,13 +2,16 @@ const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
 const check = @import("./checksum.zig");
+const constants = @import("../constants.zig");
 
 const ProtocolVersion = @import("protocol.zig").ProtocolVersion;
 
 pub const Frame = struct {
     const Self = @This();
 
-    pub const Options = struct {};
+    pub const Options = struct {
+        flags: FrameHeadersFlags = .{},
+    };
 
     /// Metadata about the frame
     frame_headers: FrameHeaders = .{},
@@ -26,13 +29,13 @@ pub const Frame = struct {
     pub fn new(payload: []const u8, opts: Options) Self {
         // NOTE: for now, we just discard the options As features are implemented for each flag,
         // they will be handled.
-        _ = opts;
 
         assert(payload.len <= std.math.maxInt(u16));
 
         return Self{
             .frame_headers = FrameHeaders{
                 .payload_length = @intCast(payload.len),
+                .flags = opts.flags,
             },
             .payload = payload,
             .checksum = 0,
@@ -103,7 +106,7 @@ pub const FrameHeaders = struct {
     }
 
     /// A magical resync value "KB" (kobold)
-    magic: u16 = 0x4B42,
+    magic: u16 = constants.frame_headers_magic,
 
     /// The protocol version this frame complies with
     protocol_version: ProtocolVersion = .v1,
@@ -164,6 +167,10 @@ pub const FrameHeaders = struct {
         const magic = std.mem.readInt(u16, data[read_offset..][0..@sizeOf(u16)], .big);
         read_offset += @sizeOf(u16);
 
+        // if the magic bytes do not equal what we think they should equal then this is not a valid
+        // frame and therefore we should fail
+        if (magic != constants.frame_headers_magic) return error.InvalidFrameHeadersMagic;
+
         const protocol_version_and_frame_type = data[read_offset];
         const protocol_version_bits: u4 = @intCast(protocol_version_and_frame_type >> 4);
         const protocol_version = ProtocolVersion.fromBits(protocol_version_bits);
@@ -216,6 +223,88 @@ pub const FrameType = enum(u4) {
             4 => .heartbeat,
             else => error.UnsupportedFrameType,
         };
+    }
+};
+
+pub const FrameDisassembler = struct {
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
+    buffer: std.ArrayList(u8),
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return Self{
+            .allocator = allocator,
+            .buffer = .empty,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.buffer.deinit(self.allocator);
+    }
+
+    pub fn feed(self: *Self, data: []const u8) !void {
+        try self.buffer.appendSlice(self.allocator, data);
+    }
+
+    pub fn parse(self: *Self, frames: []Frame, data: []const u8) !usize {
+        // FIX: there should be a constant that is defined that caps the buffer items capacity
+        if (self.buffer.items.len + data.len > 10_000) return error.BufferMaxCapacityExceeded;
+
+        try self.buffer.appendSlice(self.allocator, data);
+
+        std.debug.print("self.buffer {any}\n", .{self.buffer.items});
+
+        var count: usize = 0;
+        var read_offset: usize = 0;
+
+        while (count < frames.len) {
+            const buf = self.buffer.items;
+
+            // FIX: we should do something smart if the frame headers are actually invalid
+            const frame = Frame.fromBytes(buf[read_offset..]) catch |err| switch (err) {
+                error.Truncated => break,
+                error.InvalidFrameHeadersMagic => {
+                    read_offset += self.resyncToNextMagic(buf[read_offset..]);
+
+                    // make sure that we don't break something
+                    assert(read_offset <= self.buffer.items.len);
+                    continue;
+                },
+                else => unreachable,
+            };
+            read_offset += frame.packedSize();
+
+            // add the frame to the frames slice
+            frames[count] = frame;
+            count += 1;
+
+            std.debug.print("frame headers: {any}\n", .{frame});
+        }
+
+        return count;
+    }
+
+    fn resyncToNextMagic(_: *Self, data: []const u8) usize {
+        // constants.frame_headers_magic is comprised of 2 bytes (u16) with bigendian ordering;
+        // 0x4B42 -> bytes (0x4B 0x42)
+        const magic_hi: u8 = (@as(u16, constants.frame_headers_magic) >> 8) & 0xFF;
+        const magic_lo: u8 = @as(u8, constants.frame_headers_magic & 0xFF);
+
+        var i: usize = 1;
+
+        // begin searching the data for an instance of magic_hi
+        while (i + 1 <= data.len) : (i += 1) {
+            const left = data[i - 1];
+            const right = data[i];
+
+            if (left == magic_hi and right == magic_lo) {
+                // we have found a match for magic and we should resync to this point
+                return i - 1;
+            }
+        }
+
+        return i;
     }
 };
 
@@ -283,4 +372,64 @@ test "create a frame from bytes" {
     );
     try testing.expect(std.mem.eql(u8, before_frame.payload, after_frame.payload));
     try testing.expectEqual(before_frame.checksum, after_frame.checksum);
+}
+
+test "frame disassembly happy path" {
+    const allocator = testing.allocator;
+
+    var disassembler = FrameDisassembler.init(allocator);
+    defer disassembler.deinit();
+
+    // make an arbitrary frame
+    var payload = [_]u8{ 1, 2, 3, 4, 5, 6 };
+    var frame = Frame.new(&payload, .{});
+
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    var buf: [100]u8 = undefined;
+
+    const n = frame.toBytes(&buf);
+
+    try testing.expectEqual(n, frame.packedSize());
+
+    var frames: [5]Frame = undefined;
+
+    const frames_parsed = try disassembler.parse(&frames, buf[0..n]);
+    try testing.expectEqual(1, frames_parsed);
+}
+
+test "frame disassembly bad frame" {
+    const allocator = testing.allocator;
+
+    var disassembler = FrameDisassembler.init(allocator);
+    defer disassembler.deinit();
+
+    // make an arbitrary frame
+    var bad_frame_payload = [_]u8{ 1, 2, 3, 4, 5, 6 };
+    var bad_frame = Frame.new(&bad_frame_payload, .{});
+    bad_frame.frame_headers.magic = 1234;
+
+    try testing.expect(constants.frame_headers_magic != bad_frame.frame_headers.magic);
+
+    var good_frame_payload = [_]u8{ 1, 1, 1, 1, 1 };
+    var good_frame = Frame.new(&good_frame_payload, .{});
+
+    try testing.expectEqual(constants.frame_headers_magic, good_frame.frame_headers.magic);
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    var buf: [100]u8 = undefined;
+
+    const bad_frame_n = bad_frame.toBytes(&buf);
+    const good_frame_n = good_frame.toBytes(buf[bad_frame_n..]);
+
+    try testing.expectEqual(bad_frame_n, bad_frame.packedSize());
+
+    var frames: [5]Frame = undefined;
+
+    const frames_parsed = try disassembler.parse(&frames, buf[0 .. bad_frame_n + good_frame_n]);
+
+    try testing.expectEqual(1, frames_parsed);
+
+    // ensure that the good frame was the one that was parsed
+    try testing.expect(std.mem.eql(u8, frames[0].payload, good_frame.payload));
 }
