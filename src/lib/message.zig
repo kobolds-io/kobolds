@@ -6,6 +6,8 @@ const MessageType = @import("./message_type.zig").MessageType;
 const PingHeaders = @import("./headers.zig").PingHeaders;
 const PongHeaders = @import("./headers.zig").PongHeaders;
 
+const ChunkReader = @import("./chunk.zig").ChunkReader;
+
 pub const Message = struct {
     const Self = @This();
 
@@ -98,7 +100,7 @@ pub const Message = struct {
     };
 };
 
-pub const Flags = struct {
+pub const Flags = packed struct {
     const Self = @This();
 
     padding: u8 = 0,
@@ -122,7 +124,7 @@ pub const FixedHeaders = struct {
     const Self = @This();
 
     message_type: MessageType = .unsupported,
-    flags: Flags = .{},
+    flags: Flags = Flags{},
 
     pub fn packedSize() usize {
         return @sizeOf(MessageType) + @sizeOf(Flags);
@@ -134,9 +136,9 @@ pub const FixedHeaders = struct {
         var i: usize = 0;
 
         buf[i] = @intFromEnum(self.message_type);
-        i += 1;
+        i += @sizeOf(MessageType);
 
-        const flag_bytes = self.flags.toBytes(buf);
+        const flag_bytes = self.flags.toBytes(buf[i .. i + @sizeOf(Flags)]);
         i += flag_bytes;
 
         return i;
@@ -152,7 +154,7 @@ pub const FixedHeaders = struct {
         i += 1;
 
         // get the bits for the flags
-        const flags: u8 = data[i];
+        const flags: Flags = @bitCast(data[i]);
         i += 1;
 
         return FixedHeaders{

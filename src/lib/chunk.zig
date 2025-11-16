@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 const constants = @import("../constants.zig");
+const MemoryPool = @import("stdx").MemoryPool;
 
 pub const Chunk = struct {
     used: usize = 0,
@@ -35,8 +36,7 @@ pub const ChunkReader = struct {
                 self.current = chunk.next;
                 self.offset = 0;
 
-                if (self.current == null)
-                    return out_index; // EOF
+                if (self.current == null) return out_index; // EOF
 
                 continue;
             }
@@ -56,6 +56,29 @@ pub const ChunkReader = struct {
         return out_index;
     }
 
+    pub fn readByte(self: *ChunkReader) !u8 {
+        // No current chunk -> nothing to read
+        if (self.current == null) return error.EOF;
+
+        var chunk = self.current.?;
+
+        // If we've exhausted this chunk, advance to the next one
+        if (self.offset >= chunk.used) {
+            if (chunk.next == null) return error.EOF;
+
+            // Move to next chunk
+            self.current = chunk.next;
+            chunk = chunk.next.?; // update local pointer
+            self.offset = 0;
+
+            if (chunk.used == 0) return error.EOF; // empty chunk with no data
+        }
+
+        const b = chunk.data[self.offset];
+        self.offset += 1;
+        return b;
+    }
+
     /// Reads `n` bytes and returns them as a *direct slice into the chunk chain*
     /// if they are in a single chunk. Otherwise copies into `scratch`.
     pub fn readExactSlice(
@@ -63,7 +86,7 @@ pub const ChunkReader = struct {
         n: usize,
         scratch_buffer: []u8,
     ) ![]const u8 {
-        if (self.current == null) return error.UnexpectedEOF;
+        if (self.current == null) return error.EOF;
 
         var remaining = n;
         var scratch_index: usize = 0;
@@ -81,7 +104,7 @@ pub const ChunkReader = struct {
         if (scratch_buffer.len < n) return error.ScratchTooSmall;
 
         while (remaining > 0) {
-            if (self.current == null) return error.UnexpectedEOF;
+            if (self.current == null) return error.EOF;
 
             const ch = self.current.?;
             const chunk_available = ch.used - self.offset;
@@ -104,6 +127,87 @@ pub const ChunkReader = struct {
         }
 
         return scratch_buffer[0..n];
+    }
+};
+
+pub const ChunkWriter = struct {
+    const Self = @This();
+
+    head: *Chunk,
+    current: *Chunk,
+    offset: usize = 0,
+
+    pub fn new(head: *Chunk) Self {
+        return .{
+            .head = head,
+            .current = head,
+            .offset = head.used,
+        };
+    }
+
+    /// Internal helper: ensure `current` has space, and if not,
+    /// move to or allocate the next chunk.
+    fn ensureSpace(self: *Self, pool: *MemoryPool(Chunk), needed: usize) !void {
+        const cap = constants.message_chunk_data_size;
+
+        if (self.offset + needed <= cap) return;
+
+        // Not enough space. Move to next chunk or allocate a new one.
+        if (self.current.next) |next| {
+            self.current = next;
+            self.offset = self.current.used;
+            return ensureSpace(self, pool, needed);
+        }
+
+        // Need to allocate a new chunk.
+        const new_chunk = try pool.create();
+        new_chunk.* = Chunk{};
+
+        self.current.next = new_chunk;
+        self.current = new_chunk;
+        self.offset = 0;
+    }
+
+    /// Write a single byte
+    pub fn writeByte(self: *Self, pool: *MemoryPool(Chunk), b: u8) !void {
+        try self.ensureSpace(pool, 1);
+
+        self.current.data[self.offset] = b;
+        self.offset += 1;
+        if (self.offset > self.current.used) self.current.used = self.offset;
+    }
+
+    /// Write arbitrary bytes into the chunk chain
+    pub fn write(self: *Self, pool: *MemoryPool(Chunk), buf: []const u8) !void {
+        var index: usize = 0;
+
+        while (index < buf.len) {
+            // Ensure at least 1 byte of space; chunk may rotate
+            try self.ensureSpace(pool, 1);
+
+            const cap = constants.message_chunk_data_size;
+            const remaining = buf.len - index;
+            const space = cap - self.offset;
+
+            const to_copy = @min(remaining, space);
+
+            @memcpy(
+                self.current.data[self.offset .. self.offset + to_copy],
+                buf[index .. index + to_copy],
+            );
+
+            self.offset += to_copy;
+            if (self.offset > self.current.used)
+                self.current.used = self.offset;
+
+            index += to_copy;
+        }
+    }
+
+    /// write a slice and return number of bytes written
+    pub fn writeSlice(self: *Self, pool: *MemoryPool(Chunk), slice: []const u8) !usize {
+        try self.write(pool, slice);
+        return slice.len;
     }
 };
 
@@ -205,14 +309,8 @@ test "chunk can read exactly bytes and handle single and multi-chunk reads" {
     var scratch: [256]u8 = undefined;
 
     // Fast path read entirely within chunk1
-
     {
         const slice = try reader.readExactSlice(10, &scratch);
-
-        // const expected_ptr: [*]const u8 = &chunk1.data[0];
-        // try std.testing.expect(slice.ptr == expected_ptr);
-
-        // try std.testing.expect(slice.ptr == &chunk1.data[0]); // direct slice into chunk
         // data was saved directly to the slice
         try std.testing.expectEqualSlices(u8, slice, chunk1.data[0..10]);
     }
@@ -233,13 +331,86 @@ test "chunk can read exactly bytes and handle single and multi-chunk reads" {
         // next 60 bytes from chunk2 (0..60)
         @memcpy(expected[90..150], chunk2.data[0..60]);
 
-        // std.debug.print("slice: {any}\n", .{slice});
-        // std.debug.print("scratch: {any}\n", .{scratch});
-
         try std.testing.expectEqualSlices(u8, slice, expected[0..150]);
     }
 
-    // Reading past end of the chunks give UnexpectedEOF
+    // Reading past end of the chunks give EOF
     const err = reader.readExactSlice(scratch.len, &scratch);
-    try std.testing.expectError(error.UnexpectedEOF, err);
+    try std.testing.expectError(error.EOF, err);
+}
+
+test "reader reads sequential bytes and errors at end" {
+    var chunk1 = Chunk{};
+    for (0..2) |i| {
+        chunk1.data[i] = @intCast(i);
+    }
+    chunk1.used = 2;
+
+    var chunk2 = Chunk{};
+    for (0..1) |i| {
+        chunk2.data[i] = @intCast(i);
+    }
+    chunk2.used = 1;
+
+    // link the chunks together
+    chunk1.next = &chunk2;
+
+    var reader = ChunkReader.new(&chunk1);
+
+    // First byte (chunk 1)
+    try std.testing.expectEqual(0, try reader.readByte());
+
+    // Second byte (chunk 1)
+    try std.testing.expectEqual(1, try reader.readByte());
+
+    // Third byte (chunk 2)
+    try std.testing.expectEqual(0, try reader.readByte());
+
+    // Now it should error
+    const err = reader.readByte();
+    try std.testing.expectError(error.EOF, err);
+}
+
+test "chunk writer can write arbitrary bytes" {
+    const allocator = testing.allocator;
+
+    var pool = try MemoryPool(Chunk).init(allocator, 10);
+    defer pool.deinit();
+
+    const c1 = try pool.create();
+    c1.* = Chunk{};
+    defer pool.destroy(c1);
+
+    var writer = ChunkWriter.new(c1);
+
+    var bytes: [constants.message_chunk_data_size / 2]u8 = undefined;
+
+    var total_written: usize = 0;
+
+    // write one time to the head chunk
+    total_written += try writer.writeSlice(&pool, &bytes);
+    try testing.expectEqual(pool.available(), pool.capacity - 1);
+    try testing.expect(writer.current == c1);
+
+    // write a second time, see the same first chunk is used
+    total_written += try writer.writeSlice(&pool, &bytes);
+    try testing.expectEqual(pool.available(), pool.capacity - 1);
+    try testing.expect(writer.current == c1);
+
+    // Write a thrid time. The pool should allocate a new chunk
+    total_written += try writer.writeSlice(&pool, &bytes);
+    try testing.expectEqual(pool.available(), pool.capacity - 2);
+    try testing.expect(writer.current != c1);
+    const c2 = writer.current;
+
+    // Write a fourth time and ensure we are sill on the second chunk
+    total_written += try writer.writeSlice(&pool, &bytes);
+    try testing.expectEqual(pool.available(), pool.capacity - 2);
+    try testing.expect(writer.current == c2);
+
+    // ensure that all bytes have been written
+    try testing.expectEqual(bytes.len * 4, total_written);
+
+    try writer.writeByte(&pool, 10);
+    try testing.expect(writer.current != c2);
 }

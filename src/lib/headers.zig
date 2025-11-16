@@ -29,7 +29,7 @@ pub const PingHeaders = struct {
         if (data.len < Self.minimumSize()) return error.Truncated;
 
         var i: usize = 0;
-        const transaction_id = std.mem.readInt(u64, &data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
         i += @sizeOf(u64);
 
         return Self{
@@ -72,7 +72,7 @@ pub const PongHeaders = struct {
         if (data.len < Self.minimumSize()) return error.Truncated;
 
         var i: usize = 0;
-        const transaction_id = std.mem.readInt(u64, &data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
+        const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
         i += @sizeOf(u64);
 
         return Self{
