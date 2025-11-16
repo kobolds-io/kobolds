@@ -5,6 +5,9 @@ const check = @import("./checksum.zig");
 const constants = @import("../constants.zig");
 
 const ProtocolVersion = @import("protocol.zig").ProtocolVersion;
+const MemoryPool = @import("stdx").MemoryPool;
+
+const Chunk = @import("./chunk.zig").Chunk;
 
 pub const Frame = struct {
     const Self = @This();
@@ -30,8 +33,7 @@ pub const Frame = struct {
     pub fn new(payload: []const u8, opts: Options) Self {
         // NOTE: for now, we just discard the options As features are implemented for each flag,
         // they will be handled.
-
-        assert(payload.len <= std.math.maxInt(u16));
+        assert(payload.len <= constants.max_frame_payload_size);
 
         return Self{
             .frame_headers = FrameHeaders{
@@ -78,6 +80,7 @@ pub const Frame = struct {
         read_offset += FrameHeaders.packedSize();
 
         const payload_len = frame_headers.payload_length;
+        if (payload_len > constants.max_frame_payload_size) return error.InvalidPayloadSize;
         if (data.len < read_offset + payload_len) return error.Truncated;
 
         // reference the slice of the data as not copy
@@ -248,7 +251,7 @@ pub const FrameParser = struct {
 
     pub fn parse(self: *Self, frames: []Frame, data: []const u8) !usize {
         // FIX: there should be a constant that is defined that caps the buffer items capacity
-        if (self.buffer.items.len + data.len > 10_000) return error.BufferMaxCapacityExceeded;
+        // if (self.buffer.items.len + data.len > 10_000) return error.BufferMaxCapacityExceeded;
 
         try self.buffer.appendSlice(self.allocator, data);
 
@@ -258,7 +261,6 @@ pub const FrameParser = struct {
         while (count < frames.len) {
             const buf = self.buffer.items;
 
-            // FIX: we should do something smart if the frame headers are actually invalid
             const frame = Frame.fromBytes(buf[read_offset..]) catch |err| switch (err) {
                 error.Truncated => break,
                 error.InvalidFrameHeadersMagic => {
@@ -321,6 +323,102 @@ pub const FrameParser = struct {
     }
 };
 
+pub const Assembler = struct {
+    const Self = @This();
+
+    expected_sequence: u16 = 0,
+    is_assembling: bool = false,
+
+    // head and tail of our linked chunk chain
+    head_chunk: ?*Chunk = null,
+    tail_chunk: ?*Chunk = null,
+
+    pub fn new() Self {
+        return Self{};
+    }
+
+    fn reset(self: *Self) void {
+        self.expected_sequence = 0;
+        self.is_assembling = false;
+        self.head_chunk = null;
+        self.tail_chunk = null;
+    }
+
+    pub fn assemble(
+        self: *Self,
+        chunk_pool: *MemoryPool(Chunk),
+        frame: Frame,
+    ) !?*Chunk {
+        const flags = frame.frame_headers.flags;
+        const sequence = frame.frame_headers.sequence;
+        const payload = frame.payload;
+
+        // Start a new message
+        if (!self.is_assembling) {
+            self.is_assembling = true;
+            self.expected_sequence = 0;
+        }
+
+        // Validate order
+        if (self.expected_sequence != sequence) {
+            self.reset();
+            return error.FrameOutOfOrder;
+        }
+        self.expected_sequence += 1;
+
+        // Ensure we have an active chunk
+        if (self.tail_chunk == null) {
+            const chunk = try chunk_pool.unsafeCreate();
+            chunk.* = Chunk{
+                .next = null,
+                .used = 0,
+                .data = undefined,
+            };
+            self.head_chunk = chunk;
+            self.tail_chunk = chunk;
+        }
+
+        // Append payload into chunks
+        var remaining = payload;
+        while (remaining.len > 0) {
+            const tail = self.tail_chunk.?;
+
+            const space = tail.data.len - tail.used;
+            // there is not enough space in the current chunk and we need to put the new data
+            // into a new chunk
+            if (space == 0) {
+                const new_chunk = try chunk_pool.unsafeCreate();
+                new_chunk.* = Chunk{};
+
+                tail.next = new_chunk;
+                self.tail_chunk = new_chunk;
+                continue;
+            }
+
+            const to_copy = @min(space, remaining.len);
+            @memcpy(tail.data[tail.used .. tail.used + to_copy], remaining[0..to_copy]);
+            tail.used += to_copy;
+
+            remaining = remaining[to_copy..];
+        }
+
+        // If more frames follow continue assembling
+        if (flags.continuation) {
+            return null;
+        }
+
+        // Final frame - message complete
+        const message_head = self.head_chunk.?;
+
+        self.reset(); // reset assembler but DO NOT free chunks
+
+        // Caller owns the returned chunk chain and is responsible for returning it to the pool later
+        return message_head;
+    }
+};
+
+/// This reassembler does an allocation per frame and then does another when copying the assembled
+/// message block to the caller
 pub const Reassembler = struct {
     const Self = @This();
 
@@ -628,8 +726,6 @@ test "reassembly of multi frame message" {
     // I don't think I like this API
     for (frames[0..frames_parsed]) |f| {
         if (try reassembler.assemble(allocator, f)) |message_bytes| {
-            std.debug.print("message_bytes: {any}\n", .{message_bytes});
-
             defer allocator.free(message_bytes);
         }
     }
@@ -680,4 +776,159 @@ test "reassembly fails if out of order" {
 
     // we are purposefully sending a frame out of order here
     try testing.expectError(error.FrameOutOfOrder, reassembler.assemble(allocator, frames[2]));
+}
+
+test "assembler creates a chunk chain per message" {
+    const allocator = testing.allocator;
+
+    var frame_parser = FrameParser.init(allocator);
+    defer frame_parser.deinit();
+
+    var frame_payload = [_]u8{1} ** std.math.maxInt(u16);
+    var frame_1 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = true },
+        .sequence = 0,
+    });
+    var frame_2 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = true },
+        .sequence = 1,
+    });
+    var frame_3 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = false },
+        .sequence = 2,
+    });
+
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    const buf = try allocator.alloc(
+        u8,
+        frame_1.packedSize() +
+            frame_2.packedSize() +
+            frame_3.packedSize(),
+    );
+    defer allocator.free(buf);
+    // var buf: [100]u8 = undefined;
+
+    // write all three frames to the buffer
+    const frame_1_n = frame_1.toBytes(buf);
+    const frame_2_n = frame_2.toBytes(buf[frame_1_n..]);
+    _ = frame_3.toBytes(buf[frame_1_n + frame_2_n ..]);
+
+    var frames: [10]Frame = undefined;
+
+    // parse the entire buffer
+    const frames_parsed = try frame_parser.parse(&frames, buf);
+
+    try testing.expectEqual(3, frames_parsed);
+
+    try testing.expectEqual(0, frame_parser.buffer.items.len);
+
+    var chunk_pool = try MemoryPool(Chunk).init(allocator, 1_000);
+    defer chunk_pool.deinit();
+
+    var assembler = Assembler.new();
+
+    // iterate through the frames and assemble them into a message
+    var message_head: ?*Chunk = null;
+    var message_frames_count: usize = 0;
+    for (frames[0..frames_parsed], 0..frames_parsed) |frame, i| {
+        if (try assembler.assemble(&chunk_pool, frame)) |head_chunk| {
+            message_head = head_chunk;
+            message_frames_count = i + 1;
+            break;
+        }
+    }
+
+    try testing.expectEqual(frames_parsed, message_frames_count);
+    try testing.expect(message_head != null);
+
+    var message_chunks_count: usize = 0;
+    var message_size: usize = 0;
+    var curr_chunk: ?*Chunk = message_head;
+    while (curr_chunk) |chunk| {
+        curr_chunk = chunk.next;
+        message_chunks_count += 1;
+        message_size += chunk.used;
+
+        // clean up all the chunks
+        chunk_pool.destroy(chunk);
+    }
+
+    std.debug.print("multiframe message - frames: {}, chunks: {}, message_size: {}\n", .{
+        message_frames_count,
+        message_chunks_count,
+        message_size,
+    });
+    try testing.expectEqual(chunk_pool.capacity, chunk_pool.available());
+}
+
+test "assembler handles single frame message chunk chains" {
+    const allocator = testing.allocator;
+
+    var frame_parser = FrameParser.init(allocator);
+    defer frame_parser.deinit();
+
+    var frame_payload = [_]u8{1} ** 10;
+    var frame_1 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = false },
+        .sequence = 0,
+    });
+
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    const buf = try allocator.alloc(u8, frame_payload.len * 5);
+    defer allocator.free(buf);
+    // var buf: [100]u8 = undefined;
+
+    // write all three frames to the buffer
+    const frame_1_n = frame_1.toBytes(buf);
+
+    var frames: [10]Frame = undefined;
+
+    // parse the entire buffer
+    const frames_parsed = try frame_parser.parse(&frames, buf[0..frame_1_n]);
+
+    try testing.expectEqual(1, frames_parsed);
+
+    try testing.expectEqual(0, frame_parser.buffer.items.len);
+
+    var chunk_pool = try MemoryPool(Chunk).init(allocator, 1_000);
+    defer chunk_pool.deinit();
+
+    var assembler = Assembler.new();
+
+    // iterate through the frames and assemble them into a message
+    var message_head: ?*Chunk = null;
+    var message_frames_count: usize = 0;
+    for (frames[0..frames_parsed], 0..frames_parsed) |frame, i| {
+        if (try assembler.assemble(&chunk_pool, frame)) |head_chunk| {
+            message_head = head_chunk;
+            message_frames_count = i + 1;
+            break;
+        }
+    }
+
+    try testing.expectEqual(1, message_frames_count);
+
+    try testing.expect(message_head != null);
+
+    var message_chunks_count: usize = 0;
+    var message_size: usize = 0;
+    var curr_chunk: ?*Chunk = message_head;
+    while (curr_chunk) |chunk| {
+        // std.debug.print("curr_chunk bytes: {any}\n", .{chunk.data[0..chunk.used]});
+        curr_chunk = chunk.next;
+        message_chunks_count += 1;
+        message_size += chunk.used;
+
+        // clean up all the chunks
+        chunk_pool.destroy(chunk);
+    }
+
+    std.debug.print("single frame message - frames: {}, chunks: {}, message_size: {}\n", .{
+        message_frames_count,
+        message_chunks_count,
+        message_size,
+    });
+    try testing.expectEqual(chunk_pool.capacity, chunk_pool.available());
 }
