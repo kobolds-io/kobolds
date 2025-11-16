@@ -351,6 +351,7 @@ pub const Reassembler = struct {
             // start assembling a new message
             self.expected_sequence = 0;
             self.is_assembling = true;
+            self.accumulator.clearRetainingCapacity();
         }
 
         // check if the incoming frame's sequence is in the correct order
@@ -359,47 +360,33 @@ pub const Reassembler = struct {
         if (self.expected_sequence != sequence) {
             self.is_assembling = false;
             self.expected_sequence = 0;
+            self.accumulator.clearRetainingCapacity();
             return error.FrameOutOfOrder;
         }
 
         // consider this sequence consumed
         self.expected_sequence += 1;
 
+        try self.accumulator.appendSlice(self.allocator, frame.payload);
+
         // this is just another segment of the message
         if (flags.continuation) {
-            try self.accumulator.appendSlice(self.allocator, frame.payload);
             return null;
         }
 
-        // if there are no more frames that are part of this message
-        if (self.accumulator.items.len == 0) {
-            // this is full message inside of a single frame
-            var message_bytes = try std.ArrayList(u8).initCapacity(
-                allocator,
-                frame.payload.len,
-            );
-            message_bytes.appendSliceAssumeCapacity(frame.payload);
+        const total_message_bytes = self.accumulator.items.len;
 
-            self.is_assembling = false;
-            self.expected_sequence = 0;
+        const message_bytes = try allocator.alloc(u8, total_message_bytes);
+        errdefer allocator.free(message_bytes);
 
-            return message_bytes.items;
-        } else {
-            // this is the final segment of the message
-            try self.accumulator.appendSlice(self.allocator, frame.payload);
+        @memcpy(message_bytes, self.accumulator.items);
 
-            // initialize an array list containing the entire message
-            var message_bytes = try std.ArrayList(u8).initCapacity(
-                allocator,
-                self.accumulator.items.len,
-            );
-            message_bytes.appendSliceAssumeCapacity(self.accumulator.items);
+        // reset the reassembler
+        self.is_assembling = false;
+        self.expected_sequence = 0;
+        self.accumulator.clearRetainingCapacity();
 
-            self.is_assembling = false;
-            self.expected_sequence = 0;
-
-            return message_bytes.items;
-        }
+        return message_bytes;
     }
 };
 
