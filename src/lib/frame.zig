@@ -368,7 +368,7 @@ pub const Assembler = struct {
 
         // Ensure we have an active chunk
         if (self.tail_chunk == null) {
-            const chunk = try chunk_pool.unsafeCreate();
+            const chunk = try chunk_pool.create();
             chunk.* = Chunk{
                 .next = null,
                 .used = 0,
@@ -387,7 +387,7 @@ pub const Assembler = struct {
             // there is not enough space in the current chunk and we need to put the new data
             // into a new chunk
             if (space == 0) {
-                const new_chunk = try chunk_pool.unsafeCreate();
+                const new_chunk = try chunk_pool.create();
                 new_chunk.* = Chunk{};
 
                 tail.next = new_chunk;
