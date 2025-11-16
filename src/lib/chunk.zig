@@ -61,10 +61,9 @@ pub const ChunkReader = struct {
     pub fn readExactSlice(
         self: *Self,
         n: usize,
-        scratch: []u8,
+        scratch_buffer: []u8,
     ) ![]const u8 {
-        if (self.current == null)
-            return error.UnexpectedEOF;
+        if (self.current == null) return error.UnexpectedEOF;
 
         var remaining = n;
         var scratch_index: usize = 0;
@@ -79,25 +78,23 @@ pub const ChunkReader = struct {
         }
 
         // Otherwise fall back to copying
-        if (scratch.len < n)
-            return error.ScratchTooSmall;
+        if (scratch_buffer.len < n) return error.ScratchTooSmall;
 
         while (remaining > 0) {
-            if (self.current == null)
-                return error.UnexpectedEOF;
+            if (self.current == null) return error.UnexpectedEOF;
 
             const ch = self.current.?;
-            const ch_avail = ch.used - self.offset;
+            const chunk_available = ch.used - self.offset;
 
-            if (ch_avail == 0) {
+            if (chunk_available == 0) {
                 self.current = ch.next;
                 self.offset = 0;
                 continue;
             }
 
-            const to_copy = @min(ch_avail, remaining);
+            const to_copy = @min(chunk_available, remaining);
             @memcpy(
-                scratch[scratch_index .. scratch_index + to_copy],
+                scratch_buffer[scratch_index .. scratch_index + to_copy],
                 ch.data[self.offset .. self.offset + to_copy],
             );
 
@@ -106,7 +103,7 @@ pub const ChunkReader = struct {
             remaining -= to_copy;
         }
 
-        return scratch[0..n];
+        return scratch_buffer[0..n];
     }
 };
 
@@ -184,4 +181,65 @@ test "chunk reader can read small chunks" {
 
     const n = reader.read(&buf);
     try testing.expectEqual(n, c1.used);
+}
+
+test "chunk can read exactly bytes and handle single and multi-chunk reads" {
+    var chunk1 = Chunk{};
+    for (0..100) |i| {
+        chunk1.data[i] = @intCast(i);
+    }
+    chunk1.used = 100;
+
+    var chunk2 = Chunk{};
+    for (100..200) |i| {
+        chunk2.data[i - 100] = @intCast(i);
+    }
+    chunk2.used = 100;
+
+    // link the chunks together
+    chunk1.next = &chunk2;
+
+    var reader = ChunkReader.new(&chunk1);
+
+    // Scratch buffer for slow-path reads
+    var scratch: [256]u8 = undefined;
+
+    // Fast path read entirely within chunk1
+
+    {
+        const slice = try reader.readExactSlice(10, &scratch);
+
+        // const expected_ptr: [*]const u8 = &chunk1.data[0];
+        // try std.testing.expect(slice.ptr == expected_ptr);
+
+        // try std.testing.expect(slice.ptr == &chunk1.data[0]); // direct slice into chunk
+        // data was saved directly to the slice
+        try std.testing.expectEqualSlices(u8, slice, chunk1.data[0..10]);
+    }
+
+    // crossing chunk boundary forces memcpy into scratch buffer
+    {
+        // position is now offset 10 in chunk1; reading 200 requires going into chunk2
+        const slice = try reader.readExactSlice(150, &scratch);
+
+        // The slice that is returned is actually derrived from the scratch buffer
+
+        // Validate correctness
+        var expected: [150]u8 = undefined;
+
+        // first 90 bytes from chunk1 (10..100)
+        @memcpy(expected[0..90], chunk1.data[10..100]);
+
+        // next 60 bytes from chunk2 (0..60)
+        @memcpy(expected[90..150], chunk2.data[0..60]);
+
+        // std.debug.print("slice: {any}\n", .{slice});
+        // std.debug.print("scratch: {any}\n", .{scratch});
+
+        try std.testing.expectEqualSlices(u8, slice, expected[0..150]);
+    }
+
+    // Reading past end of the chunks give UnexpectedEOF
+    const err = reader.readExactSlice(scratch.len, &scratch);
+    try std.testing.expectError(error.UnexpectedEOF, err);
 }
