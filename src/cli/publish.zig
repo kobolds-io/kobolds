@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped(.cli_publish);
 const clap = @import("clap");
 
 pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
@@ -59,7 +60,7 @@ pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
         .topic_name = parsed_args.positionals[0].?,
     };
 
-    std.debug.print("Publishing... \n Body: {s} \n Client ID: {} \n Count: {} \n Host: {s} \n Max Connections: {} \n Min Connections: {} \n Port: {} \n Rate: {} \n Token: {s} \n Topic Name: {s} \n", .{ args.body, args.client_id, args.count, args.host, args.max_connections, args.min_connections, args.port, args.rate, args.token, args.topic_name });
+    log.debug("Publishing... Body: {s} Client ID: {} Count: {} Host: {s} Max Connections: {} Min Connections: {} Port: {} Rate: {} Token: {s} Topic Name: {s}", .{ args.body, args.client_id, args.count, args.host, args.max_connections, args.min_connections, args.port, args.rate, args.token, args.topic_name });
 }
 
 const PublishArgs = struct {

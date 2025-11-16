@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped(.cli_listen);
 const clap = @import("clap");
 
 pub fn ListenCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
@@ -37,8 +38,7 @@ pub fn ListenCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterato
         .port = parsed_args.args.port orelse 8000,
         .worker_threads = parsed_args.args.@"worker-threads" orelse 3,
     };
-
-    std.debug.print("Listening... \n Port: {s} \n Host: {} \n Worker Threads: {} \n", .{ args.host, args.port, args.worker_threads });
+    log.debug("Listening...  Port: {s} Host: {} Worker Threads: {}", .{ args.host, args.port, args.worker_threads });
 }
 
 const ListenArgs = struct {

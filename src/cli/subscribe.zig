@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped(.cli_subscribe);
 const clap = @import("clap");
 
 pub fn SubscribeCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
@@ -50,7 +51,7 @@ pub fn SubscribeCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIter
         .topic_name = parsed_args.positionals[0].?,
     };
 
-    std.debug.print("Subscribing... \n Host: {s} \n Port: {} \n Client ID: {} \n Token: {s} \n Max Connections: {} \n Min Connections: {} \n Topic Name: {s}", .{ args.host, args.port, args.client_id, args.token, args.max_connections, args.min_connections, args.topic_name });
+    log.debug("Subscribing... Host: {s} Port: {} Client ID: {} Token: {s} Max Connections: {} Min Connections: {} Topic Name: {s}", .{ args.host, args.port, args.client_id, args.token, args.max_connections, args.min_connections, args.topic_name });
 }
 
 const SubscribeArgs = struct {

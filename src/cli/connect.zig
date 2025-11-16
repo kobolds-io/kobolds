@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped(.cli_connect);
 const clap = @import("clap");
 
 pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
@@ -46,7 +47,7 @@ pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
         .min_connections = parsed_args.args.@"min-connections" orelse 1,
     };
 
-    std.debug.print("Connecting... \n Host: {s} \n Port: {} \n Client ID: {} \n Token: {s} \n Max Connections: {} \n Min Connections: {} \n", .{ args.host, args.port, args.client_id, args.token, args.max_connections, args.min_connections });
+    log.debug("Connecting... Host: {s} Port: {} Client ID: {} Token: {s} Max Connections: {} Min Connections: {}", .{ args.host, args.port, args.client_id, args.token, args.max_connections, args.min_connections });
 }
 
 const ConnectArgs = struct {

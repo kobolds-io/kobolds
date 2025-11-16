@@ -2,21 +2,17 @@ const std = @import("std");
 const clap = @import("clap");
 
 const ListenCommand = @import("./listen.zig").ListenCommand;
-// const BrokerListenCommand = @import("./broker_listen.zig").ListenCommand;
 const ConnectCommand = @import("./connect.zig").ConnectCommand;
 const PublishCommand = @import("./publish.zig").PublishCommand;
 const SubscribeCommand = @import("./subscribe.zig").SubscribeCommand;
-// const AdvertiseCommand = @import("./advertise.zig").AdvertiseCommand;
 
 pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
     const RootSubCommands = enum {
         help,
         listen,
-        // broker_listen,
         connect,
         publish,
         subscribe,
-        // advertise,
     };
 
     const root_parsers = .{ .subcommand = clap.parsers.enumeration(RootSubCommands) };
@@ -26,7 +22,6 @@ pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator)
         \\<subcommand>
     );
 
-    // const RootArgs = clap.ResultEx(clap.Help, &root_params, &root_parsers);
     // discard the first argument
     _ = iter.next();
 
@@ -55,10 +50,8 @@ pub fn RootCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator)
     switch (command) {
         .help => return clap.helpToFile(.stderr(), clap.Help, &root_params, .{}),
         .listen => try ListenCommand(allocator, iter),
-        // .broker_listen => try BrokerListenCommand(allocator, iter),
         .connect => try ConnectCommand(allocator, iter),
         .publish => try PublishCommand(allocator, iter),
         .subscribe => try SubscribeCommand(allocator, iter),
-        // .advertise => try AdvertiseCommand(allocator, iter),
     }
 }
