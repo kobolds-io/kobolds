@@ -193,6 +193,10 @@ pub const Flags = packed struct {
 pub const FixedHeaders = struct {
     const Self = @This();
 
+    comptime {
+        assert(2 == FixedHeaders.packedSize());
+    }
+
     message_type: MessageType = .unsupported,
     flags: Flags = Flags{},
 
