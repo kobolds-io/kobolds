@@ -88,22 +88,22 @@ pub const ChunkReader = struct {
     ) ![]const u8 {
         if (self.current == null) return error.EOF;
 
-        var remaining = n;
+        var remaining_bytes = n;
         var scratch_index: usize = 0;
 
         // If the entire read lives in one chunk, return direct slice
         const chunk = self.current.?;
         const available = chunk.used - self.offset;
-        if (remaining <= available) {
-            const slice = chunk.data[self.offset .. self.offset + remaining];
-            self.offset += remaining;
+        if (remaining_bytes <= available) {
+            const slice = chunk.data[self.offset .. self.offset + remaining_bytes];
+            self.offset += remaining_bytes;
             return slice;
         }
 
         // Otherwise fall back to copying
         if (scratch_buffer.len < n) return error.ScratchTooSmall;
 
-        while (remaining > 0) {
+        while (remaining_bytes > 0) {
             if (self.current == null) return error.EOF;
 
             const ch = self.current.?;
@@ -115,7 +115,7 @@ pub const ChunkReader = struct {
                 continue;
             }
 
-            const to_copy = @min(chunk_available, remaining);
+            const to_copy = @min(chunk_available, remaining_bytes);
             @memcpy(
                 scratch_buffer[scratch_index .. scratch_index + to_copy],
                 ch.data[self.offset .. self.offset + to_copy],
@@ -123,10 +123,32 @@ pub const ChunkReader = struct {
 
             scratch_index += to_copy;
             self.offset += to_copy;
-            remaining -= to_copy;
+            remaining_bytes -= to_copy;
         }
 
         return scratch_buffer[0..n];
+    }
+
+    /// compute the remaining bytes in the chunk chain
+    pub fn remaining(self: *Self) usize {
+        if (self.current) |current| {
+            var total_remaining: usize = 0;
+
+            // count the bytes remaining in the current chunk
+            const available = if (self.offset < current.used) current.used - self.offset else 0;
+            total_remaining += available;
+
+            // walk the remaining chunks in the chain
+            var next = current.next;
+            while (next) |chunk| {
+                total_remaining += chunk.used;
+                next = chunk.next;
+            }
+
+            return total_remaining;
+        } else {
+            return 0;
+        }
     }
 };
 
