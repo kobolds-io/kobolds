@@ -15,6 +15,13 @@ const ChunkReader = @import("./chunk.zig").ChunkReader;
 const ChunkWriter = @import("./chunk.zig").ChunkWriter;
 const Chunk = @import("./chunk.zig").Chunk;
 
+comptime {
+    // NOTE: A core assumption of the message is that the FixedHeaders and ExtensionsHeaders will be
+    // able to fit inside of a single chunk. If this no longer is the case, then the entire
+    // message structure should be refactored to comply with the new restrictions
+    assert(constants.chunk_data_size >= FixedHeaders.packedSize() + @sizeOf(ExtensionHeaders));
+}
+
 pub const Message = struct {
     const Self = @This();
 
@@ -312,14 +319,14 @@ test "message can expand and contract based on needs" {
     try testing.expectEqual(message.chunk.used, message.packedSize());
     try testing.expectEqual(0, message.bodySize());
 
-    const bytes = [_]u8{'a'} ** constants.message_chunk_data_size;
+    const bytes = [_]u8{'a'} ** constants.chunk_data_size;
 
     try message.setBody(&pool, &bytes);
 
     // because the size of the body has now exceeded the capacity of a single chunk
     // we should now have 2 chunks allocated by the memory pool
     try testing.expect(message.chunk.used < message.packedSize());
-    try testing.expectEqual(constants.message_chunk_data_size, message.bodySize());
+    try testing.expectEqual(constants.chunk_data_size, message.bodySize());
     try testing.expectEqual(2, pool.capacity - pool.available());
 
     // clear the message body

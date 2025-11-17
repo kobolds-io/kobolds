@@ -854,7 +854,7 @@ test "assembler creates a chunk chain per message" {
         chunk_pool.destroy(chunk);
     }
 
-    std.debug.print("multiframe message - frames: {}, chunks: {}, message_size: {}\n", .{
+    std.debug.print("multi-frame message - frames: {}, chunks: {}, message_size: {}\n", .{
         message_frames_count,
         message_chunks_count,
         message_size,

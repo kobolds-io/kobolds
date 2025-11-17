@@ -115,7 +115,7 @@ test "parser parses a message from valid chunk" {
 //  chunk,
 // }
 //
-// var message = Message.new(head_chunk);
+// var message = Message.init(pool, message_type, );
 // defer message.deinit();
 //
 // message.ref();

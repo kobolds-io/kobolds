@@ -6,7 +6,7 @@ const MemoryPool = @import("stdx").MemoryPool;
 
 pub const Chunk = struct {
     used: usize = 0,
-    data: [constants.message_chunk_data_size]u8 = undefined,
+    data: [constants.chunk_data_size]u8 = undefined,
     next: ?*Chunk = null,
 };
 
@@ -170,7 +170,7 @@ pub const ChunkWriter = struct {
     /// Internal helper: ensure `current` has space, and if not,
     /// move to or allocate the next chunk.
     fn ensureSpace(self: *Self, pool: *MemoryPool(Chunk), needed: usize) !void {
-        const cap = constants.message_chunk_data_size;
+        const cap = constants.chunk_data_size;
 
         if (self.offset + needed <= cap) return;
 
@@ -207,7 +207,7 @@ pub const ChunkWriter = struct {
             // Ensure at least 1 byte of space; chunk may rotate
             try self.ensureSpace(pool, 1);
 
-            const cap = constants.message_chunk_data_size;
+            const cap = constants.chunk_data_size;
             const remaining = buf.len - index;
             const space = cap - self.offset;
 
@@ -236,10 +236,10 @@ pub const ChunkWriter = struct {
 test "chunk reader can read a chunk chain" {
     const allocator = testing.allocator;
 
-    const c1_payload = try allocator.alloc(u8, constants.message_chunk_data_size);
+    const c1_payload = try allocator.alloc(u8, constants.chunk_data_size);
     defer allocator.free(c1_payload);
 
-    const c2_payload = try allocator.alloc(u8, constants.message_chunk_data_size);
+    const c2_payload = try allocator.alloc(u8, constants.chunk_data_size);
     defer allocator.free(c2_payload);
 
     for (0..c1_payload.len) |i| {
@@ -265,7 +265,7 @@ test "chunk reader can read a chunk chain" {
     var reader = ChunkReader.new(&c1);
 
     // make a buffer that is smaller than the size of each chunk
-    var buf: [constants.message_chunk_data_size / 4]u8 = undefined;
+    var buf: [constants.chunk_data_size / 4]u8 = undefined;
     var bytes_read: usize = 0;
     const total_bytes = c1.used + c2.used;
 
@@ -303,7 +303,7 @@ test "chunk reader can read small chunks" {
     var reader = ChunkReader.new(&c1);
 
     // make a buffer that is smaller than the size of each chunk
-    var buf: [constants.message_chunk_data_size / 4]u8 = undefined;
+    var buf: [constants.chunk_data_size / 4]u8 = undefined;
 
     const n = reader.read(&buf);
     try testing.expectEqual(n, c1.used);
@@ -405,7 +405,7 @@ test "chunk writer can write arbitrary bytes" {
 
     var writer = ChunkWriter.new(c1);
 
-    var bytes: [constants.message_chunk_data_size / 2]u8 = undefined;
+    var bytes: [constants.chunk_data_size / 2]u8 = undefined;
 
     var total_written: usize = 0;
 
