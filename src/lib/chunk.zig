@@ -56,7 +56,7 @@ pub const ChunkReader = struct {
         return out_index;
     }
 
-    pub fn readByte(self: *ChunkReader) !u8 {
+    pub fn readByte(self: *Self) !u8 {
         // No current chunk -> nothing to read
         if (self.current == null) return error.EOF;
 
