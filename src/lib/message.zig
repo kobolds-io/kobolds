@@ -1,12 +1,19 @@
 const std = @import("std");
+const atomic = std.atomic;
 const testing = std.testing;
 const assert = std.debug.assert;
+
+const constants = @import("../constants.zig");
+
+const MemoryPool = @import("stdx").MemoryPool;
 
 const MessageType = @import("./message_type.zig").MessageType;
 const PingHeaders = @import("./headers.zig").PingHeaders;
 const PongHeaders = @import("./headers.zig").PongHeaders;
 
 const ChunkReader = @import("./chunk.zig").ChunkReader;
+const ChunkWriter = @import("./chunk.zig").ChunkWriter;
+const Chunk = @import("./chunk.zig").Chunk;
 
 pub const Message = struct {
     const Self = @This();
@@ -15,89 +22,145 @@ pub const Message = struct {
 
     fixed_headers: FixedHeaders = FixedHeaders{},
     extension_headers: ExtensionHeaders = ExtensionHeaders{ .unsupported = {} },
-    body_chunks: ?*BodyChunk = null,
+    chunk: *Chunk,
+    ref_count: atomic.Value(usize) = atomic.Value(usize).init(0),
 
-    pub fn new(message_type: MessageType, opts: Options) Self {
-        _ = opts;
+    pub fn init(pool: *MemoryPool(Chunk), message_type: MessageType, options: Options) !Message {
+        _ = options;
 
-        return switch (message_type) {
-            .unsupported => Self{
-                .fixed_headers = FixedHeaders{ .message_type = .unsupported },
-                .extension_headers = ExtensionHeaders{ .unsupported = {} },
-                .body_chunks = null,
-            },
-            .ping => Self{
-                .fixed_headers = FixedHeaders{ .message_type = .ping },
-                .extension_headers = ExtensionHeaders{ .ping = PingHeaders{} },
-                .body_chunks = null,
-            },
-            .pong => Self{
-                .fixed_headers = FixedHeaders{ .message_type = .pong },
-                .extension_headers = ExtensionHeaders{ .pong = PongHeaders{} },
-                .body_chunks = null,
-            },
+        // create a head chunk
+        const chunk = try pool.create();
+        errdefer pool.destroy(chunk);
+
+        chunk.* = Chunk{};
+
+        // initialize a writer
+        var writer = ChunkWriter.new(chunk);
+
+        var fixed_headers = FixedHeaders{ .message_type = message_type };
+
+        var tmp_buf: [100]u8 = undefined;
+        const fh_n = fixed_headers.toBytes(tmp_buf[0..]);
+
+        var extension_headers = switch (message_type) {
+            .unsupported => ExtensionHeaders{ .unsupported = {} },
+            .ping => ExtensionHeaders{ .ping = .{} },
+            .pong => ExtensionHeaders{ .pong = .{} },
+        };
+
+        const eh_n = extension_headers.toBytes(tmp_buf[fh_n..]);
+
+        try writer.write(pool, tmp_buf[0 .. fh_n + eh_n]);
+
+        return Message{
+            .fixed_headers = fixed_headers,
+            .extension_headers = extension_headers,
+            .chunk = chunk,
         };
     }
 
-    /// Calculate the size of the unserialized message.
+    pub fn deinit(self: *Self, pool: *MemoryPool(Chunk)) void {
+        // recursively destroy the chunk chain
+        var current_chunk: ?*Chunk = self.chunk;
+        var next_chunk: ?*Chunk = null;
+        while (current_chunk) |chunk| {
+            next_chunk = chunk.next;
+            pool.destroy(chunk);
+            current_chunk = next_chunk;
+        }
+    }
+
+    fn headersPackedSize(self: Self) usize {
+        const fh_size = FixedHeaders.packedSize();
+        const eh_size = ExtensionHeaders.packedSize(self.fixed_headers.message_type);
+        return fh_size + eh_size;
+    }
+
     pub fn packedSize(self: Self) usize {
-        var body_length: usize = 0;
-        var current_chunk = self.body_chunks;
-        while (current_chunk) |chunk| {
-            body_length += chunk.len;
-            if (chunk.next) |next_chunk| {
-                current_chunk = next_chunk;
-            }
+        var reader = ChunkReader.new(self.chunk);
+        return reader.remaining();
+    }
+
+    pub fn bodySize(self: Self) usize {
+        var reader = ChunkReader{
+            .offset = self.headersPackedSize(),
+            .current = self.chunk,
+        };
+
+        return reader.remaining();
+    }
+
+    pub fn bodyReader(self: Self) ChunkReader {
+        return ChunkReader{
+            .offset = self.headersPackedSize(),
+            .current = self.chunk,
+        };
+    }
+
+    pub fn bodyWriter(self: Self) ChunkWriter {
+        return ChunkWriter{
+            .head = self.chunk,
+            .current = self.chunk,
+            .offset = self.headersPackedSize(),
+        };
+    }
+
+    pub fn setBody(self: Self, pool: *MemoryPool(Chunk), v: []const u8) !void {
+        // Reset head chunk to only contain the headers.
+        self.chunk.used = self.headersPackedSize();
+
+        // Traverse and clear all following chunks.
+        var chunk_opt = self.chunk.next;
+        while (chunk_opt) |chunk| {
+            chunk.used = 0;
+            chunk_opt = chunk.next;
         }
 
-        return FixedHeaders.packedSize() + self.extension_headers.packedSize() + body_length;
-    }
+        // Write new body bytes into the chunk chain.
+        var writer = self.bodyWriter();
+        try writer.write(pool, v);
 
-    pub fn serialize(self: *Self, buf: []u8) usize {
-        // Ensure the buffer is large enough
-        assert(buf.len >= self.packedSize());
+        // Now recursively clean up unused chunks. Keep pointer to the first chunk after head.
+        var prev: *Chunk = self.chunk;
+        var current_opt = prev.next;
 
-        var i: usize = 0;
+        while (current_opt) |current| {
+            const next = current.next;
 
-        // Fixed headers
-        i += self.fixed_headers.toBytes(buf[i..]);
+            if (current.used == 0) {
+                // unlink current
+                prev.next = next;
 
-        // Extension headers
-        i += self.extension_headers.toBytes(buf[i..]);
-
-        var current_chunk = self.body_chunks;
-        while (current_chunk) |chunk| {
-            @memcpy(buf[i .. i + chunk.len], chunk.bytes[0..chunk.len]);
-            if (chunk.next) |next_chunk| {
-                current_chunk = next_chunk;
+                // destroy safely
+                pool.destroy(current);
+            } else {
+                // Only advance prev if this chunk stays alive
+                prev = current;
             }
+
+            current_opt = next;
         }
-
-        // if this didn't work something went wrong
-        assert(self.packedSize() == i);
-
-        return i;
     }
 
-    pub fn deserialize(data: []const u8) !DeserializeResult {
-        _ = data;
-        // NOTE: all of the data for this message should be contained inside of data?????
-        //     if this is true, then we may be potentially doubling the amount of memory needed for
-        //     this message. Alternatively, the frame would have more information regarding this
-        //     message. The next body_chunk could be a chunk on disk OR it could be in memory.
-        //
-        //
-
-        // FIX: not implemented
-        unreachable;
-
-        // return .{ .message = Message.new(.unsupported, .{}), .bytes_consumed = 0 };
+    /// return the current `ref_count` for this message
+    pub fn refs(self: *Self) u32 {
+        return self.ref_count.load(.seq_cst);
     }
 
-    const DeserializeResult = struct {
-        message: Self,
-        bytes_consumed: usize,
-    };
+    /// increment the `ref_count` for this message
+    pub fn ref(self: *Self) void {
+        _ = self.ref_count.fetchAdd(1, .seq_cst);
+    }
+
+    /// decrement the `ref_count` for this message. `Message.ref_count` should never be less than
+    /// zero and therefore will panic due to logical error if that is the case.
+    pub fn deref(self: *Self) void {
+        // this is a logical guard as we should never be dereferencing messages more than we
+        // have previously referenced them
+        assert(self.refs() > 0);
+
+        _ = self.ref_count.fetchSub(1, .seq_cst);
+    }
 };
 
 pub const Flags = packed struct {
@@ -130,7 +193,7 @@ pub const FixedHeaders = struct {
         return @sizeOf(MessageType) + @sizeOf(Flags);
     }
 
-    pub fn toBytes(self: Self, buf: []u8) usize {
+    pub fn toBytes(self: *Self, buf: []u8) usize {
         assert(buf.len >= @sizeOf(Self));
 
         var i: usize = 0;
@@ -171,15 +234,16 @@ pub const ExtensionHeaders = union(MessageType) {
     ping: PingHeaders,
     pong: PongHeaders,
 
-    pub fn packedSize(self: *const Self) usize {
-        return switch (self.*) {
+    pub fn packedSize(message_type: MessageType) usize {
+        return switch (message_type) {
             .unsupported => 0,
-            inline else => |headers| headers.packedSize(),
+            .ping => PingHeaders.packedSize(),
+            .pong => PongHeaders.packedSize(),
         };
     }
 
-    pub fn toBytes(self: *Self, buf: []u8) usize {
-        return switch (self.*) {
+    pub fn toBytes(self: Self, buf: []u8) usize {
+        return switch (self) {
             .unsupported => 0,
             inline else => |headers| blk: {
                 assert(buf.len >= @sizeOf(@TypeOf(headers)));
@@ -205,47 +269,101 @@ pub const ExtensionHeaders = union(MessageType) {
     }
 };
 
-pub const BodyChunk = struct {
-    len: u16 = 0,
-    bytes: []const u8,
-    next: ?*BodyChunk,
-};
+test "core message functionalities" {
+    const allocator = testing.allocator;
 
-test "size of structs" {
-    try testing.expectEqual(2, @sizeOf(FixedHeaders));
-    try testing.expectEqual(2, FixedHeaders.packedSize());
+    var pool = try MemoryPool(Chunk).init(allocator, 3);
+    defer pool.deinit();
 
-    const unsupported_message = Message.new(.unsupported, .{});
-    try testing.expectEqual(2, unsupported_message.packedSize());
+    var message = try Message.init(&pool, .ping, .{});
+    defer message.deinit(&pool);
 
-    const ping_message = Message.new(.ping, .{});
-    try testing.expectEqual(10, ping_message.packedSize());
+    try testing.expectEqual(message.chunk.used, message.packedSize());
 
-    const pong_message = Message.new(.pong, .{});
-    try testing.expectEqual(10, pong_message.packedSize());
+    var body_writer = message.bodyWriter();
+
+    const new_body = "kobolds is a friendly message broker...sneaky sneaky";
+    try body_writer.write(&pool, new_body);
+
+    try testing.expectEqual(message.chunk.used, message.packedSize());
+
+    var body_reader = message.bodyReader();
+    var body_reader_buf: [new_body.len]u8 = undefined;
+
+    const n = body_reader.read(&body_reader_buf);
+
+    try testing.expectEqual(new_body.len, n);
+
+    try testing.expect(std.mem.eql(u8, body_reader_buf[0..n], new_body));
 }
 
-test "message can comprise of variable size extensions" {
-    const ping_message = Message.new(.ping, .{});
-    try testing.expectEqual(ping_message.fixed_headers.message_type, .ping);
+test "message can expand and contract based on needs" {
+    const allocator = testing.allocator;
+
+    var pool = try MemoryPool(Chunk).init(allocator, 3);
+    defer pool.deinit();
+
+    var message = try Message.init(&pool, .ping, .{});
+    defer message.deinit(&pool);
+
+    try testing.expectEqual(1, pool.capacity - pool.available());
+
+    // sanity check
+    try testing.expectEqual(message.chunk.used, message.packedSize());
+    try testing.expectEqual(0, message.bodySize());
+
+    const bytes = [_]u8{'a'} ** constants.message_chunk_data_size;
+
+    try message.setBody(&pool, &bytes);
+
+    // because the size of the body has now exceeded the capacity of a single chunk
+    // we should now have 2 chunks allocated by the memory pool
+    try testing.expect(message.chunk.used < message.packedSize());
+    try testing.expectEqual(constants.message_chunk_data_size, message.bodySize());
+    try testing.expectEqual(2, pool.capacity - pool.available());
+
+    // clear the message body
+    try message.setBody(&pool, "");
+    try testing.expectEqual(0, message.bodySize());
+    try testing.expectEqual(1, pool.capacity - pool.available());
+
+    // everything should now fit into a single chunk
+    try testing.expectEqual(message.chunk.used, message.packedSize());
 }
 
-test "message serialization" {
-    const message_types = [_]MessageType{
-        .ping,
-        .pong,
-    };
+// test "size of structs" {
+//     var chunk = Chunk{};
 
-    var buf: [@sizeOf(Message)]u8 = undefined;
+//     try testing.expectEqual(2, @sizeOf(FixedHeaders));
+//     try testing.expectEqual(2, FixedHeaders.packedSize());
 
-    for (message_types) |message_type| {
-        var message = Message.new(message_type, .{});
+//     const unsupported_message = Message.new(&chunk, .unsupported, .{});
+//     try testing.expectEqual(2, unsupported_message.packedSize());
 
-        const bytes = message.serialize(&buf);
+//     const ping_message = Message.new(&chunk, .ping, .{});
+//     try testing.expectEqual(10, ping_message.packedSize());
 
-        try testing.expectEqual(bytes, message.packedSize());
-    }
-}
+//     const pong_message = Message.new(&chunk, .pong, .{});
+//     try testing.expectEqual(10, pong_message.packedSize());
+// }
+
+// test "message serialization" {
+//     const message_types = [_]MessageType{
+//         .ping,
+//         .pong,
+//     };
+
+//     var buf: [@sizeOf(Message)]u8 = undefined;
+
+//     for (message_types) |message_type| {
+//         var chunk = Chunk{};
+//         var message = Message.new(&chunk, message_type, .{});
+
+//         const bytes = message.serialize(&buf);
+
+//         try testing.expectEqual(bytes, message.packedSize());
+//     }
+// }
 
 // test "message deserialization" {
 //     const message_types = [_]MessageType{

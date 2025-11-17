@@ -6,16 +6,12 @@ pub const PingHeaders = struct {
 
     transaction_id: u64 = 0,
 
-    pub fn packedSize(_: Self) usize {
-        return Self.minimumSize();
-    }
-
-    fn minimumSize() usize {
+    pub fn packedSize() usize {
         return @sizeOf(u64);
     }
 
     pub fn toBytes(self: Self, buf: []u8) usize {
-        assert(buf.len >= self.packedSize());
+        assert(buf.len >= Self.packedSize());
 
         var i: usize = 0;
 
@@ -26,7 +22,7 @@ pub const PingHeaders = struct {
     }
 
     pub fn fromBytes(data: []const u8) !Self {
-        if (data.len < Self.minimumSize()) return error.Truncated;
+        if (data.len < Self.packedSize()) return error.Truncated;
 
         var i: usize = 0;
         const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);
@@ -49,16 +45,12 @@ pub const PongHeaders = struct {
 
     transaction_id: u64 = 0,
 
-    pub fn packedSize(_: Self) usize {
-        return Self.minimumSize();
-    }
-
-    fn minimumSize() usize {
+    pub fn packedSize() usize {
         return @sizeOf(u64);
     }
 
     pub fn toBytes(self: Self, buf: []u8) usize {
-        assert(buf.len >= self.packedSize());
+        assert(buf.len >= Self.packedSize());
 
         var i: usize = 0;
 
@@ -69,7 +61,7 @@ pub const PongHeaders = struct {
     }
 
     pub fn fromBytes(data: []const u8) !Self {
-        if (data.len < Self.minimumSize()) return error.Truncated;
+        if (data.len < Self.packedSize()) return error.Truncated;
 
         var i: usize = 0;
         const transaction_id = std.mem.readInt(u64, data[i .. i + @sizeOf(u64)][0..@sizeOf(u64)], .big);

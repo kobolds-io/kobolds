@@ -14,52 +14,40 @@ const MemoryPool = @import("stdx").MemoryPool;
 pub const Parser = struct {
     const Self = @This();
 
-    head_chunk: *Chunk,
+    reader: ChunkReader,
+    scratch: [128]u8 = undefined,
 
+    /// Make a new `Parser` which parses a single message from a `chunk_chain`. The `Parser` assumes
+    /// that a `chunk_chain` only contains a single message.
     pub fn new(head_chunk: *Chunk) Self {
         return Self{
-            .head_chunk = head_chunk,
+            .reader = ChunkReader.new(head_chunk),
+            .scratch = undefined,
         };
     }
 
-    pub fn parse(self: *Self) !*Message {
-        var reader = ChunkReader.new(self.head_chunk);
-
+    pub fn parse(self: *Self) !Message {
         // Try to read the FixedHeaders out of the chunk
-        var scratch: [32]u8 = undefined;
-        const fixed_headers_slice = try reader.readExactSlice(FixedHeaders.packedSize(), &scratch);
-        const fixed_headers = try FixedHeaders.fromBytes(fixed_headers_slice);
+        const fh_size = FixedHeaders.packedSize();
+        const fixed_slice = try self.reader.readExactSlice(fh_size, &self.scratch);
+        const fixed_headers = try FixedHeaders.fromBytes(fixed_slice);
 
-        const eh_size = switch (fixed_headers.message_type) {
-            .ping => blk: {
-                const headers = ExtensionHeaders{ .ping = .{} };
-                break :blk headers.packedSize();
-            },
-            .pong => blk: {
-                const headers = ExtensionHeaders{ .pong = .{} };
-                break :blk headers.packedSize();
-            },
-            else => unreachable,
+        // Try to read the ExtensionHeaders out of the chunk
+        const eh_size = ExtensionHeaders.packedSize(fixed_headers.message_type);
+        const eh_slice = try self.reader.readExactSlice(eh_size, &self.scratch);
+        const extension_headers = try ExtensionHeaders.fromBytes(
+            fixed_headers.message_type,
+            eh_slice,
+        );
+
+        // everything else remaining in this chunk chain should be considered as part of the body.
+        // The parser does not use the `Message.init` function because everything has already been
+        // allocated. Messages should never be reallocated, only referenced
+        return Message{
+            .fixed_headers = fixed_headers,
+            .extension_headers = extension_headers,
+            .chunk = self.reader.current orelse unreachable,
         };
-
-        const extension_headers_slice = try reader.readExactSlice(eh_size, &scratch);
-        const extension_headers = try ExtensionHeaders.fromBytes(fixed_headers.message_type, extension_headers_slice);
-
-        // const fixed_headers = try FixedHeaders.parse(&self.reader);
-
-        std.debug.print("fixed_headers: {any}\n", .{fixed_headers});
-        std.debug.print("extension_headers: {any}\n", .{extension_headers});
-
-        return error.NotImplemented;
-
-        // return error.NotImplemented;
-
-        // var reader = ChunkReader.new(chunk);
-        // var count: usize = 0;
-
-        // while (count < messages.len) {
-        // const fixed_headers = try FixedHeaders.parse(&reader);
-        // }
     }
 };
 
@@ -92,9 +80,15 @@ test "parser parses a message from valid chunk" {
     try writer.write(&pool, message_buf[0..n]);
 
     var parser = Parser.new(chunk);
-    _ = try parser.parse();
 
-    // std.debug.print("chunk: {any}\n", .{chunk.data});
+    // we don't have to deinit this message because we are initializing the chunk above. Additionally
+    // we are not going to increment the `Message.ref_count` for this message since no other
+    // thread is trying to access it.
+    const message = try parser.parse();
+
+    try testing.expectEqual(fixed_headers_before.flags.padding, message.fixed_headers.flags.padding);
+    try testing.expectEqual(fixed_headers_before.message_type, message.fixed_headers.message_type);
+    try testing.expectEqual(extension_headers_before.ping.transaction_id, message.extension_headers.ping.transaction_id);
 }
 
 // parser should basically walk the chunks and figure out the validity of the message.
