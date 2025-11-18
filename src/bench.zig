@@ -12,4 +12,5 @@ test "prints system info" {
 
 comptime {
     _ = @import("./benchmarks/checksum.zig");
+    _ = @import("./benchmarks/frame.zig");
 }
