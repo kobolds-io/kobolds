@@ -8,7 +8,7 @@ const testing = std.testing;
 
 const Frame = @import("../lib/frame.zig").Frame;
 const FrameParser = @import("../lib/frame.zig").FrameParser;
-const Assembler = @import("../lib/frame.zig").Assembler;
+const FrameReassembler = @import("../lib/frame.zig").FrameReassembler;
 const MemoryPool = @import("stdx").MemoryPool;
 const Chunk = @import("../lib/chunk.zig").Chunk;
 
@@ -106,13 +106,13 @@ test "FrameParser benchmarks" {
     try bench.run(writer);
 }
 
-const AssembleFromFrames = struct {
+const ReassembleFromFrames = struct {
     const Self = @This();
 
-    assembler: *Assembler,
+    assembler: *FrameReassembler,
     pool: *MemoryPool(Chunk),
     frames: []Frame,
-    pub fn new(assembler: *Assembler, pool: *MemoryPool(Chunk), frames: []Frame) Self {
+    pub fn new(assembler: *FrameReassembler, pool: *MemoryPool(Chunk), frames: []Frame) Self {
         return Self{
             .assembler = assembler,
             .pool = pool,
@@ -155,7 +155,7 @@ test "FrameAssembler benchmarks" {
     var pool = try MemoryPool(Chunk).init(allocator, 1_000);
     defer pool.deinit();
 
-    var assembler = Assembler.new();
+    var assembler = FrameReassembler.new();
 
     const payload = allocator.alloc(u8, constants.max_frame_payload_size) catch unreachable;
     defer allocator.free(payload);
@@ -182,12 +182,12 @@ test "FrameAssembler benchmarks" {
 
     try bench.addParam(
         "assemble single frame",
-        &AssembleFromFrames.new(&assembler, &pool, &single_frame_frames),
+        &ReassembleFromFrames.new(&assembler, &pool, &single_frame_frames),
         .{},
     );
     try bench.addParam(
         "assemble multi-frame",
-        &AssembleFromFrames.new(&assembler, &pool, &multi_frame_frames),
+        &ReassembleFromFrames.new(&assembler, &pool, &multi_frame_frames),
         .{},
     );
 

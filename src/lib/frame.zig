@@ -323,7 +323,7 @@ pub const FrameParser = struct {
     }
 };
 
-pub const Assembler = struct {
+pub const FrameReassembler = struct {
     const Self = @This();
 
     expected_sequence: u16 = 0,
@@ -344,7 +344,7 @@ pub const Assembler = struct {
         self.tail_chunk = null;
     }
 
-    pub fn assemble(
+    pub fn reassemble(
         self: *Self,
         chunk_pool: *MemoryPool(Chunk),
         frame: Frame,
@@ -486,8 +486,8 @@ test "create a frame from bytes" {
 test "frame parsing happy path" {
     const allocator = testing.allocator;
 
-    var disassembler = FrameParser.init(allocator);
-    defer disassembler.deinit();
+    var frame_parser = FrameParser.init(allocator);
+    defer frame_parser.deinit();
 
     // make an arbitrary frame
     var payload = [_]u8{ 1, 2, 3, 4, 5, 6 };
@@ -503,7 +503,7 @@ test "frame parsing happy path" {
 
     var frames: [5]Frame = undefined;
 
-    const frames_parsed = try disassembler.parse(&frames, buf[0..n]);
+    const frames_parsed = try frame_parser.parse(&frames, buf[0..n]);
     try testing.expectEqual(1, frames_parsed);
 }
 
@@ -626,13 +626,13 @@ test "assembler creates a chunk chain per message" {
     var chunk_pool = try MemoryPool(Chunk).init(allocator, 1_000);
     defer chunk_pool.deinit();
 
-    var assembler = Assembler.new();
+    var reassembler = FrameReassembler.new();
 
     // iterate through the frames and assemble them into a message
     var message_head: ?*Chunk = null;
     var message_frames_count: usize = 0;
     for (frames[0..frames_parsed], 0..frames_parsed) |frame, i| {
-        if (try assembler.assemble(&chunk_pool, frame)) |head_chunk| {
+        if (try reassembler.reassemble(&chunk_pool, frame)) |head_chunk| {
             message_head = head_chunk;
             message_frames_count = i + 1;
             break;
@@ -662,7 +662,7 @@ test "assembler creates a chunk chain per message" {
     try testing.expectEqual(chunk_pool.capacity, chunk_pool.available());
 }
 
-test "assembler handles single frame message chunk chains" {
+test "reassembler handles single frame message chunk chains" {
     const allocator = testing.allocator;
 
     var frame_parser = FrameParser.init(allocator);
@@ -695,13 +695,13 @@ test "assembler handles single frame message chunk chains" {
     var chunk_pool = try MemoryPool(Chunk).init(allocator, 1_000);
     defer chunk_pool.deinit();
 
-    var assembler = Assembler.new();
+    var reassembler = FrameReassembler.new();
 
     // iterate through the frames and assemble them into a message
     var message_head: ?*Chunk = null;
     var message_frames_count: usize = 0;
     for (frames[0..frames_parsed], 0..frames_parsed) |frame, i| {
-        if (try assembler.assemble(&chunk_pool, frame)) |head_chunk| {
+        if (try reassembler.reassemble(&chunk_pool, frame)) |head_chunk| {
             message_head = head_chunk;
             message_frames_count = i + 1;
             break;
