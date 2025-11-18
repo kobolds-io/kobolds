@@ -110,9 +110,9 @@ const AssembleFromFrames = struct {
     const Self = @This();
 
     assembler: *Assembler,
-    frames: Frame,
     pool: *MemoryPool(Chunk),
-    pub fn new(assembler: *Assembler, pool: *MemoryPool(Chunk), frames: Frame) Self {
+    frames: []Frame,
+    pub fn new(assembler: *Assembler, pool: *MemoryPool(Chunk), frames: []Frame) Self {
         return Self{
             .assembler = assembler,
             .pool = pool,
@@ -121,7 +121,27 @@ const AssembleFromFrames = struct {
     }
 
     pub fn run(self: Self, _: std.mem.Allocator) void {
-        _ = self;
+        var payload_length: usize = 0;
+        for (self.frames) |frame| {
+            payload_length += frame.frame_headers.payload_length;
+            const chunk_opt = self.assembler.assemble(self.pool, frame) catch unreachable;
+
+            if (chunk_opt) |chunk| {
+                var total_chunk_used: usize = 0;
+                total_chunk_used += chunk.used;
+                var next: ?*Chunk = chunk.next;
+                while (next) |next_chunk| {
+                    total_chunk_used += next_chunk.used;
+                    next = next_chunk.next;
+                    self.pool.destroy(next_chunk);
+                }
+                self.pool.destroy(chunk);
+
+                // std.debug.print("payload len: {}, chunk used: {}\n", .{ payload_length, total_chunk_used });
+                // ensure that all the bytes were written to the chunk chain
+                assert(payload_length == total_chunk_used);
+            }
+        }
     }
 };
 
@@ -132,14 +152,51 @@ test "FrameAssembler benchmarks" {
     });
     defer bench.deinit();
 
+    var pool = try MemoryPool(Chunk).init(allocator, 1_000);
+    defer pool.deinit();
+
+    var assembler = Assembler.new();
+
+    const payload = allocator.alloc(u8, constants.max_frame_payload_size) catch unreachable;
+    defer allocator.free(payload);
+
+    // make all the frames
+    const single_frame = Frame.new(payload, .{});
+
+    const multi_frame_0 = Frame.new(payload, .{ .flags = .{ .continuation = true }, .sequence = 0 });
+    const multi_frame_1 = Frame.new(payload, .{ .flags = .{ .continuation = true }, .sequence = 1 });
+    const multi_frame_2 = Frame.new(payload, .{ .flags = .{ .continuation = true }, .sequence = 2 });
+    const multi_frame_3 = Frame.new(payload, .{ .flags = .{ .continuation = true }, .sequence = 3 });
+    const multi_frame_4 = Frame.new(payload, .{ .flags = .{ .continuation = false }, .sequence = 4 });
+
     // TODO: create a benchmark for the assembler.
+
+    var single_frame_frames = [_]Frame{single_frame};
+    var multi_frame_frames = [_]Frame{
+        multi_frame_0,
+        multi_frame_1,
+        multi_frame_2,
+        multi_frame_3,
+        multi_frame_4,
+    };
+
+    try bench.addParam(
+        "assemble single frame",
+        &AssembleFromFrames.new(&assembler, &pool, &single_frame_frames),
+        .{},
+    );
+    try bench.addParam(
+        "assemble multi-frame",
+        &AssembleFromFrames.new(&assembler, &pool, &multi_frame_frames),
+        .{},
+    );
 
     var stderr = std.fs.File.stderr().writerStreaming(&.{});
     const writer = &stderr.interface;
 
     try writer.writeAll("\n");
-    try writer.writeAll("|------------------------------|\n");
-    try writer.writeAll("| FrameParser.parse Benchmarks |\n");
-    try writer.writeAll("|------------------------------|\n");
+    try writer.writeAll("|-------------------------------|\n");
+    try writer.writeAll("| Assembler.assemble Benchmarks |\n");
+    try writer.writeAll("|-------------------------------|\n");
     try bench.run(writer);
 }
