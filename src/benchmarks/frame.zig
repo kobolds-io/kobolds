@@ -109,12 +109,12 @@ test "FrameParser benchmarks" {
 const ReassembleFromFrames = struct {
     const Self = @This();
 
-    assembler: *FrameReassembler,
+    reassembler: *FrameReassembler,
     pool: *MemoryPool(Chunk),
     frames: []Frame,
-    pub fn new(assembler: *FrameReassembler, pool: *MemoryPool(Chunk), frames: []Frame) Self {
+    pub fn new(reassembler: *FrameReassembler, pool: *MemoryPool(Chunk), frames: []Frame) Self {
         return Self{
-            .assembler = assembler,
+            .reassembler = reassembler,
             .pool = pool,
             .frames = frames,
         };
@@ -124,7 +124,7 @@ const ReassembleFromFrames = struct {
         var payload_length: usize = 0;
         for (self.frames) |frame| {
             payload_length += frame.frame_headers.payload_length;
-            const chunk_opt = self.assembler.assemble(self.pool, frame) catch unreachable;
+            const chunk_opt = self.reassembler.reassemble(self.pool, frame) catch unreachable;
 
             if (chunk_opt) |chunk| {
                 var total_chunk_used: usize = 0;
