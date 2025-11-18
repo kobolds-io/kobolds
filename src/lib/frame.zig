@@ -1,13 +1,13 @@
 const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
+
 const check = @import("./checksum.zig");
 const constants = @import("../constants.zig");
 
 const ProtocolVersion = @import("protocol.zig").ProtocolVersion;
-const MemoryPool = @import("stdx").MemoryPool;
-
 const Chunk = @import("./chunk.zig").Chunk;
+const MemoryPool = @import("stdx").MemoryPool;
 
 pub const Frame = struct {
     const Self = @This();
