@@ -3,6 +3,7 @@ const zbench = @import("zbench");
 
 const assert = std.debug.assert;
 const benchmark_constants = @import("./constants.zig");
+const constants = @import("../constants.zig");
 const testing = std.testing;
 
 const Frame = @import("../lib/frame.zig").Frame;
@@ -41,13 +42,13 @@ test "FrameParser benchmarks" {
     defer bench.deinit();
 
     // allocate all the memory for the payloads
-    const small_payload = allocator.alloc(u8, std.math.maxInt(u8)) catch unreachable;
+    const small_payload = allocator.alloc(u8, constants.max_frame_payload_size / 10) catch unreachable;
     defer allocator.free(small_payload);
 
-    const medium_payload = allocator.alloc(u8, std.math.maxInt(u16) / 2) catch unreachable;
+    const medium_payload = allocator.alloc(u8, constants.max_frame_payload_size / 2) catch unreachable;
     defer allocator.free(medium_payload);
 
-    const large_payload = allocator.alloc(u8, std.math.maxInt(u16)) catch unreachable;
+    const large_payload = allocator.alloc(u8, constants.max_frame_payload_size) catch unreachable;
     defer allocator.free(large_payload);
 
     // make all the frames
