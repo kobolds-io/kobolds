@@ -163,13 +163,15 @@ test "FrameAssembler benchmarks" {
     // make all the frames
     const single_frame = Frame.new(payload, .{});
 
+    // this would be a multi send/recv buffer message
     const multi_frame_0 = Frame.new(payload, .{ .flags = .{ .continuation = true }, .sequence = 0 });
     const multi_frame_1 = Frame.new(payload, .{ .flags = .{ .continuation = true }, .sequence = 1 });
     const multi_frame_2 = Frame.new(payload, .{ .flags = .{ .continuation = true }, .sequence = 2 });
     const multi_frame_3 = Frame.new(payload, .{ .flags = .{ .continuation = true }, .sequence = 3 });
-    const multi_frame_4 = Frame.new(payload, .{ .flags = .{ .continuation = false }, .sequence = 4 });
-
-    // TODO: create a benchmark for the assembler.
+    const multi_frame_4 = Frame.new(payload, .{ .flags = .{ .continuation = true }, .sequence = 4 });
+    const multi_frame_5 = Frame.new(payload, .{ .flags = .{ .continuation = true }, .sequence = 5 });
+    const multi_frame_6 = Frame.new(payload, .{ .flags = .{ .continuation = true }, .sequence = 6 });
+    const multi_frame_7 = Frame.new(payload, .{ .flags = .{ .continuation = false }, .sequence = 7 });
 
     var single_frame_frames = [_]Frame{single_frame};
     var multi_frame_frames = [_]Frame{
@@ -178,15 +180,18 @@ test "FrameAssembler benchmarks" {
         multi_frame_2,
         multi_frame_3,
         multi_frame_4,
+        multi_frame_5,
+        multi_frame_6,
+        multi_frame_7,
     };
 
     try bench.addParam(
-        "assemble single frame",
+        "reassemble single frame",
         &ReassembleFromFrames.new(&assembler, &pool, &single_frame_frames),
         .{},
     );
     try bench.addParam(
-        "assemble multi-frame",
+        "reassemble multi-frame",
         &ReassembleFromFrames.new(&assembler, &pool, &multi_frame_frames),
         .{},
     );
@@ -195,8 +200,8 @@ test "FrameAssembler benchmarks" {
     const writer = &stderr.interface;
 
     try writer.writeAll("\n");
-    try writer.writeAll("|-------------------------------|\n");
-    try writer.writeAll("| Assembler.assemble Benchmarks |\n");
-    try writer.writeAll("|-------------------------------|\n");
+    try writer.writeAll("|----------------------------------------|\n");
+    try writer.writeAll("| FrameReassembler.reassemble Benchmarks |\n");
+    try writer.writeAll("|----------------------------------------|\n");
     try bench.run(writer);
 }
