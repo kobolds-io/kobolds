@@ -49,6 +49,7 @@ pub const Message = struct {
         var tmp_buf: [100]u8 = undefined;
         const fh_n = fixed_headers.toBytes(tmp_buf[0..]);
 
+        // FIX: this is trash and should be a function of some type
         var extension_headers = switch (message_type) {
             .unsupported => ExtensionHeaders{ .unsupported = {} },
             .ping => ExtensionHeaders{ .ping = .{} },
@@ -342,82 +343,31 @@ test "message can expand and contract based on needs" {
     try testing.expectEqual(message.chunk.used, message.packedSize());
 }
 
-// test "size of structs" {
-//     var chunk = Chunk{};
+// NOTE: this is commented out because Message.fixed_headers and Message.extension_headers
+// are just copies of the underlying chunk bytes. Since they are so small, this is OK. in an ideal
+// world we would have easy wrapper functions that would read the underlying chunk's bytes and
+// cast them into the types that we care about. I'm leaving this test for now but I can be convinced
+// either way.
+// test "changing the values of the headers directly changes the backing chunk" {
+//     const allocator = testing.allocator;
 
-//     try testing.expectEqual(2, @sizeOf(FixedHeaders));
-//     try testing.expectEqual(2, FixedHeaders.packedSize());
+//     var pool = try MemoryPool(Chunk).init(allocator, 3);
+//     defer pool.deinit();
 
-//     const unsupported_message = Message.new(&chunk, .unsupported, .{});
-//     try testing.expectEqual(2, unsupported_message.packedSize());
+//     var message = try Message.init(&pool, .ping, .{});
+//     defer message.deinit(&pool);
 
-//     const ping_message = Message.new(&chunk, .ping, .{});
-//     try testing.expectEqual(10, ping_message.packedSize());
+//     var f = message.fixedHeaders();
 
-//     const pong_message = Message.new(&chunk, .pong, .{});
-//     try testing.expectEqual(10, pong_message.packedSize());
-// }
+//     // message type
+//     try testing.expectEqual(@intFromEnum(f.message_type), message.chunk.data[0]);
+//     try testing.expectEqual(0, message.chunk.data[1]);
 
-// test "message serialization" {
-//     const message_types = [_]MessageType{
-//         .ping,
-//         .pong,
-//     };
+//     message.chunk.data[0] = 2;
 
-//     var buf: [@sizeOf(Message)]u8 = undefined;
+//     f = message.fixedHeaders();
 
-//     for (message_types) |message_type| {
-//         var chunk = Chunk{};
-//         var message = Message.new(&chunk, message_type, .{});
-
-//         const bytes = message.serialize(&buf);
-
-//         try testing.expectEqual(bytes, message.packedSize());
-//     }
-// }
-
-// test "message deserialization" {
-//     const message_types = [_]MessageType{
-//         .ping,
-//         .pong,
-//     };
-
-//     var buf: [@sizeOf(Message)]u8 = undefined;
-
-//     for (message_types) |message_type| {
-//         var message = Message.new(message_type, .{});
-
-//         // serialize the message
-//         const bytes = message.serialize(&buf);
-
-//         // deserialize the message
-//         const deserialized_result = try Message.deserialize(buf[0..bytes]);
-
-//         try testing.expectEqual(bytes, deserialized_result.bytes_consumed);
-
-//         var deserialized_message = deserialized_result.message;
-
-//         try testing.expectEqual(message.packedSize(), deserialized_message.packedSize());
-
-//         // FIX: this should compare the body of each message and ensure they are the same
-//         // try testing.expect(std.mem.eql(u8, message.body(), deserialized_message.body()));
-
-//         switch (message_type) {
-//             .unsupported => {
-//                 try testing.expectEqual(message.packedSize(), deserialized_message.packedSize());
-//             },
-//             .ping => {
-//                 try testing.expectEqual(
-//                     message.extension_headers.ping.transaction_id,
-//                     deserialized_message.extension_headers.ping.transaction_id,
-//                 );
-//             },
-//             .pong => {
-//                 try testing.expectEqual(
-//                     message.extension_headers.pong.transaction_id,
-//                     deserialized_message.extension_headers.pong.transaction_id,
-//                 );
-//             },
-//         }
-//     }
+//     // message type
+//     try testing.expectEqual(@intFromEnum(f.message_type), message.chunk.data[0]);
+//     try testing.expectEqual(0, message.chunk.data[1]);
 // }
