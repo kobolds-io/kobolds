@@ -7,6 +7,7 @@ const constants = @import("../constants.zig");
 
 const ProtocolVersion = @import("protocol.zig").ProtocolVersion;
 const Chunk = @import("./chunk.zig").Chunk;
+const ChunkWriter = @import("./chunk.zig").ChunkWriter;
 const MemoryPool = @import("stdx").MemoryPool;
 
 pub const Frame = struct {
@@ -417,6 +418,109 @@ pub const FrameReassembler = struct {
     }
 };
 
+pub const FrameDisassembler = struct {
+    const Self = @This();
+    pub const Config = struct {
+        max_frame_payload_size: usize = constants.max_frame_payload_size,
+    };
+
+    config: Config,
+    current_chunk: ?*Chunk = null,
+    offset: usize = 0,
+
+    pub fn init(chunk: *Chunk, config: Config) Self {
+        return Self{
+            .config = config,
+            .current_chunk = chunk,
+        };
+    }
+
+    // in -> chunk, allocator
+    // out -> frame
+
+    pub fn disassemble(self: *Self, payload_buffer: []u8) !Frame {
+        _ = payload_buffer;
+        // var bytes_written: usize = 0;
+        while (self.current_chunk) |chunk| {
+            const remaining_bytes_in_chunk = chunk.data[self.offset..chunk.used].len;
+
+            std.debug.print("remaining_bytes_in_chunk: {}\n", .{remaining_bytes_in_chunk});
+
+            // // calculate the remaining bytes in the payload_buffer
+            // const remaining = payload_buffer.len - bytes_written;
+            // _ = remaining;
+
+            // bytes_written += 1;
+        }
+
+        // copy the maximum number of byte into the payload buffer
+
+        // write as many bytes as possible to the payload buffer
+
+        // figure out the number of bytes that can fit into the payload_buffer
+        //
+
+        return error.NotImplemented;
+    }
+};
+
+// pub const FrameDisassembler = struct {
+//     const Self = @This();
+
+//     msg: *const Message,
+//     max_payload: usize,
+
+//     current_chunk: ?*Chunk,
+//     chunk_offset: usize,
+//     remaining: usize,
+
+//     pub fn init(msg: *const Message, max_payload: usize) Self {
+//         return .{
+//             .msg = msg,
+//             .max_payload = max_payload,
+//             .current_chunk = msg.chunk,
+//             .chunk_offset = msg.bodyOffset(),
+//             .remaining = msg.bodySize(),
+//         };
+//     }
+
+//     /// Fills a caller-provided buffer up to max_payload.
+//     /// Returns a frame with payload slice into the buffer.
+//     pub fn next(self: *Self, payload_buf: []u8) ?Frame {
+//         if (self.remaining == 0) return null;
+
+//         const to_take = @min(self.remaining, self.max_payload);
+//         var written: usize = 0;
+
+//         while (written < to_take) {
+//             const chunk = self.current_chunk orelse return null;
+
+//             const available = chunk.used - self.chunk_offset;
+//             const take = @min(available, to_take - written);
+
+//             @memcpy(
+//                 payload_buf[written .. written + take],
+//                 chunk.data[self.chunk_offset .. self.chunk_offset + take],
+//             );
+
+//             written += take;
+//             self.chunk_offset += take;
+//             self.remaining -= take;
+
+//             if (self.chunk_offset == chunk.used) {
+//                 self.current_chunk = chunk.next;
+//                 self.chunk_offset = 0;
+//             }
+//         }
+
+//         return Frame{
+//             .fixed = self.msg.fixed_headers.toFrameHeaders(),
+//             .ext = self.msg.extension_headers,
+//             .payload = payload_buf[0..written],
+//         };
+//     }
+// };
+
 test "frame size" {
     var payload = [_]u8{ 1, 2, 3, 4, 5, 6 };
     var frame = Frame.new(&payload, .{});
@@ -731,4 +835,25 @@ test "reassembler handles single frame message chunk chains" {
         message_size,
     });
     try testing.expectEqual(chunk_pool.capacity, chunk_pool.available());
+}
+
+test "frame dissassembler can make frames out of chunks" {
+    const allocator = testing.allocator;
+
+    var pool = try MemoryPool(Chunk).init(allocator, 10);
+    defer pool.deinit();
+
+    const chunk = try pool.create();
+    defer pool.destroy(chunk);
+
+    chunk.* = Chunk{};
+
+    var writer = ChunkWriter.new(chunk);
+    try writer.write(&pool, "hello these are some bytes written to the chunk!");
+
+    // var disassembler = FrameDisassembler.new(chunk, .{});
+    // _ = disassembler;
+
+    // figure out how many bytes can fit inside of this frame
+
 }
