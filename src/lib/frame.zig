@@ -2,11 +2,13 @@ const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
 
+const XxHash32 = std.hash.XxHash32;
 const check = @import("./checksum.zig");
 const constants = @import("../constants.zig");
 
 const ProtocolVersion = @import("protocol.zig").ProtocolVersion;
 const Chunk = @import("./chunk.zig").Chunk;
+const ChunkReader = @import("./chunk.zig").ChunkReader;
 const ChunkWriter = @import("./chunk.zig").ChunkWriter;
 const MemoryPool = @import("stdx").MemoryPool;
 
@@ -16,6 +18,7 @@ pub const Frame = struct {
     pub const Options = struct {
         flags: FrameHeadersFlags = .{},
         sequence: u16 = 0,
+        protocol_version: ProtocolVersion = .v1,
     };
 
     /// Metadata about the frame
@@ -31,26 +34,37 @@ pub const Frame = struct {
         return FrameHeaders.packedSize() + self.payload.len + @sizeOf(u32);
     }
 
-    pub fn new(payload: []const u8, opts: Options) Self {
+    pub fn new(payload: []const u8, options: Options) Self {
         // NOTE: for now, we just discard the options As features are implemented for each flag,
         // they will be handled.
         assert(payload.len <= constants.max_frame_payload_size);
 
-        return Self{
-            .frame_headers = FrameHeaders{
-                .payload_length = @intCast(payload.len),
-                .flags = opts.flags,
-                .sequence = opts.sequence,
-            },
+        const frame_headers = FrameHeaders{
+            .payload_length = @intCast(payload.len),
+            .flags = options.flags,
+            .sequence = options.sequence,
+            .protocol_version = options.protocol_version,
+        };
 
+        // since this is so inconsequentially small this is fine.
+        var frame_headers_buffer: [FrameHeaders.packedSize()]u8 = undefined;
+        _ = frame_headers.toBytes(&frame_headers_buffer);
+
+        var hash = XxHash32.init(check.xxhash_32_hash_seed);
+        hash.update(&frame_headers_buffer);
+        hash.update(payload);
+        const checksum = hash.final();
+
+        return Self{
+            .frame_headers = frame_headers,
             .payload = payload,
-            .checksum = 0,
+            .checksum = checksum,
         };
     }
 
     /// Converts the struct into bytes and orders them. Endieness is Big.
     /// Order is as follows: [ frame_header | payload | checksum ]
-    pub fn toBytes(self: *Self, buf: []u8) usize {
+    pub fn toBytes(self: Self, buf: []u8) usize {
         assert(buf.len >= self.packedSize());
 
         var write_offset: usize = 0;
@@ -62,9 +76,9 @@ pub const Frame = struct {
 
         // calculate a checksum for all the bytes in the buffer BEFORE the checksum
         const checksum = check.xxHash32Checksum(buf[0..write_offset]);
-        self.checksum = checksum;
+        // self.checksum = checksum;
 
-        std.mem.writeInt(u32, buf[write_offset..][0..@sizeOf(u32)], self.checksum, .big);
+        std.mem.writeInt(u32, buf[write_offset..][0..@sizeOf(u32)], checksum, .big);
         write_offset += @sizeOf(u32);
 
         return write_offset;
@@ -417,109 +431,88 @@ pub const FrameReassembler = struct {
         return message_head;
     }
 };
-
 pub const FrameDisassembler = struct {
     const Self = @This();
+
     pub const Config = struct {
         max_frame_payload_size: usize = constants.max_frame_payload_size,
+        protocol_version: ProtocolVersion = .v1,
     };
 
     config: Config,
     current_chunk: ?*Chunk = null,
     offset: usize = 0,
+    next_sequence: u16 = 0,
 
-    pub fn init(chunk: *Chunk, config: Config) Self {
+    pub fn new(chunk: *Chunk, config: Config) Self {
         return Self{
             .config = config,
             .current_chunk = chunk,
+            .offset = 0,
+            .next_sequence = 0,
         };
     }
 
-    // in -> chunk, allocator
-    // out -> frame
+    /// Produces one Frame each call.
+    /// Returns null when no bytes remain.
+    pub fn disassemble(self: *Self, buffer: []u8) ?Frame {
+        if (self.current_chunk == null) return null;
 
-    pub fn disassemble(self: *Self, payload_buffer: []u8) !Frame {
-        _ = payload_buffer;
-        // var bytes_written: usize = 0;
-        while (self.current_chunk) |chunk| {
-            const remaining_bytes_in_chunk = chunk.data[self.offset..chunk.used].len;
-
-            std.debug.print("remaining_bytes_in_chunk: {}\n", .{remaining_bytes_in_chunk});
-
-            // // calculate the remaining bytes in the payload_buffer
-            // const remaining = payload_buffer.len - bytes_written;
-            // _ = remaining;
-
-            // bytes_written += 1;
+        var chunk = self.current_chunk.?;
+        if (self.offset >= chunk.used) {
+            self.current_chunk = chunk.next;
+            self.offset = 0;
+            return self.disassemble(buffer);
         }
 
-        // copy the maximum number of byte into the payload buffer
+        var bytes_copied: usize = 0;
+        const max_payload = @min(self.config.max_frame_payload_size, buffer.len);
+        while (bytes_copied < max_payload and self.current_chunk != null) {
+            chunk = self.current_chunk.?;
 
-        // write as many bytes as possible to the payload buffer
+            // If current chunk exhausted then advance chunk
+            if (self.offset >= chunk.used) {
+                self.current_chunk = chunk.next;
+                self.offset = 0;
+                continue;
+            }
 
-        // figure out the number of bytes that can fit into the payload_buffer
-        //
+            const available = chunk.used - self.offset;
+            const remaining_capacity = max_payload - bytes_copied;
+            const to_copy = @min(available, remaining_capacity);
 
-        return error.NotImplemented;
+            @memcpy(
+                buffer[bytes_copied .. bytes_copied + to_copy],
+                chunk.data[self.offset .. self.offset + to_copy],
+            );
+
+            bytes_copied += to_copy;
+            self.offset += to_copy;
+        }
+
+        if (bytes_copied == 0) return null;
+
+        // Determine if this is a continuation frame
+        var reader = ChunkReader{
+            .current = self.current_chunk,
+            .offset = self.offset,
+        };
+        const bytes_remaining_in_chain = reader.remaining();
+        const continuation = bytes_remaining_in_chain > 0;
+
+        // build the final frame
+        // we use `new` here because it will calculate the checksum of this frame
+        const frame = Frame.new(buffer[0..bytes_copied], .{
+            .flags = .{ .continuation = continuation },
+            .sequence = self.next_sequence,
+            .protocol_version = self.config.protocol_version,
+        });
+
+        self.next_sequence += 1;
+
+        return frame;
     }
 };
-
-// pub const FrameDisassembler = struct {
-//     const Self = @This();
-
-//     msg: *const Message,
-//     max_payload: usize,
-
-//     current_chunk: ?*Chunk,
-//     chunk_offset: usize,
-//     remaining: usize,
-
-//     pub fn init(msg: *const Message, max_payload: usize) Self {
-//         return .{
-//             .msg = msg,
-//             .max_payload = max_payload,
-//             .current_chunk = msg.chunk,
-//             .chunk_offset = msg.bodyOffset(),
-//             .remaining = msg.bodySize(),
-//         };
-//     }
-
-//     /// Fills a caller-provided buffer up to max_payload.
-//     /// Returns a frame with payload slice into the buffer.
-//     pub fn next(self: *Self, payload_buf: []u8) ?Frame {
-//         if (self.remaining == 0) return null;
-
-//         const to_take = @min(self.remaining, self.max_payload);
-//         var written: usize = 0;
-
-//         while (written < to_take) {
-//             const chunk = self.current_chunk orelse return null;
-
-//             const available = chunk.used - self.chunk_offset;
-//             const take = @min(available, to_take - written);
-
-//             @memcpy(
-//                 payload_buf[written .. written + take],
-//                 chunk.data[self.chunk_offset .. self.chunk_offset + take],
-//             );
-
-//             written += take;
-//             self.chunk_offset += take;
-//             self.remaining -= take;
-
-//             if (self.chunk_offset == chunk.used) {
-//                 self.current_chunk = chunk.next;
-//                 self.chunk_offset = 0;
-//             }
-//         }
-
-//         return Frame{
-//             .fixed = self.msg.fixed_headers.toFrameHeaders(),
-//             .ext = self.msg.extension_headers,
-//             .payload = payload_buf[0..written],
-//         };
-//     }
-// };
 
 test "frame size" {
     var payload = [_]u8{ 1, 2, 3, 4, 5, 6 };
@@ -820,7 +813,6 @@ test "reassembler handles single frame message chunk chains" {
     var message_size: usize = 0;
     var curr_chunk: ?*Chunk = message_head;
     while (curr_chunk) |chunk| {
-        // std.debug.print("curr_chunk bytes: {any}\n", .{chunk.data[0..chunk.used]});
         curr_chunk = chunk.next;
         message_chunks_count += 1;
         message_size += chunk.used;
@@ -837,10 +829,10 @@ test "reassembler handles single frame message chunk chains" {
     try testing.expectEqual(chunk_pool.capacity, chunk_pool.available());
 }
 
-test "frame dissassembler can make frames out of chunks" {
+test "frame dissassembler can make a single frame out of chunks" {
     const allocator = testing.allocator;
 
-    var pool = try MemoryPool(Chunk).init(allocator, 10);
+    var pool = try MemoryPool(Chunk).init(allocator, 100);
     defer pool.deinit();
 
     const chunk = try pool.create();
@@ -848,12 +840,80 @@ test "frame dissassembler can make frames out of chunks" {
 
     chunk.* = Chunk{};
 
+    const payload = [_]u8{'a'} ** constants.max_frame_payload_size;
     var writer = ChunkWriter.new(chunk);
-    try writer.write(&pool, "hello these are some bytes written to the chunk!");
+    try writer.write(&pool, &payload);
 
-    // var disassembler = FrameDisassembler.new(chunk, .{});
-    // _ = disassembler;
+    const frame_payload = try allocator.alloc(u8, constants.max_frame_payload_size);
+    defer allocator.free(frame_payload);
 
-    // figure out how many bytes can fit inside of this frame
+    // make believe `send_buffer` (256kb)
+    const send_buffer = try allocator.alloc(u8, 1024 * 256);
+    defer allocator.free(send_buffer);
 
+    var send_buffer_offset: usize = 0;
+    var generated_frames_count: usize = 0;
+
+    var disassembler = FrameDisassembler.new(chunk, .{});
+    while (disassembler.disassemble(frame_payload)) |frame| {
+        generated_frames_count += 1;
+
+        if (send_buffer[send_buffer_offset..].len < frame.packedSize()) {
+            // lets pretend we flushed this send buffer or did something special like caching writing
+            // the maximum number of bytes to the send_buffer and caching the remaining bytes
+            send_buffer_offset = 0;
+        }
+
+        // convert frame to bytes
+        const frame_n = frame.toBytes(send_buffer[send_buffer_offset..]);
+        send_buffer_offset += frame_n;
+    }
+
+    try testing.expectEqual(1, generated_frames_count);
+}
+
+test "frame dissassembler can make many frames out of a large chunk chain" {
+    const allocator = testing.allocator;
+
+    var pool = try MemoryPool(Chunk).init(allocator, 1_000);
+    defer pool.deinit();
+
+    const chunk = try pool.create();
+    defer pool.destroy(chunk);
+
+    chunk.* = Chunk{};
+
+    // make a really big chunk chain
+    const payload = [_]u8{'a'} ** 1_000_000;
+    var writer = ChunkWriter.new(chunk);
+    try writer.write(&pool, &payload);
+
+    // let's say that the transport MTU is much lower than another and the size of frames should
+    // be reduced to compensate.
+    const frame_payload = try allocator.alloc(u8, 1024);
+    defer allocator.free(frame_payload);
+
+    // make believe `send_buffer` (256kb)
+    const send_buffer = try allocator.alloc(u8, 1024 * 256);
+    defer allocator.free(send_buffer);
+
+    var send_buffer_offset: usize = 0;
+    var generated_frames_count: usize = 0;
+
+    var disassembler = FrameDisassembler.new(chunk, .{});
+    while (disassembler.disassemble(frame_payload)) |frame| {
+        generated_frames_count += 1;
+
+        if (send_buffer[send_buffer_offset..].len < frame.packedSize()) {
+            // lets pretend we flushed this send buffer or did something special like caching writing
+            // the maximum number of bytes to the send_buffer and caching the remaining bytes
+            send_buffer_offset = 0;
+        }
+
+        // convert frame to bytes
+        const frame_n = frame.toBytes(send_buffer[send_buffer_offset..]);
+        send_buffer_offset += frame_n;
+    }
+
+    try testing.expectEqual(977, generated_frames_count);
 }

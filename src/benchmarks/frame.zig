@@ -9,8 +9,10 @@ const testing = std.testing;
 const Frame = @import("../lib/frame.zig").Frame;
 const FrameParser = @import("../lib/frame.zig").FrameParser;
 const FrameReassembler = @import("../lib/frame.zig").FrameReassembler;
+const FrameDisassembler = @import("../lib/frame.zig").FrameDisassembler;
 const MemoryPool = @import("stdx").MemoryPool;
 const Chunk = @import("../lib/chunk.zig").Chunk;
+const ChunkWriter = @import("../lib/chunk.zig").ChunkWriter;
 
 const check = @import("../lib/checksum.zig");
 
@@ -203,5 +205,82 @@ test "FrameAssembler benchmarks" {
     try writer.writeAll("|----------------------------------------|\n");
     try writer.writeAll("| FrameReassembler.reassemble Benchmarks |\n");
     try writer.writeAll("|----------------------------------------|\n");
+    try bench.run(writer);
+}
+
+const DisassembleFramesFromChunks = struct {
+    const Self = @This();
+
+    chunk: *Chunk,
+    frame_payload_buffer: []u8,
+    expected_frames_count: usize,
+
+    pub fn new(chunk: *Chunk, frame_payload_buffer: []u8, expected_frames_count: usize) Self {
+        return Self{
+            .chunk = chunk,
+            .frame_payload_buffer = frame_payload_buffer,
+            .expected_frames_count = expected_frames_count,
+        };
+    }
+
+    pub fn run(self: Self, _: std.mem.Allocator) void {
+        var frame_count: usize = 0;
+
+        var disassembler = FrameDisassembler.new(self.chunk, .{});
+        while (disassembler.disassemble(self.frame_payload_buffer)) |_| {
+            frame_count += 1;
+        }
+
+        // ensure that we have only disassembled a single frame
+        assert(self.expected_frames_count == frame_count);
+    }
+};
+
+test "FrameDisassembler benchmarks" {
+    const allocator = testing.allocator;
+    var bench = zbench.Benchmark.init(allocator, .{
+        .iterations = benchmark_constants.benchmark_max_iterations,
+    });
+    defer bench.deinit();
+
+    var pool = try MemoryPool(Chunk).init(allocator, 1_000);
+    defer pool.deinit();
+
+    // make all the chunks
+    const single_chunk = try pool.create();
+    defer pool.destroy(single_chunk);
+
+    single_chunk.* = Chunk{};
+    const single_chunk_payload = try allocator.alloc(u8, constants.chunk_data_size);
+    defer allocator.free(single_chunk_payload);
+
+    for (0..single_chunk_payload.len) |i| {
+        single_chunk_payload[i] = 99;
+    }
+
+    var chunk_writer = ChunkWriter.new(single_chunk);
+    try chunk_writer.write(&pool, single_chunk_payload);
+
+    const frame_payload_buffer = try allocator.alloc(u8, constants.max_frame_payload_size);
+    defer allocator.free(frame_payload_buffer);
+
+    try bench.addParam(
+        "disassemble single chunk",
+        &DisassembleFramesFromChunks.new(single_chunk, frame_payload_buffer, 1),
+        .{},
+    );
+    // try bench.addParam(
+    //     "reassemble chunk chain",
+    //     &DisassembleFramesFromChunks.new(&single_disassembler, &pool, &multi_frame_frames),
+    //     .{},
+    // );
+
+    var stderr = std.fs.File.stderr().writerStreaming(&.{});
+    const writer = &stderr.interface;
+
+    try writer.writeAll("\n");
+    try writer.writeAll("|------------------------------------------|\n");
+    try writer.writeAll("| FrameDisassembler.disassemble Benchmarks |\n");
+    try writer.writeAll("|------------------------------------------|\n");
     try bench.run(writer);
 }
