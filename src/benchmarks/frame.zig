@@ -231,7 +231,8 @@ const DisassembleFramesFromChunks = struct {
             frame_count += 1;
         }
 
-        // ensure that we have only disassembled a single frame
+        // std.debug.print("t: {any}\n", .{frame_count});
+        // ensure that we have only disassembled the frames we expect
         assert(self.expected_frames_count == frame_count);
     }
 };
@@ -261,6 +262,24 @@ test "FrameDisassembler benchmarks" {
     var chunk_writer = ChunkWriter.new(single_chunk);
     try chunk_writer.write(&pool, single_chunk_payload);
 
+    var multi_chunks: std.ArrayList(*Chunk) = .empty;
+    defer multi_chunks.deinit(allocator);
+
+    for (0..500) |_| {
+        const c = try pool.create();
+        c.* = Chunk{};
+
+        try multi_chunks.append(allocator, c);
+    }
+
+    var i: usize = 1;
+    while (i <= multi_chunks.items.len - 1) : (i += 1) {
+        const chunk = multi_chunks.items[i];
+        multi_chunks.items[i - 1].next = chunk;
+        chunk_writer = ChunkWriter.new(chunk);
+        try chunk_writer.write(&pool, single_chunk_payload);
+    }
+
     const frame_payload_buffer = try allocator.alloc(u8, constants.max_frame_payload_size);
     defer allocator.free(frame_payload_buffer);
 
@@ -269,11 +288,11 @@ test "FrameDisassembler benchmarks" {
         &DisassembleFramesFromChunks.new(single_chunk, frame_payload_buffer, 1),
         .{},
     );
-    // try bench.addParam(
-    //     "reassemble chunk chain",
-    //     &DisassembleFramesFromChunks.new(&single_disassembler, &pool, &multi_frame_frames),
-    //     .{},
-    // );
+    try bench.addParam(
+        "disassemble chunk chain",
+        &DisassembleFramesFromChunks.new(multi_chunks.items[0], frame_payload_buffer, 32),
+        .{},
+    );
 
     var stderr = std.fs.File.stderr().writerStreaming(&.{});
     const writer = &stderr.interface;
