@@ -265,7 +265,8 @@ pub const FrameParser = struct {
     }
 
     pub fn parse(self: *Self, frames: []Frame, data: []const u8) !usize {
-        // FIX: there should be a constant that is defined that caps the buffer items capacity
+        // FIX: there should be a constant that is defined that caps the buffer items capacity.
+        // additionally, we should resize this self.buffer to free up space as needed.
         // if (self.buffer.items.len + data.len > 10_000) return error.BufferMaxCapacityExceeded;
 
         try self.buffer.appendSlice(self.allocator, data);
