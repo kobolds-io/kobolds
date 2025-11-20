@@ -149,7 +149,7 @@ pub const Message = struct {
     }
 
     /// return the current `ref_count` for this message
-    pub fn refs(self: *Self) u32 {
+    pub fn refs(self: *Self) usize {
         return self.ref_count.load(.seq_cst);
     }
 
