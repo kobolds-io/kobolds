@@ -244,7 +244,7 @@ test "FrameDisassembler benchmarks" {
     });
     defer bench.deinit();
 
-    var pool = try MemoryPool(Chunk).init(allocator, 1_000);
+    var pool = try MemoryPool(Chunk).init(allocator, 300);
     defer pool.deinit();
 
     // make all the chunks
@@ -265,7 +265,7 @@ test "FrameDisassembler benchmarks" {
     var multi_chunks: std.ArrayList(*Chunk) = .empty;
     defer multi_chunks.deinit(allocator);
 
-    for (0..500) |_| {
+    for (0..299) |_| {
         const c = try pool.create();
         c.* = Chunk{};
 
@@ -290,7 +290,7 @@ test "FrameDisassembler benchmarks" {
     );
     try bench.addParam(
         "disassemble chunk chain",
-        &DisassembleFramesFromChunks.new(multi_chunks.items[0], frame_payload_buffer, 32),
+        &DisassembleFramesFromChunks.new(multi_chunks.items[0], frame_payload_buffer, 19),
         .{},
     );
 
