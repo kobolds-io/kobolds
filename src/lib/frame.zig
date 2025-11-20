@@ -752,11 +752,11 @@ test "assembler creates a chunk chain per message" {
         chunk_pool.destroy(chunk);
     }
 
-    std.debug.print("multi-frame message - frames: {}, chunks: {}, message_size: {}\n", .{
-        message_frames_count,
-        message_chunks_count,
-        message_size,
-    });
+    // std.debug.print("multi-frame message - frames: {}, chunks: {}, message_size: {}\n", .{
+    //     message_frames_count,
+    //     message_chunks_count,
+    //     message_size,
+    // });
     try testing.expectEqual(chunk_pool.capacity, chunk_pool.available());
 }
 
@@ -822,11 +822,11 @@ test "reassembler handles single frame message chunk chains" {
         chunk_pool.destroy(chunk);
     }
 
-    std.debug.print("single frame message - frames: {}, chunks: {}, message_size: {}\n", .{
-        message_frames_count,
-        message_chunks_count,
-        message_size,
-    });
+    // std.debug.print("single frame message - frames: {}, chunks: {}, message_size: {}\n", .{
+    //     message_frames_count,
+    //     message_chunks_count,
+    //     message_size,
+    // });
     try testing.expectEqual(chunk_pool.capacity, chunk_pool.available());
 }
 

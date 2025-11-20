@@ -32,9 +32,7 @@ pub const Message = struct {
     chunk: *Chunk,
     ref_count: atomic.Value(usize) = atomic.Value(usize).init(0),
 
-    pub fn init(pool: *MemoryPool(Chunk), message_type: MessageType, options: Options) !Message {
-        _ = options;
-
+    pub fn init(pool: *MemoryPool(Chunk), message_type: MessageType, _: Options) !Message {
         // create a head chunk
         const chunk = try pool.create();
         errdefer pool.destroy(chunk);
@@ -46,7 +44,7 @@ pub const Message = struct {
 
         var fixed_headers = FixedHeaders{ .message_type = message_type };
 
-        var tmp_buf: [100]u8 = undefined;
+        var tmp_buf: [FixedHeaders.packedSize() + @sizeOf(ExtensionHeaders)]u8 = undefined;
         const fh_n = fixed_headers.toBytes(tmp_buf[0..]);
 
         // FIX: this is trash and should be a function of some type
