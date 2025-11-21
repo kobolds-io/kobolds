@@ -76,7 +76,7 @@ pub const Message = struct {
         }
     }
 
-    fn headersPackedSize(self: Self) usize {
+    pub fn headersPackedSize(self: Self) usize {
         const fh_size = FixedHeaders.packedSize();
         const eh_size = ExtensionHeaders.packedSize(self.fixed_headers.message_type);
         return fh_size + eh_size;

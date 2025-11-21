@@ -185,8 +185,30 @@ test "Message deserialization benchmarks" {
     defer pool.deinit();
 
     // create a message
+    var message = try Message.init(&pool, .ping, .{});
+    defer message.deinit(&pool);
+
+    try message.setBody(&pool, "hello");
+
+    const frame_payload_buffer = try allocator.alloc(u8, constants.max_frame_payload_size);
+    defer allocator.free(frame_payload_buffer);
+
+    const recv_buffer = try allocator.alloc(u8, 1024 * 256);
+    defer allocator.free(recv_buffer);
+
     // serialize it to bytes
-    // write bytes to a `read_buffer`
+    var recv_buffer_offset: usize = 0;
+
+    var disassembler = FrameDisassembler.new(message.chunk, .{});
+    while (disassembler.disassemble(frame_payload_buffer)) |frame| {
+        // ensure the entire message fits within the `recv_buffer`
+        assert(recv_buffer[recv_buffer_offset..].len > frame.packedSize());
+
+        // convert frame to bytes
+        const frame_n = frame.toBytes(recv_buffer[recv_buffer_offset..]);
+        recv_buffer_offset += frame_n;
+    }
+
     // run benchmark that takes bytes off read buffer -> Message
 
     // try bench.addParam(
