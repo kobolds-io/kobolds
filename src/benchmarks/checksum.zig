@@ -130,15 +130,15 @@ test "checksum benchmarks" {
     });
     defer bench.deinit();
 
-    try bench.add("xxhash32 checksum tiny bytes", BenchmarkXxHash32ChecksumTinyBytes, .{});
-    try bench.add("xxhash32 checksum medium bytes", BenchmarkXxHash32ChecksumMediumBytes, .{});
-    try bench.add("xxhash32 checksum large bytes", BenchmarkXxHash32ChecksumLargeBytes, .{});
-    try bench.add("xxhash64 checksum tiny bytes", BenchmarkXxHash64ChecksumTinyBytes, .{});
-    try bench.add("xxhash64 checksum medium bytes", BenchmarkXxHash64ChecksumMediumBytes, .{});
-    try bench.add("xxhash64 checksum large bytes", BenchmarkXxHash64ChecksumLargeBytes, .{});
-    try bench.add("crc32 checksum tiny bytes", BenchmarkCRC32ChecksumTinyBytes, .{});
-    try bench.add("crc32 checksum medium bytes", BenchmarkCRC32ChecksumMediumBytes, .{});
-    try bench.add("crc32 checksum large bytes", BenchmarkCRC32ChecksumLargeBytes, .{});
+    try bench.add("xxhash32 tiny bytes", BenchmarkXxHash32ChecksumTinyBytes, .{});
+    try bench.add("xxhash32 medium bytes", BenchmarkXxHash32ChecksumMediumBytes, .{});
+    try bench.add("xxhash32 large bytes", BenchmarkXxHash32ChecksumLargeBytes, .{});
+    try bench.add("xxhash64 tiny bytes", BenchmarkXxHash64ChecksumTinyBytes, .{});
+    try bench.add("xxhash64 medium bytes", BenchmarkXxHash64ChecksumMediumBytes, .{});
+    try bench.add("xxhash64 large bytes", BenchmarkXxHash64ChecksumLargeBytes, .{});
+    try bench.add("crc32 tiny bytes", BenchmarkCRC32ChecksumTinyBytes, .{});
+    try bench.add("crc32 medium bytes", BenchmarkCRC32ChecksumMediumBytes, .{});
+    try bench.add("crc32 large bytes", BenchmarkCRC32ChecksumLargeBytes, .{});
 
     var stderr = std.fs.File.stderr().writerStreaming(&.{});
     const writer = &stderr.interface;
@@ -156,15 +156,15 @@ test "verify benchmarks" {
     });
     defer bench.deinit();
 
-    try bench.add("xxhash32 verify tiny bytes", BenchmarkXxHash32VerifyTinyBytes, .{});
-    try bench.add("xxhash32 verify medium bytes", BenchmarkXxHash32VerifyMediumBytes, .{});
-    try bench.add("xxhash32 verify large bytes", BenchmarkXxHash32VerifyLargeBytes, .{});
-    try bench.add("xxhash64 verify tiny bytes", BenchmarkXxHash64VerifyTinyBytes, .{});
-    try bench.add("xxhash64 verify medium bytes", BenchmarkXxHash64VerifyMediumBytes, .{});
-    try bench.add("xxhash64 verify large bytes", BenchmarkXxHash64VerifyLargeBytes, .{});
-    try bench.add("crc32 verify tiny bytes", BenchmarkCRC32VerifyTinyBytes, .{});
-    try bench.add("crc32 verify medium bytes", BenchmarkCRC32VerifyMediumBytes, .{});
-    try bench.add("crc32 verify large bytes", BenchmarkCRC32VerifyLargeBytes, .{});
+    try bench.add("xxhash32 tiny bytes", BenchmarkXxHash32VerifyTinyBytes, .{});
+    try bench.add("xxhash32 medium bytes", BenchmarkXxHash32VerifyMediumBytes, .{});
+    try bench.add("xxhash32 large bytes", BenchmarkXxHash32VerifyLargeBytes, .{});
+    try bench.add("xxhash64 tiny bytes", BenchmarkXxHash64VerifyTinyBytes, .{});
+    try bench.add("xxhash64 medium bytes", BenchmarkXxHash64VerifyMediumBytes, .{});
+    try bench.add("xxhash64 large bytes", BenchmarkXxHash64VerifyLargeBytes, .{});
+    try bench.add("crc32 tiny bytes", BenchmarkCRC32VerifyTinyBytes, .{});
+    try bench.add("crc32 medium bytes", BenchmarkCRC32VerifyMediumBytes, .{});
+    try bench.add("crc32 large bytes", BenchmarkCRC32VerifyLargeBytes, .{});
 
     var stderr = std.fs.File.stderr().writerStreaming(&.{});
     const writer = &stderr.interface;
