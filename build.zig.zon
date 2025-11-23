@@ -20,6 +20,10 @@
             .url = "https://github.com/Hejsil/zig-clap/archive/refs/tags/0.11.0.tar.gz",
             .hash = "clap-0.11.0-oBajB-HnAQDPCKYzwF7rO3qDFwRcD39Q0DALlTSz5H7e",
         },
+        .gnoll = .{
+            .url = "https://github.com/kobolds-io/gnoll/archive/refs/tags/v0.0.4.tar.gz",
+            .hash = "gnoll-0.0.4-iH-49RYtAADDV1u4LoPtRiGmOBy9CTio0qIt4zPJCS8e",
+        },
     },
     // Specifies the set of files and directories that are included in this package.
     // Only files and directories listed here are included in the `hash` that

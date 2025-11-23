@@ -44,9 +44,16 @@ fn setupExecutable(
     });
     const clap_mod = clap_dep.module("clap");
 
+    const gnoll_dep = b.dependency("gnoll", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const gnoll_mod = gnoll_dep.module("gnoll");
+
     kobolds_exe.root_module.addImport("stdx", stdx_mod);
     kobolds_exe.root_module.addImport("kid", kid_mod);
     kobolds_exe.root_module.addImport("clap", clap_mod);
+    kobolds_exe.root_module.addImport("gnoll", gnoll_mod);
 
     b.installArtifact(kobolds_exe);
 
