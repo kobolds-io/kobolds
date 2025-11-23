@@ -6,15 +6,6 @@ const ConfigInfo = gnoll.ConfigInfo;
 const GnollOptions = gnoll.GnollOptions;
 const log = std.log.scoped(.cli_connect);
 
-const ConnectConfig = struct {
-    host: ?[]const u8,
-    port: ?u16,
-    client_id: ?u11,
-    token: ?[]const u8,
-    max_connections: ?u16,
-    min_connections: ?u16,
-};
-
 pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
     // The parameters for the subcommand.
     const params = comptime clap.parseParamsComptime(
@@ -74,6 +65,15 @@ pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
 
     log.debug("Connecting... Host: {s} Port: {} Client ID: {} Token: {s} Max Connections: {} Min Connections: {}", .{ args.host, args.port, args.client_id, args.token, args.max_connections, args.min_connections });
 }
+
+const ConnectConfig = struct {
+    host: ?[]const u8,
+    port: ?u16,
+    client_id: ?u11,
+    token: ?[]const u8,
+    max_connections: ?u16,
+    min_connections: ?u16,
+};
 
 const ConnectArgs = struct {
     host: []const u8,
