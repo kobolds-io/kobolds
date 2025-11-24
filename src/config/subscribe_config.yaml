@@ -1,6 +1,6 @@
-    client_id: 1
-    host: "127.0.0.1"
-    max_connections: 1
-    min_connections: 1
-    port: 8000
-    token: ""
+client_id: 1
+host: "127.0.0.1"
+max_connections: 1
+min_connections: 1
+port: 8000
+token: ""

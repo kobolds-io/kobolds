@@ -1,10 +1,11 @@
 const std = @import("std");
 const clap = @import("clap");
 const gnoll = @import("gnoll");
+const utils = @import("../lib/utils.zig");
+const log = std.log.scoped(.cli_connect);
 const Gnoll = gnoll.Gnoll;
 const ConfigInfo = gnoll.ConfigInfo;
 const GnollOptions = gnoll.GnollOptions;
-const log = std.log.scoped(.cli_connect);
 
 pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
     // The parameters for the subcommand.
@@ -53,14 +54,14 @@ pub fn ConnectCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
     if (parsed_args.args.help != 0) {
         return clap.helpToFile(.stderr(), clap.Help, &params, .{});
     }
-    log.debug("{any}", .{connectionConfig.config.client_id});
+
     const args = ConnectArgs{
-        .host = parsed_args.args.host orelse connectionConfig.config.host orelse "127.0.0.1",
-        .port = parsed_args.args.port orelse connectionConfig.config.port orelse 8000,
-        .client_id = parsed_args.args.@"client-id" orelse connectionConfig.config.client_id orelse 1,
-        .token = parsed_args.args.token orelse connectionConfig.config.token orelse "",
-        .max_connections = parsed_args.args.@"max-connections" orelse connectionConfig.config.max_connections orelse 1,
-        .min_connections = parsed_args.args.@"min-connections" orelse connectionConfig.config.min_connections orelse 1,
+        .host = utils.getConfig([]const u8, &.{ parsed_args.args.host, connectionConfig.config.host }, "127.0.0.1"),
+        .port = utils.getConfig(u16, &.{ parsed_args.args.port, connectionConfig.config.port }, 8000),
+        .client_id = utils.getConfig(u11, &.{ parsed_args.args.@"client-id", connectionConfig.config.client_id }, 1),
+        .token = utils.getConfig([]const u8, &.{ parsed_args.args.token, connectionConfig.config.token }, ""),
+        .max_connections = utils.getConfig(u16, &.{ parsed_args.args.@"max-connections", connectionConfig.config.max_connections }, 1),
+        .min_connections = utils.getConfig(u16, &.{ parsed_args.args.@"min-connections", connectionConfig.config.min_connections }, 1),
     };
 
     log.debug("Connecting... Host: {s} Port: {} Client ID: {} Token: {s} Max Connections: {} Min Connections: {}", .{ args.host, args.port, args.client_id, args.token, args.max_connections, args.min_connections });

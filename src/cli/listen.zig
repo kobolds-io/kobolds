@@ -1,10 +1,11 @@
 const std = @import("std");
 const log = std.log.scoped(.cli_listen);
 const gnoll = @import("gnoll");
+const clap = @import("clap");
+const utils = @import("../lib/utils.zig");
 const Gnoll = gnoll.Gnoll;
 const ConfigInfo = gnoll.ConfigInfo;
 const GnollOptions = gnoll.GnollOptions;
-const clap = @import("clap");
 
 pub fn ListenCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
 
@@ -50,9 +51,13 @@ pub fn ListenCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterato
     }
 
     const args = ListenArgs{
-        .host = parsed_args.args.host orelse listenConfig.config.host orelse "127.0.0.1",
-        .port = parsed_args.args.port orelse listenConfig.config.port orelse 8000,
-        .worker_threads = parsed_args.args.@"worker-threads" orelse listenConfig.config.worker_threads orelse 3,
+        .host = utils.getConfig(
+            []const u8,
+            &.{ parsed_args.args.host, listenConfig.config.host },
+            "127.0.0.1",
+        ),
+        .port = utils.getConfig(u16, &.{ parsed_args.args.port, listenConfig.config.port }, 8000),
+        .worker_threads = utils.getConfig(usize, &.{ parsed_args.args.@"worker-threads", listenConfig.config.worker_threads }, 3),
     };
     log.debug("Listening...  Port: {s} Host: {} Worker Threads: {}", .{ args.host, args.port, args.worker_threads });
 }

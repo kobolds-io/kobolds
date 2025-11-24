@@ -1,10 +1,11 @@
 const std = @import("std");
 const log = std.log.scoped(.cli_publish);
 const gnoll = @import("gnoll");
+const clap = @import("clap");
+const utils = @import("../lib/utils.zig");
 const Gnoll = gnoll.Gnoll;
 const ConfigInfo = gnoll.ConfigInfo;
 const GnollOptions = gnoll.GnollOptions;
-const clap = @import("clap");
 
 pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
 
@@ -65,14 +66,14 @@ pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
 
     const args = PublishArgs{
         .body = parsed_args.positionals[1].?,
-        .client_id = parsed_args.args.@"client-id" orelse publishConfig.config.client_id orelse 1,
-        .count = parsed_args.args.count orelse publishConfig.config.count orelse 0,
-        .host = parsed_args.args.host orelse publishConfig.config.host orelse "127.0.0.1",
-        .max_connections = parsed_args.args.@"max-connections" orelse publishConfig.config.max_connections orelse 1,
-        .min_connections = parsed_args.args.@"min-connections" orelse publishConfig.config.min_connections orelse 1,
-        .port = parsed_args.args.port orelse publishConfig.config.port orelse 8000,
-        .rate = parsed_args.args.rate orelse publishConfig.config.rate orelse 0,
-        .token = parsed_args.args.token orelse publishConfig.config.token orelse "",
+        .client_id = utils.getConfig(u11, &.{ parsed_args.args.@"client-id", publishConfig.config.client_id }, 1),
+        .count = utils.getConfig(u32, &.{ parsed_args.args.count, publishConfig.config.count }, 0),
+        .host = utils.getConfig([]const u8, &.{ parsed_args.args.host, publishConfig.config.host }, "127.0.0.1"),
+        .max_connections = utils.getConfig(u16, &.{ parsed_args.args.@"max-connections", publishConfig.config.max_connections }, 1),
+        .min_connections = utils.getConfig(u16, &.{ parsed_args.args.@"min-connections", publishConfig.config.min_connections }, 1),
+        .port = utils.getConfig(u16, &.{ parsed_args.args.port, publishConfig.config.port }, 8000),
+        .rate = utils.getConfig(u32, &.{ parsed_args.args.rate, publishConfig.config.rate }, 0),
+        .token = utils.getConfig([]const u8, &.{ parsed_args.args.token, publishConfig.config.token }, ""),
         .topic_name = parsed_args.positionals[0].?,
     };
 

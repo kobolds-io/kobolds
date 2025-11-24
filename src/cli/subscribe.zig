@@ -1,10 +1,11 @@
 const std = @import("std");
 const log = std.log.scoped(.cli_subscribe);
 const gnoll = @import("gnoll");
+const clap = @import("clap");
+const utils = @import("../lib/utils.zig");
 const Gnoll = gnoll.Gnoll;
 const ConfigInfo = gnoll.ConfigInfo;
 const GnollOptions = gnoll.GnollOptions;
-const clap = @import("clap");
 
 pub fn SubscribeCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
 
@@ -58,12 +59,12 @@ pub fn SubscribeCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIter
     }
 
     const args = SubscribeArgs{
-        .client_id = parsed_args.args.@"client-id" orelse subscribeConfig.config.client_id orelse 1,
-        .host = parsed_args.args.host orelse subscribeConfig.config.host orelse "127.0.0.1",
-        .max_connections = parsed_args.args.@"max-connections" orelse subscribeConfig.config.max_connections orelse 1,
-        .min_connections = parsed_args.args.@"min-connections" orelse subscribeConfig.config.min_connections orelse 1,
-        .port = parsed_args.args.port orelse subscribeConfig.config.port orelse 8000,
-        .token = parsed_args.args.token orelse subscribeConfig.config.token orelse "",
+        .client_id = utils.getConfig(u11, &.{ parsed_args.args.@"client-id", subscribeConfig.config.client_id }, 1),
+        .host = utils.getConfig([]const u8, &.{ parsed_args.args.host, subscribeConfig.config.host }, "127.0.0.1"),
+        .max_connections = utils.getConfig(u16, &.{ parsed_args.args.@"max-connections", subscribeConfig.config.max_connections }, 1),
+        .min_connections = utils.getConfig(u16, &.{ parsed_args.args.@"min-connections", subscribeConfig.config.min_connections }, 1),
+        .port = utils.getConfig(u16, &.{ parsed_args.args.port, subscribeConfig.config.port }, 8000),
+        .token = utils.getConfig([]const u8, &.{ parsed_args.args.token, subscribeConfig.config.token }, ""),
         .topic_name = parsed_args.positionals[0].?,
     };
 
