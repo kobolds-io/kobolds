@@ -250,6 +250,11 @@ pub const FrameType = enum(u4) {
 pub const FrameParser = struct {
     const Self = @This();
 
+    const FrameParseResult = struct {
+        frames_parsed: usize,
+        bytes_consumed: usize,
+    };
+
     allocator: std.mem.Allocator,
     buffer: std.ArrayList(u8),
 
@@ -264,7 +269,7 @@ pub const FrameParser = struct {
         self.buffer.deinit(self.allocator);
     }
 
-    pub fn parse(self: *Self, frames: []Frame, data: []const u8) !usize {
+    pub fn parse(self: *Self, frames: []Frame, data: []const u8) !FrameParseResult {
         // FIX: there should be a constant that is defined that caps the buffer items capacity.
         // additionally, we should resize this self.buffer to free up space as needed.
         // if (self.buffer.items.len + data.len > 10_000) return error.BufferMaxCapacityExceeded;
@@ -273,6 +278,8 @@ pub const FrameParser = struct {
 
         var count: usize = 0;
         var read_offset: usize = 0;
+
+        var total_bytes_consumed: usize = 0;
 
         while (count < frames.len) {
             const buf = self.buffer.items;
@@ -291,6 +298,7 @@ pub const FrameParser = struct {
             };
 
             const bytes_consumed = frame.packedSize();
+            total_bytes_consumed += bytes_consumed;
 
             // NOTE: we are using asserts here because these would be critical systems failures.
             // I think it would be better to crash instead of trying to recover from this.
@@ -313,7 +321,10 @@ pub const FrameParser = struct {
             self.buffer.items.len -= read_offset;
         }
 
-        return count;
+        return FrameParseResult{
+            .frames_parsed = count,
+            .bytes_consumed = total_bytes_consumed,
+        };
     }
 
     fn resyncToNextMagic(_: *Self, data: []const u8) usize {
@@ -601,8 +612,9 @@ test "frame parsing happy path" {
 
     var frames: [5]Frame = undefined;
 
-    const frames_parsed = try frame_parser.parse(&frames, buf[0..n]);
-    try testing.expectEqual(1, frames_parsed);
+    const parse_result = try frame_parser.parse(&frames, buf[0..n]);
+    try testing.expectEqual(1, parse_result.frames_parsed);
+    try testing.expectEqual(frames[0].packedSize(), parse_result.bytes_consumed);
 }
 
 test "frame parse a bad frame and resync to magic" {
@@ -633,9 +645,9 @@ test "frame parse a bad frame and resync to magic" {
 
     var frames: [5]Frame = undefined;
 
-    const frames_parsed = try disassembler.parse(&frames, buf[0 .. bad_frame_n + good_frame_n]);
+    const parse_result = try disassembler.parse(&frames, buf[0 .. bad_frame_n + good_frame_n]);
 
-    try testing.expectEqual(1, frames_parsed);
+    try testing.expectEqual(1, parse_result.frames_parsed);
 
     // ensure that the good frame was the one that was parsed
     try testing.expect(std.mem.eql(u8, frames[0].payload, good_frame.payload));
@@ -664,9 +676,9 @@ test "frame parse multiple frames" {
     var frames: [5]Frame = undefined;
 
     // parse the entire buffer
-    const frames_parsed = try frame_parser.parse(&frames, &buf);
+    const parse_result = try frame_parser.parse(&frames, &buf);
 
-    try testing.expectEqual(3, frames_parsed);
+    try testing.expectEqual(3, parse_result.frames_parsed);
 
     // ensure that the good frame was the one that was parsed
     try testing.expect(std.mem.eql(u8, frames[0].payload, frame_1.payload));
@@ -715,9 +727,9 @@ test "assembler creates a chunk chain per message" {
     var frames: [10]Frame = undefined;
 
     // parse the entire buffer
-    const frames_parsed = try frame_parser.parse(&frames, buf);
+    const parse_result = try frame_parser.parse(&frames, buf);
 
-    try testing.expectEqual(3, frames_parsed);
+    try testing.expectEqual(3, parse_result.frames_parsed);
 
     try testing.expectEqual(0, frame_parser.buffer.items.len);
 
@@ -729,7 +741,7 @@ test "assembler creates a chunk chain per message" {
     // iterate through the frames and assemble them into a message
     var message_head: ?*Chunk = null;
     var message_frames_count: usize = 0;
-    for (frames[0..frames_parsed], 0..frames_parsed) |frame, i| {
+    for (frames[0..parse_result.frames_parsed], 0..parse_result.frames_parsed) |frame, i| {
         if (try reassembler.reassemble(&chunk_pool, frame)) |head_chunk| {
             message_head = head_chunk;
             message_frames_count = i + 1;
@@ -737,7 +749,7 @@ test "assembler creates a chunk chain per message" {
         }
     }
 
-    try testing.expectEqual(frames_parsed, message_frames_count);
+    try testing.expectEqual(parse_result.frames_parsed, message_frames_count);
     try testing.expect(message_head != null);
 
     var message_chunks_count: usize = 0;
@@ -784,9 +796,9 @@ test "reassembler handles single frame message chunk chains" {
     var frames: [10]Frame = undefined;
 
     // parse the entire buffer
-    const frames_parsed = try frame_parser.parse(&frames, buf[0..frame_1_n]);
+    const parse_result = try frame_parser.parse(&frames, buf[0..frame_1_n]);
 
-    try testing.expectEqual(1, frames_parsed);
+    try testing.expectEqual(1, parse_result.frames_parsed);
 
     try testing.expectEqual(0, frame_parser.buffer.items.len);
 
@@ -798,7 +810,7 @@ test "reassembler handles single frame message chunk chains" {
     // iterate through the frames and assemble them into a message
     var message_head: ?*Chunk = null;
     var message_frames_count: usize = 0;
-    for (frames[0..frames_parsed], 0..frames_parsed) |frame, i| {
+    for (frames[0..parse_result.frames_parsed], 0..parse_result.frames_parsed) |frame, i| {
         if (try reassembler.reassemble(&chunk_pool, frame)) |head_chunk| {
             message_head = head_chunk;
             message_frames_count = i + 1;
