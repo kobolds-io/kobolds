@@ -4,10 +4,14 @@ const assert = std.debug.assert;
 
 const constants = @import("../constants.zig");
 
+const FrameReassembler = @import("./frame.zig").FrameReassembler;
 const FrameDisassembler = @import("./frame.zig").FrameDisassembler;
+const Frame = @import("./frame.zig").Frame;
+const FrameParser = @import("./frame.zig").FrameParser;
+
 const ChunkReader = @import("./chunk.zig").ChunkReader;
 const Chunk = @import("./chunk.zig").Chunk;
-const Frame = @import("./frame.zig").Frame;
+
 const FixedHeaders = @import("./message.zig").FixedHeaders;
 const ExtensionHeaders = @import("./message.zig").ExtensionHeaders;
 const Message = @import("./message.zig").Message;
@@ -50,6 +54,38 @@ const MemoryPool = @import("stdx").MemoryPool;
 //   }
 //
 // }
+
+pub const Deserializer = struct {
+    const Self = @This();
+
+    frame_buffer: std.ArrayList(Frame),
+
+    pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !Self {
+        return Self{
+            .frame_buffer = try std.ArrayList(Frame).initCapacity(allocator, capacity),
+        };
+    }
+
+    pub const empty = Self{
+        .frame_buffer = .empty,
+    };
+
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.frame_buffer.deinit(allocator);
+    }
+
+    pub fn deserialize(
+        self: *Self,
+        allocator: std.mem.Allocator,
+        pool: *MemoryPool(Chunk),
+        in: []const u8,
+    ) !void {
+        _ = self;
+        _ = allocator;
+        _ = pool;
+        _ = in;
+    }
+};
 
 pub const Serializer2 = struct {
     // have an overflow buffer
