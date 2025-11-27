@@ -10,6 +10,13 @@ pub const Chunk = struct {
     next: ?*Chunk = null,
 };
 
+pub const ChunkChain = struct {
+    pub const Self = @This();
+
+    head: *Chunk,
+    tail: *Chunk,
+};
+
 pub const ChunkReader = struct {
     const Self = @This();
 

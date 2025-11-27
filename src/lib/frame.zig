@@ -15,6 +15,10 @@ const MemoryPool = @import("stdx").MemoryPool;
 pub const Frame = struct {
     const Self = @This();
 
+    comptime {
+        assert(Frame.minimumSize() == 12);
+    }
+
     pub const Options = struct {
         flags: FrameHeadersFlags = .{},
         sequence: u16 = 0,
@@ -29,6 +33,10 @@ pub const Frame = struct {
 
     /// Checksum of the frame header + payload
     checksum: u32 = 0,
+
+    pub fn minimumSize() usize {
+        return FrameHeaders.packedSize() + @sizeOf(u32);
+    }
 
     pub fn packedSize(self: Self) usize {
         return FrameHeaders.packedSize() + self.payload.len + @sizeOf(u32);
