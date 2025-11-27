@@ -104,8 +104,9 @@ pub const Serializer = struct {
     };
 
     const SerializeResult = struct {
-        bytes_written: usize,
-        bytes_remaining: usize,
+        total_bytes_written: usize,
+        message_bytes_remaining: usize,
+        frames_written: usize,
         state: State,
     };
 
@@ -113,7 +114,8 @@ pub const Serializer = struct {
     frame_payload_buffer: []u8,
     state: State,
     message: ?*Message,
-    offset: usize,
+    message_chunk_offset: usize,
+    message_bytes_remaining: usize,
 
     pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !Self {
         const frame_payload_buffer = try allocator.alloc(u8, capacity);
@@ -123,7 +125,8 @@ pub const Serializer = struct {
             .frame_payload_buffer = frame_payload_buffer,
             .state = .ready,
             .message = null,
-            .offset = 0,
+            .message_chunk_offset = 0,
+            .message_bytes_remaining = 0,
         };
     }
 
@@ -136,76 +139,230 @@ pub const Serializer = struct {
         assert(self.message == null);
 
         self.message = message;
-        self.offset = 0;
+        self.message_chunk_offset = 0;
+        self.message_bytes_remaining = message.packedSize();
     }
 
-    pub fn serialize2(self: *Self, out_buffer: []u8) !SerializeResult {
-        if (self.message == null or out_buffer.len == 0) return SerializeResult{
-            .bytes_written = 0,
-            .bytes_remaining = 0,
-            .state = .noop,
-        };
+    pub fn serialize3(self: *Self, out: []u8) !SerializeResult {
+        // No message -> nothing to do
+        if (self.message == null) {
+            return SerializeResult{
+                .total_bytes_written = 0,
+                .message_bytes_remaining = 0,
+                .frames_written = 0,
+                .state = .noop,
+            };
+        }
 
+        if (out.len <= Frame.minimumSize()) return error.OutputBufferTooSmall;
+
+        var total_written: usize = 0;
+        var frames_written: usize = 0;
+
+        const message = self.message.?;
+
+        // find the correct chunk + index for the current offset
+        var chunk: ?*Chunk = message.chunk;
+        var chunk_offset_acc: usize = 0;
+
+        while (chunk) |c| {
+            // correct chunk has been found
+            if (self.message_chunk_offset < chunk_offset_acc + c.used) break;
+            chunk_offset_acc += c.used;
+            chunk = c.next;
+        }
+
+        // something we didn't expect happened.
+        assert(chunk != null);
+
+        var current_chunk = chunk.?;
+        var chunk_local_index = self.message_chunk_offset - chunk_offset_acc;
+
+        // assemble frames until out_buffer cannot fit more
+        while (true) {
+            const remaining = out.len - total_written;
+            if (remaining <= Frame.minimumSize())
+                break;
+
+            const max_payload_fit = remaining - Frame.minimumSize();
+            const payload_cap = @min(self.frame_payload_buffer.len, max_payload_fit);
+
+            // Fresh disassembler at the correct chunk & index
+            var disassembler = FrameDisassembler.new(current_chunk, .{
+                .max_frame_payload_size = self.frame_payload_buffer.len,
+                .offset = chunk_local_index,
+            });
+
+            // next frame
+            const frame_opt = disassembler.disassemble(self.frame_payload_buffer[0..payload_cap]);
+            if (frame_opt == null) break;
+
+            const frame = frame_opt.?;
+
+            const frame_size = frame.packedSize();
+
+            // we check this earlier so this should never happen unless there is a logical error
+            assert(frame_size <= remaining);
+
+            // write frame bytes
+            const n = frame.toBytes(out[total_written..]);
+            total_written += n;
+            frames_written += 1;
+
+            // advance message state
+            var payload_used = n - Frame.minimumSize();
+            self.message_chunk_offset += payload_used;
+            self.message_bytes_remaining -= payload_used;
+
+            // move into next chunk if needed
+            while (chunk_local_index + payload_used >= current_chunk.used) {
+                payload_used -= (current_chunk.used - chunk_local_index);
+                if (current_chunk.next == null) break;
+                current_chunk = current_chunk.next.?;
+                chunk_local_index = 0;
+            } else {
+                chunk_local_index += payload_used;
+            }
+
+            if (self.message_bytes_remaining == 0) break;
+        }
+
+        // full write
+        if (self.message_bytes_remaining == 0) {
+            self.message = null;
+            self.message_chunk_offset = 0;
+            self.state = .ready;
+
+            return SerializeResult{
+                .total_bytes_written = total_written,
+                .message_bytes_remaining = 0,
+                .frames_written = frames_written,
+                .state = .ready,
+            };
+        }
+
+        // partial write
+        self.state = .partial;
         return SerializeResult{
-            .bytes_written = 0,
-            .bytes_remaining = 0,
+            .total_bytes_written = total_written,
+            .message_bytes_remaining = self.message_bytes_remaining,
+            .frames_written = frames_written,
+            .state = .partial,
+        };
+    }
+
+    pub fn serialize2(self: *Self, output_buffer: []u8) !SerializeResult {
+        if (self.message == null) return SerializeResult{
+            .total_bytes_written = 0,
+            .message_bytes_remaining = 0,
+            .frames_written = 0,
             .state = .noop,
         };
 
-        // const message_size = message.packedSize();
-        // const frames_required = message_size / self.frame_payload_buffer.len;
-        // const total_bytes_required = message_size + (Frame.minimumSize() * frames_required);
+        // this out buffer is not large enough
+        if (output_buffer.len <= Frame.minimumSize()) {
+            return error.OutputBufferTooSmall;
+        }
 
-        // var bytes_written: usize = 0;
+        const message = self.message.?;
+        var current_chunk: ?*Chunk = message.chunk;
+        var chunk_index: usize = 0;
+        var total_message_chunk_bytes_offset: usize = 0;
+        // Number of Frame<Payload> bytes written to the output_buffer
+        var total_bytes_written: usize = 0;
+        var frames_written: usize = 0;
 
-        // var disassembler = FrameDisassembler.new(message.chunk, .{
-        //     .max_frame_payload_size = self.frame_payload_buffer.len,
-        // });
+        while (output_buffer[total_bytes_written..].len > Frame.minimumSize()) {
+            // calculate the next chunk
+            // NOTE: navigate to the offset position of the message
 
-        // if (total_bytes_required <= out_buffer.len) {
-        //     // convert the entire message -> []Frames -> []const u8
-        //     while (disassembler.disassemble(self.frame_payload_buffer)) |frame| {
-        //         const frame_n = frame.toBytes(out_buffer[bytes_written..]);
+            while (total_message_chunk_bytes_offset < self.message_chunk_offset) {
+                // check how many bytes are in this current_chunk
+                if (current_chunk) |chunk| {
+                    // we have found the correct chunk
+                    if (chunk.used + total_message_chunk_bytes_offset >= self.message_chunk_offset) {
+                        // ex: 5         20                   23
+                        // index into this chunk (3)
+                        chunk_index = self.message_chunk_offset - total_message_chunk_bytes_offset;
+                        break;
+                    } else {
+                        // step forward through the chunk
+                        total_message_chunk_bytes_offset += chunk.used;
+                        // advance the new chunk chain
+                        current_chunk = chunk.next;
+                        continue;
+                    }
+                } else return error.InvalidOffset;
+            }
 
-        //         bytes_written += frame_n;
-        //     }
+            // get the current_chunk
+            if (current_chunk == null) break;
 
-        //     // std.debug.print("out_buffer: {any}\n", .{out_buffer[0..bytes_written]});
-        //     return SerializeResult{
-        //         .bytes_written = bytes_written,
-        //         .bytes_remaining = 0,
-        //         .state = .ready,
-        //     };
-        // } else {
-        //     // there is going to be some sort of overflow, figure out the maxiumum number of bytes that can be written.
+            const chunk = current_chunk.?;
 
-        //     return SerializeResult{
-        //         .bytes_written = 0,
-        //         .bytes_remaining = total_bytes_required,
-        //         .state = .partial,
-        //     };
-        // }
+            var disassembler = FrameDisassembler.new(chunk, .{
+                .max_frame_payload_size = self.frame_payload_buffer.len,
+                .offset = chunk_index,
+            });
 
-        // std.debug.print("total_bytes_required: {}\n", .{total_bytes_required});
+            // remaining space in output
+            const output_buffer_remaining = output_buffer[total_bytes_written..].len;
 
-        // TODO:
-        //   1. figure out how many bytes are available in the out_buffer
-        //   2. figure out how large this message is
-        //   3. if the frames that make up this message, figure out how many bytes can be written at a time
-        //   4.
+            // not even enough for a header
+            if (output_buffer_remaining <= Frame.minimumSize()) break;
 
-        // // handle the overflow
+            // maximum payload we can fit in the output buffer
+            const max_fittable_payload = output_buffer_remaining - Frame.minimumSize();
 
-        // while (self.messages.dequeue()) |message| {
-        //     // convert this message to bytes
-        // }
+            // payload we will allow the disassembler to fill
+            const writable_payload = @min(self.frame_payload_buffer.len, max_fittable_payload);
+
+            // IMPORTANT FIX: only give disassembler the payload buffer capacity
+            const frame_opt = disassembler.disassemble(self.frame_payload_buffer[0..writable_payload]);
+
+            // const frame_opt = disassembler.disassemble(self.frame_payload_buffer[0..maximum_writable_bytes]);
+            if (frame_opt) |frame| {
+                assert(frame.packedSize() <= output_buffer[total_bytes_written..].len);
+                const frame_n = frame.toBytes(output_buffer[total_bytes_written..]);
+
+                total_bytes_written += frame_n;
+                frames_written += 1;
+                const message_bytes_consumed = frame_n - Frame.minimumSize();
+
+                // advance current chunk the value
+                self.message_chunk_offset += message_bytes_consumed;
+                // decrement the remaining number of bytes in this message
+                self.message_bytes_remaining -= message_bytes_consumed;
+            } else break;
+        }
+
+        // we have successfully written the remainder of the message to output_buffer
+        if (self.message_bytes_remaining == 0) {
+            self.message = null;
+            self.message_chunk_offset = 0;
+            self.state = .ready;
+
+            return SerializeResult{
+                .total_bytes_written = total_bytes_written,
+                .message_bytes_remaining = self.message_bytes_remaining,
+                .frames_written = frames_written,
+                .state = .ready,
+            };
+        } else {
+            return SerializeResult{
+                .total_bytes_written = total_bytes_written,
+                .message_bytes_remaining = self.message_bytes_remaining,
+                .frames_written = frames_written,
+                .state = .partial,
+            };
+        }
     }
 
     pub fn serialize(self: *Self, message: *Message, out_buffer: []u8) !SerializeResult {
         // there is no work for us to do
         if (out_buffer.len == 0) return SerializeResult{
-            .bytes_written = 0,
-            .bytes_remaining = 0,
+            .total_bytes_written = 0,
+            .message_bytes_remaining = 0,
             .state = .noop,
         };
 
@@ -229,16 +386,16 @@ pub const Serializer = struct {
 
             // std.debug.print("out_buffer: {any}\n", .{out_buffer[0..bytes_written]});
             return SerializeResult{
-                .bytes_written = bytes_written,
-                .bytes_remaining = 0,
+                .total_bytes_written = bytes_written,
+                .message_bytes_remaining = 0,
                 .state = .ready,
             };
         } else {
             // there is going to be some sort of overflow, figure out the maxiumum number of bytes that can be written.
 
             return SerializeResult{
-                .bytes_written = 0,
-                .bytes_remaining = total_bytes_required,
+                .total_bytes_written = 0,
+                .message_bytes_remaining = total_bytes_required,
                 .state = .partial,
             };
         }
@@ -287,10 +444,10 @@ test "serializer writes message to buffer" {
 test "serializer writes partial message to buffer" {
     const allocator = testing.allocator;
 
-    var serializer = try Serializer.initCapacity(allocator, constants.max_frame_payload_size);
+    var serializer = try Serializer.initCapacity(allocator, 1024);
     defer serializer.deinit(allocator);
 
-    var pool = try MemoryPool(Chunk).init(allocator, 100);
+    var pool = try MemoryPool(Chunk).init(allocator, 500);
     defer pool.deinit();
 
     const out_buffer = try allocator.alloc(u8, 1024 * 256);
@@ -300,34 +457,53 @@ test "serializer writes partial message to buffer" {
     defer message.deinit(&pool);
 
     // ensure the message fully overrides the body
-    var large_body = [_]u8{'a'} ** (constants.chunk_data_size * 20);
+    var large_body = [_]u8{'a'} ** (constants.chunk_data_size * 100);
     large_body[large_body.len - 1] = 'b';
     try message.setBody(&pool, &large_body);
 
     try testing.expectEqual(.ready, serializer.state);
 
+    // feed this message to the serializer
     serializer.feed(&message);
 
-    const result = try serializer.serialize2(out_buffer);
+    var total_bytes_written: usize = 0;
+    var total_frames_written: usize = 0;
+    while (true) {
+        var bytes_written: usize = 0;
+        const result = try serializer.serialize3(out_buffer[bytes_written..]);
+        total_bytes_written += result.total_bytes_written;
+        total_frames_written += result.frames_written;
+        // defer {
+        //     std.debug.print("result: {any}\n", .{result});
+        // }
+        switch (result.state) {
+            .ready => break,
+            .partial => {
+                bytes_written += result.total_bytes_written;
+                if (result.message_bytes_remaining > out_buffer[bytes_written..].len) {
+                    // FLUSH THE BUFFER!
+                    // std.debug.print("flushing the buffer!\n", .{});
+                    bytes_written = 0;
+                }
+            },
+            else => assert(false), // this should never happen unless we've configured incorrectly
+        }
+    }
 
-    // try testing.expect(message.bodySize() > out_buffer.len);
-
-    // const result = try serializer.serialize(&message, out_buffer);
-    std.debug.print("result: {any}\n", .{result});
-
-    // std.debug.print("out_buffer: {any}\n", .{out_buffer[0..bytes_written]});
-
-    // try testing.expect(serialize_result.bytes_written <= out_buffer.len);
-    // try testing.expectEqual(81954, serialize_result.bytes_written);
+    try testing.expectEqual(.ready, serializer.state);
+    try testing.expectEqual(
+        total_bytes_written,
+        message.packedSize() + (total_frames_written * Frame.minimumSize()),
+    );
 }
 
 test "serialize many messages" {
     const allocator = testing.allocator;
 
-    var pool = try MemoryPool(Chunk).init(allocator, 100);
+    var pool = try MemoryPool(Chunk).init(allocator, 500);
     defer pool.deinit();
 
-    const out_buffer = try allocator.alloc(u8, 1024 * 256);
+    const out_buffer = try allocator.alloc(u8, 1024 * 64);
     defer allocator.free(out_buffer);
 
     const messages = try allocator.alloc(Message, 10);
@@ -338,18 +514,52 @@ test "serialize many messages" {
     large_body[large_body.len - 1] = 'b';
     for (0..messages.len) |i| {
         var message = try Message.init(&pool, .ping, .{});
-        defer message.deinit(&pool);
+        errdefer message.deinit(&pool);
 
         try message.setBody(&pool, &large_body);
         messages[i] = message;
     }
 
-    var serializer = try Serializer.initCapacity(allocator, constants.max_frame_payload_size);
+    var serializer = try Serializer.initCapacity(allocator, 500);
     defer serializer.deinit(allocator);
 
-    // take a message serialize it into bytes.
-    // Message -> []Frame -> []const u8
+    const total_message_bytes = messages[0].packedSize() * messages.len;
 
+    var total_bytes_written: usize = 0;
+    var total_frames_written: usize = 0;
+    for (0..messages.len) |i| {
+        var message = messages[i];
+
+        if (serializer.state == .ready) serializer.feed(&message);
+
+        while (true) {
+            var bytes_written: usize = 0;
+            const result = try serializer.serialize3(out_buffer[bytes_written..]);
+            total_bytes_written += result.total_bytes_written;
+            total_frames_written += result.frames_written;
+            // defer {
+            //     std.debug.print("result: {any}\n", .{result});
+            // }
+            switch (result.state) {
+                .ready => break,
+                .partial => {
+                    bytes_written += result.total_bytes_written;
+                    if (result.message_bytes_remaining > out_buffer[bytes_written..].len) {
+                        // FLUSH THE BUFFER!
+                        // std.debug.print("flushing the buffer!\n", .{});
+                        bytes_written = 0;
+                    }
+                },
+                else => assert(false), // this should never happen unless we've configured incorrectly
+            }
+        }
+    }
+
+    try testing.expectEqual(.ready, serializer.state);
+    try testing.expectEqual(
+        total_bytes_written,
+        total_message_bytes + (total_frames_written * Frame.minimumSize()),
+    );
 }
 
 test "deserialize takes bytes and makes a message" {

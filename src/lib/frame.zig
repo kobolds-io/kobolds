@@ -457,6 +457,7 @@ pub const FrameDisassembler = struct {
     pub const Config = struct {
         max_frame_payload_size: usize = constants.max_frame_payload_size,
         protocol_version: ProtocolVersion = .v1,
+        offset: usize = 0,
     };
 
     config: Config,
@@ -468,7 +469,7 @@ pub const FrameDisassembler = struct {
         return Self{
             .config = config,
             .current_chunk = chunk,
-            .offset = 0,
+            .offset = config.offset,
             .next_sequence = 0,
         };
     }
@@ -702,7 +703,7 @@ test "assembler creates a chunk chain per message" {
     var frame_parser = FrameParser.init(allocator);
     defer frame_parser.deinit();
 
-    var frame_payload = [_]u8{1} ** std.math.maxInt(u16);
+    var frame_payload = [_]u8{1} ** constants.max_frame_payload_size;
     var frame_1 = Frame.new(&frame_payload, .{
         .flags = .{ .continuation = true },
         .sequence = 0,
