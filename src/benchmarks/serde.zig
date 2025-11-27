@@ -130,21 +130,16 @@ test "serializer benchmarks" {
         &SerializeMessages.new(&serializer, small_messages, out),
         .{},
     );
-    // try bench.addParam(
-    //     "deserialize small message",
-    //     &DeserializeMessage.new(&small_message, frame_payload_buffer, send_buffer, 1),
-    //     .{},
-    // );
-    // try bench.addParam(
-    //     "deserialize medium message",
-    //     &DeserializeMessage.new(&medium_message, frame_payload_buffer, send_buffer, 1),
-    //     .{},
-    // );
-    // try bench.addParam(
-    //     "deserialize large message",
-    //     &DeserializeMessage.new(&large_message, frame_payload_buffer, send_buffer, 1),
-    //     .{},
-    // );
+    try bench.addParam(
+        "serialize medium messages",
+        &SerializeMessages.new(&serializer, medium_messages, out),
+        .{},
+    );
+    try bench.addParam(
+        "serialize large messages",
+        &SerializeMessages.new(&serializer, large_messages, out),
+        .{},
+    );
 
     var stderr = std.fs.File.stderr().writerStreaming(&.{});
     const writer = &stderr.interface;
