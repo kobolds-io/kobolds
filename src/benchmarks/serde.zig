@@ -14,6 +14,8 @@ const Chunk = @import("../lib/chunk.zig").Chunk;
 const ChunkReader = @import("../lib/chunk.zig").ChunkReader;
 const ChunkWriter = @import("../lib/chunk.zig").ChunkWriter;
 
+const Serializer = @import("../lib/serde.zig").Serializer;
+
 const FrameDisassembler = @import("../lib/frame.zig").FrameDisassembler;
 const Frame = @import("../lib/frame.zig").Frame;
 const FrameParser = @import("../lib/frame.zig").FrameParser;
@@ -21,201 +23,113 @@ const FrameReassembler = @import("../lib/frame.zig").FrameReassembler;
 
 const Message = @import("../lib/message.zig").Message;
 
-const SerializeMessage = struct {
+const SerializeMessages = struct {
     const Self = @This();
 
-    frame_payload_buffer: []u8,
-    message: *Message,
-    send_buffer: []u8,
-    expected_frames_generated_count: usize,
+    serializer: *Serializer,
+    messages: []Message,
+    out: []u8,
 
-    pub fn new(
-        message: *Message,
-        frame_payload_buffer: []u8,
-        send_buffer: []u8,
-        expected_frames_generated_count: usize,
-    ) Self {
+    pub fn new(serializer: *Serializer, messages: []Message, out: []u8) Self {
         return Self{
-            .message = message,
-            .frame_payload_buffer = frame_payload_buffer,
-            .send_buffer = send_buffer,
-            .expected_frames_generated_count = expected_frames_generated_count,
+            .messages = messages,
+            .serializer = serializer,
+            .out = out,
         };
     }
 
     pub fn run(self: Self, _: std.mem.Allocator) void {
-        var send_buffer_offset: usize = 0;
-        var generated_frames_count: usize = 0;
+        for (0..self.messages.len) |i| {
+            assert(self.serializer.state == .ready);
 
-        var disassembler = FrameDisassembler.new(self.message.chunk, .{});
-        while (disassembler.disassemble(self.frame_payload_buffer)) |frame| {
-            generated_frames_count += 1;
+            var message = self.messages[i];
+            self.serializer.feed(&message);
 
-            if (self.send_buffer[send_buffer_offset..].len < frame.packedSize()) {
-                // lets pretend we flushed this send buffer or did something special like caching writing
-                // the maximum number of bytes to the send_buffer and caching the remaining bytes
-                send_buffer_offset = 0;
+            while (true) {
+                var bytes_written: usize = 0;
+                const result = self.serializer.serialize(self.out[bytes_written..]) catch unreachable;
+                switch (result.state) {
+                    .ready => break,
+                    .partial => {
+                        bytes_written += result.total_bytes_written;
+                        if (result.message_bytes_remaining > self.out[bytes_written..].len) {
+                            // FLUSH THE BUFFER!
+                            // std.debug.print("flushing the buffer!\n", .{});
+                            bytes_written = 0;
+                        }
+                    },
+                    else => assert(false), // this should never happen unless we've configured incorrectly
+                }
             }
-
-            // convert frame to bytes
-            const frame_n = frame.toBytes(self.send_buffer[send_buffer_offset..]);
-            send_buffer_offset += frame_n;
         }
-
-        assert(self.expected_frames_generated_count == 1);
     }
 };
 
-test "Message serialization benchmarks" {
+test "serializer benchmarks" {
     const allocator = testing.allocator;
     var bench = zbench.Benchmark.init(allocator, .{
         .iterations = benchmark_constants.benchmark_max_iterations,
     });
     defer bench.deinit();
 
-    var pool = try MemoryPool(Chunk).init(allocator, 100);
+    var pool = try MemoryPool(Chunk).init(allocator, 1_000);
     defer pool.deinit();
 
-    // the application has created a message and has been tossed around the world
-    var tiny_message = try Message.init(&pool, .ping, .{});
-    defer tiny_message.deinit(&pool);
+    const out = try allocator.alloc(u8, 1024 * 256);
+    defer allocator.free(out);
 
-    tiny_message.ref();
-    defer tiny_message.deref();
-
-    // ensure the message fully overrides the body
-    try tiny_message.setBody(&pool, "");
-
-    // the application has created a message and has been tossed around the world
-    var small_message = try Message.init(&pool, .ping, .{});
-    defer small_message.deinit(&pool);
-
-    small_message.ref();
-    defer small_message.deref();
+    const small_messages = try allocator.alloc(Message, 10);
+    defer allocator.free(small_messages);
 
     // ensure the message fully overrides the body
-    const small_body = [_]u8{'a'} ** constants.chunk_data_size;
-    try small_message.setBody(&pool, &small_body);
+    var small_body = [_]u8{'a'} ** (constants.chunk_data_size);
+    small_body[small_body.len - 1] = 'b';
+    for (0..small_messages.len) |i| {
+        var message = try Message.init(&pool, .ping, .{});
+        errdefer message.deinit(&pool);
 
-    // the application has created a message and has been tossed around the world
-    var medium_message = try Message.init(&pool, .ping, .{});
-    defer medium_message.deinit(&pool);
-
-    medium_message.ref();
-    defer medium_message.deref();
-
-    // ensure the message fully overrides the body
-    const medium_body = [_]u8{'a'} ** (constants.chunk_data_size * 10);
-    try medium_message.setBody(&pool, &medium_body);
-
-    // the application has created a message and has been tossed around the world
-    var large_message = try Message.init(&pool, .ping, .{});
-    defer large_message.deinit(&pool);
-
-    large_message.ref();
-    defer large_message.deref();
-
-    // ensure the message fully overrides the body
-    const large_body = [_]u8{'a'} ** (constants.chunk_data_size * 20);
-    try large_message.setBody(&pool, &large_body);
-
-    // create a static frame buffer to be reused
-    // FIX: the max_frame_payload_size should be transport dependent
-    const frame_payload_buffer = try allocator.alloc(u8, constants.max_frame_payload_size);
-    defer allocator.free(frame_payload_buffer);
-
-    // create a static frame buffer to be reused
-    // FIX: the send_buffer size should be transport dependent
-    const send_buffer = try allocator.alloc(u8, 1024 * 256);
-    defer allocator.free(send_buffer);
-
-    try bench.addParam(
-        "serialize tiny message",
-        &SerializeMessage.new(&tiny_message, frame_payload_buffer, send_buffer, 1),
-        .{},
-    );
-    try bench.addParam(
-        "serialize small message",
-        &SerializeMessage.new(&small_message, frame_payload_buffer, send_buffer, 1),
-        .{},
-    );
-    try bench.addParam(
-        "serialize medium message",
-        &SerializeMessage.new(&medium_message, frame_payload_buffer, send_buffer, 1),
-        .{},
-    );
-    try bench.addParam(
-        "serialize large message",
-        &SerializeMessage.new(&large_message, frame_payload_buffer, send_buffer, 1),
-        .{},
-    );
-
-    var stderr = std.fs.File.stderr().writerStreaming(&.{});
-    const writer = &stderr.interface;
-
-    try writer.writeAll("\n");
-    try writer.writeAll("|----------------------------------|\n");
-    try writer.writeAll("| Message Serialization Benchmarks |\n");
-    try writer.writeAll("|----------------------------------|\n");
-    try bench.run(writer);
-}
-
-const DeserializeMessage = struct {
-    const Self = @This();
-
-    pub fn new() Self {
-        return Self{};
+        try message.setBody(&pool, &small_body);
+        small_messages[i] = message;
     }
 
-    pub fn run(self: Self, _: std.mem.Allocator) void {
-        _ = self;
+    const medium_messages = try allocator.alloc(Message, 10);
+    defer allocator.free(medium_messages);
 
-        assert(false);
+    // ensure the message fully overrides the body
+    var medium_body = [_]u8{'a'} ** (constants.chunk_data_size * 10);
+    medium_body[medium_body.len - 1] = 'b';
+    for (0..medium_messages.len) |i| {
+        var message = try Message.init(&pool, .ping, .{});
+        errdefer message.deinit(&pool);
+
+        try message.setBody(&pool, &medium_body);
+        medium_messages[i] = message;
     }
-};
 
-test "Message deserialization benchmarks" {
-    const allocator = testing.allocator;
-    var bench = zbench.Benchmark.init(allocator, .{
-        .iterations = benchmark_constants.benchmark_max_iterations,
-    });
-    defer bench.deinit();
+    const large_messages = try allocator.alloc(Message, 10);
+    defer allocator.free(large_messages);
 
-    var pool = try MemoryPool(Chunk).init(allocator, 100);
-    defer pool.deinit();
+    // ensure the message fully overrides the body
+    var large_body = [_]u8{'a'} ** (constants.chunk_data_size * 20);
+    large_body[large_body.len - 1] = 'b';
+    for (0..large_messages.len) |i| {
+        var message = try Message.init(&pool, .ping, .{});
+        errdefer message.deinit(&pool);
 
-    // create a message
-    var message = try Message.init(&pool, .ping, .{});
-    defer message.deinit(&pool);
-
-    try message.setBody(&pool, "hello");
-
-    const frame_payload_buffer = try allocator.alloc(u8, constants.max_frame_payload_size);
-    defer allocator.free(frame_payload_buffer);
-
-    const recv_buffer = try allocator.alloc(u8, 1024 * 256);
-    defer allocator.free(recv_buffer);
-
-    // serialize it to bytes
-    var recv_buffer_offset: usize = 0;
-
-    var disassembler = FrameDisassembler.new(message.chunk, .{});
-    while (disassembler.disassemble(frame_payload_buffer)) |frame| {
-        // ensure the entire message fits within the `recv_buffer`
-        assert(recv_buffer[recv_buffer_offset..].len > frame.packedSize());
-
-        // convert frame to bytes
-        const frame_n = frame.toBytes(recv_buffer[recv_buffer_offset..]);
-        recv_buffer_offset += frame_n;
+        try message.setBody(&pool, &large_body);
+        large_messages[i] = message;
     }
+
+    var serializer = try Serializer.initCapacity(allocator, constants.max_frame_payload_size);
+    defer serializer.deinit(allocator);
 
     // run benchmark that takes bytes off read buffer -> Message
 
-    // try bench.addParam(
-    //     "deserialize tiny message",
-    //     &DeserializeMessage.new(&tiny_message, frame_payload_buffer, send_buffer, 1),
-    //     .{},
-    // );
+    try bench.addParam(
+        "serialize small messages",
+        &SerializeMessages.new(&serializer, small_messages, out),
+        .{},
+    );
     // try bench.addParam(
     //     "deserialize small message",
     //     &DeserializeMessage.new(&small_message, frame_payload_buffer, send_buffer, 1),
@@ -236,8 +150,8 @@ test "Message deserialization benchmarks" {
     const writer = &stderr.interface;
 
     try writer.writeAll("\n");
-    try writer.writeAll("|------------------------------------|\n");
-    try writer.writeAll("| Message Deserialization Benchmarks |\n");
-    try writer.writeAll("|------------------------------------|\n");
+    try writer.writeAll("|-----------------------|\n");
+    try writer.writeAll("| Serializer Benchmarks |\n");
+    try writer.writeAll("|-----------------------|\n");
     try bench.run(writer);
 }

@@ -19,43 +19,6 @@ const Message = @import("./message.zig").Message;
 const MemoryPool = @import("stdx").MemoryPool;
 const RingBuffer = @import("stdx").RingBuffer;
 
-// we can imagine that the serializer will be fed a series of messages
-// 1. serializer.serialize(msg_1)
-// 1. serializer.serialize(msg_2)
-// 1. serializer.serialize(msg_3)
-//
-// I think that we can have the serializer act like a state machine
-
-// var serializer = Serializer.init();
-//
-//  in some loop ...
-//
-// switch(serializer.state) {
-//  .ready => {
-//      // out_buffer is not full and can accept another message
-//      // if there is another message, then try to serialize it
-//      if (next_message) {
-//         out_buffer_offset = serializer.serialize(next_message, out_buffer[out_buffer_offset..]);
-//      } else {
-//         // flush the out_buffer
-//      }
-//   },
-//   .out_buffer_full => {
-//     // flush the out_buffer
-//     flusher(out_buffer[..out_buffer_offset]);
-//
-//     // assume the out_buffer is empty now
-//     out_buffer_offset = 0;
-//
-//     // reset the serializer state
-//
-//   },
-//   .err => {
-//      // somthing bad happened
-//   }
-//
-// }
-
 pub const Deserializer = struct {
     const Self = @This();
 
@@ -146,7 +109,7 @@ pub const Serializer = struct {
     pub fn serialize(self: *Self, out: []u8) !SerializeResult {
         // No message -> nothing to do
         if (self.message == null) {
-            self.state == .ready;
+            self.state = .ready;
             return SerializeResult{
                 .total_bytes_written = 0,
                 .message_bytes_remaining = 0,
@@ -252,31 +215,6 @@ pub const Serializer = struct {
         };
     }
 };
-
-test "serializer writes message to buffer" {
-    const allocator = testing.allocator;
-
-    var serializer = try Serializer.initCapacity(allocator, constants.max_frame_payload_size);
-    defer serializer.deinit(allocator);
-
-    var pool = try MemoryPool(Chunk).init(allocator, 100);
-    defer pool.deinit();
-
-    const out_buffer = try allocator.alloc(u8, 1024 * 256);
-    defer allocator.free(out_buffer);
-
-    var message = try Message.init(&pool, .ping, .{});
-    defer message.deinit(&pool);
-
-    // try serializer.feed(&message);
-
-    // const serialize_result = try serializer.serialize(allocator, &message, out_buffer);
-
-    // (size of the message and size of the frame)
-    // const expected_size = message.packedSize() + 12;
-
-    // try testing.expectEqual(expected_size, serialize_result.bytes_written);
-}
 
 test "serializer writes partial message to buffer" {
     const allocator = testing.allocator;

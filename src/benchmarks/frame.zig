@@ -14,6 +14,8 @@ const MemoryPool = @import("stdx").MemoryPool;
 const Chunk = @import("../lib/chunk.zig").Chunk;
 const ChunkWriter = @import("../lib/chunk.zig").ChunkWriter;
 
+const Message = @import("../lib/message.zig").Message;
+
 const check = @import("../lib/checksum.zig");
 
 const FrameParseFrameFromBytes = struct {
@@ -31,8 +33,8 @@ const FrameParseFrameFromBytes = struct {
     pub fn run(self: Self, _: std.mem.Allocator) void {
         var frames: [1]Frame = undefined;
 
-        const frames_parsed = self.frame_parser.parse(&frames, self.frame_buf) catch unreachable;
-        assert(frames_parsed == 1);
+        const parse_result = self.frame_parser.parse(&frames, self.frame_buf) catch unreachable;
+        assert(parse_result.frames_parsed == 1);
     }
 };
 
