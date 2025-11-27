@@ -143,9 +143,10 @@ pub const Serializer = struct {
         self.message_bytes_remaining = message.packedSize();
     }
 
-    pub fn serialize3(self: *Self, out: []u8) !SerializeResult {
+    pub fn serialize(self: *Self, out: []u8) !SerializeResult {
         // No message -> nothing to do
         if (self.message == null) {
+            self.state == .ready;
             return SerializeResult{
                 .total_bytes_written = 0,
                 .message_bytes_remaining = 0,
@@ -250,170 +251,6 @@ pub const Serializer = struct {
             .state = .partial,
         };
     }
-
-    pub fn serialize2(self: *Self, output_buffer: []u8) !SerializeResult {
-        if (self.message == null) return SerializeResult{
-            .total_bytes_written = 0,
-            .message_bytes_remaining = 0,
-            .frames_written = 0,
-            .state = .noop,
-        };
-
-        // this out buffer is not large enough
-        if (output_buffer.len <= Frame.minimumSize()) {
-            return error.OutputBufferTooSmall;
-        }
-
-        const message = self.message.?;
-        var current_chunk: ?*Chunk = message.chunk;
-        var chunk_index: usize = 0;
-        var total_message_chunk_bytes_offset: usize = 0;
-        // Number of Frame<Payload> bytes written to the output_buffer
-        var total_bytes_written: usize = 0;
-        var frames_written: usize = 0;
-
-        while (output_buffer[total_bytes_written..].len > Frame.minimumSize()) {
-            // calculate the next chunk
-            // NOTE: navigate to the offset position of the message
-
-            while (total_message_chunk_bytes_offset < self.message_chunk_offset) {
-                // check how many bytes are in this current_chunk
-                if (current_chunk) |chunk| {
-                    // we have found the correct chunk
-                    if (chunk.used + total_message_chunk_bytes_offset >= self.message_chunk_offset) {
-                        // ex: 5         20                   23
-                        // index into this chunk (3)
-                        chunk_index = self.message_chunk_offset - total_message_chunk_bytes_offset;
-                        break;
-                    } else {
-                        // step forward through the chunk
-                        total_message_chunk_bytes_offset += chunk.used;
-                        // advance the new chunk chain
-                        current_chunk = chunk.next;
-                        continue;
-                    }
-                } else return error.InvalidOffset;
-            }
-
-            // get the current_chunk
-            if (current_chunk == null) break;
-
-            const chunk = current_chunk.?;
-
-            var disassembler = FrameDisassembler.new(chunk, .{
-                .max_frame_payload_size = self.frame_payload_buffer.len,
-                .offset = chunk_index,
-            });
-
-            // remaining space in output
-            const output_buffer_remaining = output_buffer[total_bytes_written..].len;
-
-            // not even enough for a header
-            if (output_buffer_remaining <= Frame.minimumSize()) break;
-
-            // maximum payload we can fit in the output buffer
-            const max_fittable_payload = output_buffer_remaining - Frame.minimumSize();
-
-            // payload we will allow the disassembler to fill
-            const writable_payload = @min(self.frame_payload_buffer.len, max_fittable_payload);
-
-            // IMPORTANT FIX: only give disassembler the payload buffer capacity
-            const frame_opt = disassembler.disassemble(self.frame_payload_buffer[0..writable_payload]);
-
-            // const frame_opt = disassembler.disassemble(self.frame_payload_buffer[0..maximum_writable_bytes]);
-            if (frame_opt) |frame| {
-                assert(frame.packedSize() <= output_buffer[total_bytes_written..].len);
-                const frame_n = frame.toBytes(output_buffer[total_bytes_written..]);
-
-                total_bytes_written += frame_n;
-                frames_written += 1;
-                const message_bytes_consumed = frame_n - Frame.minimumSize();
-
-                // advance current chunk the value
-                self.message_chunk_offset += message_bytes_consumed;
-                // decrement the remaining number of bytes in this message
-                self.message_bytes_remaining -= message_bytes_consumed;
-            } else break;
-        }
-
-        // we have successfully written the remainder of the message to output_buffer
-        if (self.message_bytes_remaining == 0) {
-            self.message = null;
-            self.message_chunk_offset = 0;
-            self.state = .ready;
-
-            return SerializeResult{
-                .total_bytes_written = total_bytes_written,
-                .message_bytes_remaining = self.message_bytes_remaining,
-                .frames_written = frames_written,
-                .state = .ready,
-            };
-        } else {
-            return SerializeResult{
-                .total_bytes_written = total_bytes_written,
-                .message_bytes_remaining = self.message_bytes_remaining,
-                .frames_written = frames_written,
-                .state = .partial,
-            };
-        }
-    }
-
-    pub fn serialize(self: *Self, message: *Message, out_buffer: []u8) !SerializeResult {
-        // there is no work for us to do
-        if (out_buffer.len == 0) return SerializeResult{
-            .total_bytes_written = 0,
-            .message_bytes_remaining = 0,
-            .state = .noop,
-        };
-
-        const message_size = message.packedSize();
-        const frames_required = message_size / self.frame_payload_buffer.len;
-        const total_bytes_required = message_size + (Frame.minimumSize() * frames_required);
-
-        var bytes_written: usize = 0;
-
-        var disassembler = FrameDisassembler.new(message.chunk, .{
-            .max_frame_payload_size = self.frame_payload_buffer.len,
-        });
-
-        if (total_bytes_required <= out_buffer.len) {
-            // convert the entire message -> []Frames -> []const u8
-            while (disassembler.disassemble(self.frame_payload_buffer)) |frame| {
-                const frame_n = frame.toBytes(out_buffer[bytes_written..]);
-
-                bytes_written += frame_n;
-            }
-
-            // std.debug.print("out_buffer: {any}\n", .{out_buffer[0..bytes_written]});
-            return SerializeResult{
-                .total_bytes_written = bytes_written,
-                .message_bytes_remaining = 0,
-                .state = .ready,
-            };
-        } else {
-            // there is going to be some sort of overflow, figure out the maxiumum number of bytes that can be written.
-
-            return SerializeResult{
-                .total_bytes_written = 0,
-                .message_bytes_remaining = total_bytes_required,
-                .state = .partial,
-            };
-        }
-
-        // std.debug.print("total_bytes_required: {}\n", .{total_bytes_required});
-
-        // TODO:
-        //   1. figure out how many bytes are available in the out_buffer
-        //   2. figure out how large this message is
-        //   3. if the frames that make up this message, figure out how many bytes can be written at a time
-        //   4.
-
-        // // handle the overflow
-
-        // while (self.messages.dequeue()) |message| {
-        //     // convert this message to bytes
-        // }
-    }
 };
 
 test "serializer writes message to buffer" {
@@ -470,7 +307,7 @@ test "serializer writes partial message to buffer" {
     var total_frames_written: usize = 0;
     while (true) {
         var bytes_written: usize = 0;
-        const result = try serializer.serialize3(out_buffer[bytes_written..]);
+        const result = try serializer.serialize(out_buffer[bytes_written..]);
         total_bytes_written += result.total_bytes_written;
         total_frames_written += result.frames_written;
         // defer {
@@ -534,7 +371,7 @@ test "serialize many messages" {
 
         while (true) {
             var bytes_written: usize = 0;
-            const result = try serializer.serialize3(out_buffer[bytes_written..]);
+            const result = try serializer.serialize(out_buffer[bytes_written..]);
             total_bytes_written += result.total_bytes_written;
             total_frames_written += result.frames_written;
             // defer {
