@@ -1,14 +1,29 @@
 const std = @import("std");
 const testing = std.testing;
 const assert = std.debug.assert;
+
+const XxHash32 = std.hash.XxHash32;
 const check = @import("./checksum.zig");
+const constants = @import("../constants.zig");
 
 const ProtocolVersion = @import("protocol.zig").ProtocolVersion;
+const Chunk = @import("./chunk.zig").Chunk;
+const ChunkReader = @import("./chunk.zig").ChunkReader;
+const ChunkWriter = @import("./chunk.zig").ChunkWriter;
+const MemoryPool = @import("stdx").MemoryPool;
 
 pub const Frame = struct {
     const Self = @This();
 
-    pub const Options = struct {};
+    comptime {
+        assert(Frame.minimumSize() == 12);
+    }
+
+    pub const Options = struct {
+        flags: FrameHeadersFlags = .{},
+        sequence: u16 = 0,
+        protocol_version: ProtocolVersion = .v1,
+    };
 
     /// Metadata about the frame
     frame_headers: FrameHeaders = .{},
@@ -19,29 +34,45 @@ pub const Frame = struct {
     /// Checksum of the frame header + payload
     checksum: u32 = 0,
 
+    pub fn minimumSize() usize {
+        return FrameHeaders.packedSize() + @sizeOf(u32);
+    }
+
     pub fn packedSize(self: Self) usize {
         return FrameHeaders.packedSize() + self.payload.len + @sizeOf(u32);
     }
 
-    pub fn new(payload: []const u8, opts: Options) Self {
+    pub fn new(payload: []const u8, options: Options) Self {
         // NOTE: for now, we just discard the options As features are implemented for each flag,
         // they will be handled.
-        _ = opts;
+        assert(payload.len <= constants.max_frame_payload_size);
 
-        assert(payload.len <= std.math.maxInt(u16));
+        const frame_headers = FrameHeaders{
+            .payload_length = @intCast(payload.len),
+            .flags = options.flags,
+            .sequence = options.sequence,
+            .protocol_version = options.protocol_version,
+        };
+
+        // since this is so inconsequentially small this is fine.
+        var frame_headers_buffer: [FrameHeaders.packedSize()]u8 = undefined;
+        _ = frame_headers.toBytes(&frame_headers_buffer);
+
+        var hash = XxHash32.init(check.xxhash_32_hash_seed);
+        hash.update(&frame_headers_buffer);
+        hash.update(payload);
+        const checksum = hash.final();
 
         return Self{
-            .frame_headers = FrameHeaders{
-                .payload_length = @intCast(payload.len),
-            },
+            .frame_headers = frame_headers,
             .payload = payload,
-            .checksum = 0,
+            .checksum = checksum,
         };
     }
 
     /// Converts the struct into bytes and orders them. Endieness is Big.
     /// Order is as follows: [ frame_header | payload | checksum ]
-    pub fn toBytes(self: *Self, buf: []u8) usize {
+    pub fn toBytes(self: Self, buf: []u8) usize {
         assert(buf.len >= self.packedSize());
 
         var write_offset: usize = 0;
@@ -53,9 +84,9 @@ pub const Frame = struct {
 
         // calculate a checksum for all the bytes in the buffer BEFORE the checksum
         const checksum = check.xxHash32Checksum(buf[0..write_offset]);
-        self.checksum = checksum;
+        // self.checksum = checksum;
 
-        std.mem.writeInt(u32, buf[write_offset..][0..@sizeOf(u32)], self.checksum, .big);
+        std.mem.writeInt(u32, buf[write_offset..][0..@sizeOf(u32)], checksum, .big);
         write_offset += @sizeOf(u32);
 
         return write_offset;
@@ -72,6 +103,7 @@ pub const Frame = struct {
         read_offset += FrameHeaders.packedSize();
 
         const payload_len = frame_headers.payload_length;
+        if (payload_len > constants.max_frame_payload_size) return error.InvalidPayloadSize;
         if (data.len < read_offset + payload_len) return error.Truncated;
 
         // reference the slice of the data as not copy
@@ -103,7 +135,7 @@ pub const FrameHeaders = struct {
     }
 
     /// A magical resync value "KB" (kobold)
-    magic: u16 = 0x4B42,
+    magic: u16 = constants.frame_headers_magic,
 
     /// The protocol version this frame complies with
     protocol_version: ProtocolVersion = .v1,
@@ -164,6 +196,10 @@ pub const FrameHeaders = struct {
         const magic = std.mem.readInt(u16, data[read_offset..][0..@sizeOf(u16)], .big);
         read_offset += @sizeOf(u16);
 
+        // if the magic bytes do not equal what we think they should equal then this is not a valid
+        // frame and therefore we should fail
+        if (magic != constants.frame_headers_magic) return error.InvalidFrameHeadersMagic;
+
         const protocol_version_and_frame_type = data[read_offset];
         const protocol_version_bits: u4 = @intCast(protocol_version_and_frame_type >> 4);
         const protocol_version = ProtocolVersion.fromBits(protocol_version_bits);
@@ -216,6 +252,286 @@ pub const FrameType = enum(u4) {
             4 => .heartbeat,
             else => error.UnsupportedFrameType,
         };
+    }
+};
+
+pub const FrameParser = struct {
+    const Self = @This();
+
+    const FrameParseResult = struct {
+        frames_parsed: usize,
+        bytes_consumed: usize,
+    };
+
+    allocator: std.mem.Allocator,
+    buffer: std.ArrayList(u8),
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return Self{
+            .allocator = allocator,
+            .buffer = .empty,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.buffer.deinit(self.allocator);
+    }
+
+    pub fn parse(self: *Self, frames: []Frame, data: []const u8) !FrameParseResult {
+        // FIX: there should be a constant that is defined that caps the buffer items capacity.
+        // additionally, we should resize this self.buffer to free up space as needed.
+        // if (self.buffer.items.len + data.len > 10_000) return error.BufferMaxCapacityExceeded;
+
+        try self.buffer.appendSlice(self.allocator, data);
+
+        var count: usize = 0;
+        var read_offset: usize = 0;
+
+        var total_bytes_consumed: usize = 0;
+
+        while (count < frames.len) {
+            const buf = self.buffer.items;
+
+            const frame = Frame.fromBytes(buf[read_offset..]) catch |err| switch (err) {
+                error.Truncated => break,
+                error.InvalidFrameHeadersMagic => {
+                    read_offset += self.resyncToNextMagic(buf[read_offset..]);
+
+                    // make sure that we don't break something
+                    assert(read_offset <= self.buffer.items.len);
+                    continue;
+                },
+                // FIX: this should have all errors handled!
+                else => unreachable,
+            };
+
+            const bytes_consumed = frame.packedSize();
+            total_bytes_consumed += bytes_consumed;
+
+            // NOTE: we are using asserts here because these would be critical systems failures.
+            // I think it would be better to crash instead of trying to recover from this.
+            //
+            // This would meant that the `Frame.fromBytes` function did something incorrectly
+            assert(bytes_consumed > 0);
+
+            // ensure that we have not consumed more things than would b possible
+            assert(read_offset + bytes_consumed <= self.buffer.items.len);
+
+            // add the frame to the frames slice
+            frames[count] = frame;
+            count += 1;
+            read_offset += bytes_consumed;
+        }
+
+        // if some work was done where bytes were consumed, the advance the self.buffer
+        if (read_offset > 0) {
+            std.mem.copyForwards(u8, self.buffer.items, self.buffer.items[read_offset..]);
+            self.buffer.items.len -= read_offset;
+        }
+
+        return FrameParseResult{
+            .frames_parsed = count,
+            .bytes_consumed = total_bytes_consumed,
+        };
+    }
+
+    fn resyncToNextMagic(_: *Self, data: []const u8) usize {
+        // constants.frame_headers_magic is comprised of 2 bytes (u16) with bigendian ordering;
+        // 0x4B42 -> bytes (0x4B 0x42)
+        const magic_hi: u8 = (@as(u16, constants.frame_headers_magic) >> 8) & 0xFF;
+        const magic_lo: u8 = @as(u8, constants.frame_headers_magic & 0xFF);
+
+        var i: usize = 1;
+
+        // begin searching the data for an instance of magic_hi
+        while (i + 1 <= data.len) : (i += 1) {
+            const left = data[i - 1];
+            const right = data[i];
+
+            if (left == magic_hi and right == magic_lo) {
+                // we have found a match for magic and we should resync to this point
+                return i - 1;
+            }
+        }
+
+        return i;
+    }
+};
+
+pub const FrameReassembler = struct {
+    const Self = @This();
+
+    expected_sequence: u16 = 0,
+    is_assembling: bool = false,
+
+    // head and tail of our linked chunk chain
+    head_chunk: ?*Chunk = null,
+    tail_chunk: ?*Chunk = null,
+
+    pub fn new() Self {
+        return Self{};
+    }
+
+    fn reset(self: *Self) void {
+        self.expected_sequence = 0;
+        self.is_assembling = false;
+        self.head_chunk = null;
+        self.tail_chunk = null;
+    }
+
+    pub fn reassemble(
+        self: *Self,
+        chunk_pool: *MemoryPool(Chunk),
+        frame: Frame,
+    ) !?*Chunk {
+        const flags = frame.frame_headers.flags;
+        const sequence = frame.frame_headers.sequence;
+        const payload = frame.payload;
+
+        // Start a new message
+        if (!self.is_assembling) {
+            self.is_assembling = true;
+            self.expected_sequence = 0;
+        }
+
+        // Validate order
+        if (self.expected_sequence != sequence) {
+            self.reset();
+            return error.FrameOutOfOrder;
+        }
+        self.expected_sequence += 1;
+
+        // Ensure we have an active chunk
+        if (self.tail_chunk == null) {
+            const chunk = try chunk_pool.create();
+            chunk.* = Chunk{
+                .next = null,
+                .used = 0,
+                .data = undefined,
+            };
+            self.head_chunk = chunk;
+            self.tail_chunk = chunk;
+        }
+
+        // Append payload into chunks
+        var remaining = payload;
+        while (remaining.len > 0) {
+            const tail = self.tail_chunk.?;
+
+            const space = tail.data.len - tail.used;
+            // there is not enough space in the current chunk and we need to put the new data
+            // into a new chunk
+            if (space == 0) {
+                const new_chunk = try chunk_pool.create();
+                new_chunk.* = Chunk{};
+
+                tail.next = new_chunk;
+                self.tail_chunk = new_chunk;
+                continue;
+            }
+
+            const to_copy = @min(space, remaining.len);
+            @memcpy(tail.data[tail.used .. tail.used + to_copy], remaining[0..to_copy]);
+            tail.used += to_copy;
+
+            remaining = remaining[to_copy..];
+        }
+
+        // If more frames follow continue assembling
+        if (flags.continuation) {
+            return null;
+        }
+
+        // Final frame - message complete
+        const message_head = self.head_chunk.?;
+
+        self.reset(); // reset assembler but DO NOT free chunks
+
+        // Caller owns the returned chunk chain and is responsible for returning it to the pool later
+        return message_head;
+    }
+};
+pub const FrameDisassembler = struct {
+    const Self = @This();
+
+    pub const Config = struct {
+        max_frame_payload_size: usize = constants.max_frame_payload_size,
+        protocol_version: ProtocolVersion = .v1,
+        offset: usize = 0,
+    };
+
+    config: Config,
+    current_chunk: ?*Chunk = null,
+    offset: usize = 0,
+    next_sequence: u16 = 0,
+
+    pub fn new(chunk: *Chunk, config: Config) Self {
+        return Self{
+            .config = config,
+            .current_chunk = chunk,
+            .offset = config.offset,
+            .next_sequence = 0,
+        };
+    }
+
+    /// Produces one Frame each call.
+    /// Returns null when no bytes remain.
+    pub fn disassemble(self: *Self, buffer: []u8) ?Frame {
+        if (self.current_chunk == null) return null;
+
+        var chunk = self.current_chunk.?;
+        if (self.offset >= chunk.used) {
+            self.current_chunk = chunk.next;
+            self.offset = 0;
+            return self.disassemble(buffer);
+        }
+
+        var bytes_copied: usize = 0;
+        const max_payload = @min(self.config.max_frame_payload_size, buffer.len);
+        while (bytes_copied < max_payload and self.current_chunk != null) {
+            chunk = self.current_chunk.?;
+
+            // If current chunk exhausted then advance chunk
+            if (self.offset >= chunk.used) {
+                self.current_chunk = chunk.next;
+                self.offset = 0;
+                continue;
+            }
+
+            const available = chunk.used - self.offset;
+            const remaining_capacity = max_payload - bytes_copied;
+            const to_copy = @min(available, remaining_capacity);
+
+            @memcpy(
+                buffer[bytes_copied .. bytes_copied + to_copy],
+                chunk.data[self.offset .. self.offset + to_copy],
+            );
+
+            bytes_copied += to_copy;
+            self.offset += to_copy;
+        }
+
+        if (bytes_copied == 0) return null;
+
+        // Determine if this is a continuation frame
+        var reader = ChunkReader{
+            .current = self.current_chunk,
+            .offset = self.offset,
+        };
+        const bytes_remaining_in_chain = reader.remaining();
+        const continuation = bytes_remaining_in_chain > 0;
+
+        // build the final frame
+        // we use `new` here because it will calculate the checksum of this frame
+        const frame = Frame.new(buffer[0..bytes_copied], .{
+            .flags = .{ .continuation = continuation },
+            .sequence = self.next_sequence,
+            .protocol_version = self.config.protocol_version,
+        });
+
+        self.next_sequence += 1;
+
+        return frame;
     }
 };
 
@@ -283,4 +599,343 @@ test "create a frame from bytes" {
     );
     try testing.expect(std.mem.eql(u8, before_frame.payload, after_frame.payload));
     try testing.expectEqual(before_frame.checksum, after_frame.checksum);
+}
+
+test "frame parsing happy path" {
+    const allocator = testing.allocator;
+
+    var frame_parser = FrameParser.init(allocator);
+    defer frame_parser.deinit();
+
+    // make an arbitrary frame
+    var payload = [_]u8{ 1, 2, 3, 4, 5, 6 };
+    var frame = Frame.new(&payload, .{});
+
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    var buf: [100]u8 = undefined;
+
+    const n = frame.toBytes(&buf);
+
+    try testing.expectEqual(n, frame.packedSize());
+
+    var frames: [5]Frame = undefined;
+
+    const parse_result = try frame_parser.parse(&frames, buf[0..n]);
+    try testing.expectEqual(1, parse_result.frames_parsed);
+    try testing.expectEqual(frames[0].packedSize(), parse_result.bytes_consumed);
+}
+
+test "frame parse a bad frame and resync to magic" {
+    const allocator = testing.allocator;
+
+    var disassembler = FrameParser.init(allocator);
+    defer disassembler.deinit();
+
+    // make an arbitrary frame
+    var bad_frame_payload = [_]u8{ 1, 2, 3, 4, 5, 6 };
+    var bad_frame = Frame.new(&bad_frame_payload, .{});
+    bad_frame.frame_headers.magic = 1234;
+
+    try testing.expect(constants.frame_headers_magic != bad_frame.frame_headers.magic);
+
+    var good_frame_payload = [_]u8{ 1, 1, 1, 1, 1 };
+    var good_frame = Frame.new(&good_frame_payload, .{});
+
+    try testing.expectEqual(constants.frame_headers_magic, good_frame.frame_headers.magic);
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    var buf: [100]u8 = undefined;
+
+    const bad_frame_n = bad_frame.toBytes(&buf);
+    const good_frame_n = good_frame.toBytes(buf[bad_frame_n..]);
+
+    try testing.expectEqual(bad_frame_n, bad_frame.packedSize());
+
+    var frames: [5]Frame = undefined;
+
+    const parse_result = try disassembler.parse(&frames, buf[0 .. bad_frame_n + good_frame_n]);
+
+    try testing.expectEqual(1, parse_result.frames_parsed);
+
+    // ensure that the good frame was the one that was parsed
+    try testing.expect(std.mem.eql(u8, frames[0].payload, good_frame.payload));
+}
+
+test "frame parse multiple frames" {
+    const allocator = testing.allocator;
+
+    var frame_parser = FrameParser.init(allocator);
+    defer frame_parser.deinit();
+
+    var frame_payload = [_]u8{ 1, 1, 1, 1, 1 };
+    var frame_1 = Frame.new(&frame_payload, .{});
+    var frame_2 = Frame.new(&frame_payload, .{});
+    var frame_3 = Frame.new(&frame_payload, .{});
+
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    var buf: [100]u8 = undefined;
+
+    // write all three frames to the buffer
+    const frame_1_n = frame_1.toBytes(&buf);
+    const frame_2_n = frame_2.toBytes(buf[frame_1_n..]);
+    _ = frame_3.toBytes(buf[frame_1_n + frame_2_n ..]);
+
+    var frames: [5]Frame = undefined;
+
+    // parse the entire buffer
+    const parse_result = try frame_parser.parse(&frames, &buf);
+
+    try testing.expectEqual(3, parse_result.frames_parsed);
+
+    // ensure that the good frame was the one that was parsed
+    try testing.expect(std.mem.eql(u8, frames[0].payload, frame_1.payload));
+    try testing.expect(std.mem.eql(u8, frames[1].payload, frame_2.payload));
+    try testing.expect(std.mem.eql(u8, frames[2].payload, frame_3.payload));
+
+    try testing.expectEqual(0, frame_parser.buffer.items.len);
+}
+
+test "assembler creates a chunk chain per message" {
+    const allocator = testing.allocator;
+
+    var frame_parser = FrameParser.init(allocator);
+    defer frame_parser.deinit();
+
+    var frame_payload = [_]u8{1} ** constants.max_frame_payload_size;
+    var frame_1 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = true },
+        .sequence = 0,
+    });
+    var frame_2 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = true },
+        .sequence = 1,
+    });
+    var frame_3 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = false },
+        .sequence = 2,
+    });
+
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    const buf = try allocator.alloc(
+        u8,
+        frame_1.packedSize() +
+            frame_2.packedSize() +
+            frame_3.packedSize(),
+    );
+    defer allocator.free(buf);
+    // var buf: [100]u8 = undefined;
+
+    // write all three frames to the buffer
+    const frame_1_n = frame_1.toBytes(buf);
+    const frame_2_n = frame_2.toBytes(buf[frame_1_n..]);
+    _ = frame_3.toBytes(buf[frame_1_n + frame_2_n ..]);
+
+    var frames: [10]Frame = undefined;
+
+    // parse the entire buffer
+    const parse_result = try frame_parser.parse(&frames, buf);
+
+    try testing.expectEqual(3, parse_result.frames_parsed);
+
+    try testing.expectEqual(0, frame_parser.buffer.items.len);
+
+    var chunk_pool = try MemoryPool(Chunk).init(allocator, 1_000);
+    defer chunk_pool.deinit();
+
+    var reassembler = FrameReassembler.new();
+
+    // iterate through the frames and assemble them into a message
+    var message_head: ?*Chunk = null;
+    var message_frames_count: usize = 0;
+    for (frames[0..parse_result.frames_parsed], 0..parse_result.frames_parsed) |frame, i| {
+        if (try reassembler.reassemble(&chunk_pool, frame)) |head_chunk| {
+            message_head = head_chunk;
+            message_frames_count = i + 1;
+            break;
+        }
+    }
+
+    try testing.expectEqual(parse_result.frames_parsed, message_frames_count);
+    try testing.expect(message_head != null);
+
+    var message_chunks_count: usize = 0;
+    var message_size: usize = 0;
+    var curr_chunk: ?*Chunk = message_head;
+    while (curr_chunk) |chunk| {
+        curr_chunk = chunk.next;
+        message_chunks_count += 1;
+        message_size += chunk.used;
+
+        // clean up all the chunks
+        chunk_pool.destroy(chunk);
+    }
+
+    // std.debug.print("multi-frame message - frames: {}, chunks: {}, message_size: {}\n", .{
+    //     message_frames_count,
+    //     message_chunks_count,
+    //     message_size,
+    // });
+    try testing.expectEqual(chunk_pool.capacity, chunk_pool.available());
+}
+
+test "reassembler handles single frame message chunk chains" {
+    const allocator = testing.allocator;
+
+    var frame_parser = FrameParser.init(allocator);
+    defer frame_parser.deinit();
+
+    var frame_payload = [_]u8{1} ** 10;
+    var frame_1 = Frame.new(&frame_payload, .{
+        .flags = .{ .continuation = false },
+        .sequence = 0,
+    });
+
+    // make a buffer that is simply big enough for the entire frame. This could be interpreted
+    // as being a `recv_buffer` on a connection
+    const buf = try allocator.alloc(u8, frame_payload.len * 5);
+    defer allocator.free(buf);
+    // var buf: [100]u8 = undefined;
+
+    // write all three frames to the buffer
+    const frame_1_n = frame_1.toBytes(buf);
+
+    var frames: [10]Frame = undefined;
+
+    // parse the entire buffer
+    const parse_result = try frame_parser.parse(&frames, buf[0..frame_1_n]);
+
+    try testing.expectEqual(1, parse_result.frames_parsed);
+
+    try testing.expectEqual(0, frame_parser.buffer.items.len);
+
+    var chunk_pool = try MemoryPool(Chunk).init(allocator, 1_000);
+    defer chunk_pool.deinit();
+
+    var reassembler = FrameReassembler.new();
+
+    // iterate through the frames and assemble them into a message
+    var message_head: ?*Chunk = null;
+    var message_frames_count: usize = 0;
+    for (frames[0..parse_result.frames_parsed], 0..parse_result.frames_parsed) |frame, i| {
+        if (try reassembler.reassemble(&chunk_pool, frame)) |head_chunk| {
+            message_head = head_chunk;
+            message_frames_count = i + 1;
+            break;
+        }
+    }
+
+    try testing.expectEqual(1, message_frames_count);
+
+    try testing.expect(message_head != null);
+
+    var message_chunks_count: usize = 0;
+    var message_size: usize = 0;
+    var curr_chunk: ?*Chunk = message_head;
+    while (curr_chunk) |chunk| {
+        curr_chunk = chunk.next;
+        message_chunks_count += 1;
+        message_size += chunk.used;
+
+        // clean up all the chunks
+        chunk_pool.destroy(chunk);
+    }
+
+    // std.debug.print("single frame message - frames: {}, chunks: {}, message_size: {}\n", .{
+    //     message_frames_count,
+    //     message_chunks_count,
+    //     message_size,
+    // });
+    try testing.expectEqual(chunk_pool.capacity, chunk_pool.available());
+}
+
+test "frame dissassembler can make a single frame out of chunks" {
+    const allocator = testing.allocator;
+
+    var pool = try MemoryPool(Chunk).init(allocator, 100);
+    defer pool.deinit();
+
+    const chunk = try pool.create();
+    defer pool.destroy(chunk);
+
+    chunk.* = Chunk{};
+
+    const payload = [_]u8{'a'} ** constants.max_frame_payload_size;
+    var writer = ChunkWriter.new(chunk);
+    try writer.write(&pool, &payload);
+
+    const frame_payload = try allocator.alloc(u8, constants.max_frame_payload_size);
+    defer allocator.free(frame_payload);
+
+    // make believe `send_buffer` (256kb)
+    const send_buffer = try allocator.alloc(u8, 1024 * 256);
+    defer allocator.free(send_buffer);
+
+    var send_buffer_offset: usize = 0;
+    var generated_frames_count: usize = 0;
+
+    var disassembler = FrameDisassembler.new(chunk, .{});
+    while (disassembler.disassemble(frame_payload)) |frame| {
+        generated_frames_count += 1;
+
+        if (send_buffer[send_buffer_offset..].len < frame.packedSize()) {
+            // lets pretend we flushed this send buffer or did something special like caching writing
+            // the maximum number of bytes to the send_buffer and caching the remaining bytes
+            send_buffer_offset = 0;
+        }
+
+        // convert frame to bytes
+        const frame_n = frame.toBytes(send_buffer[send_buffer_offset..]);
+        send_buffer_offset += frame_n;
+    }
+
+    try testing.expectEqual(1, generated_frames_count);
+}
+
+test "frame dissassembler can make many frames out of a large chunk chain" {
+    const allocator = testing.allocator;
+
+    var pool = try MemoryPool(Chunk).init(allocator, 1_000);
+    defer pool.deinit();
+
+    const chunk = try pool.create();
+    defer pool.destroy(chunk);
+
+    chunk.* = Chunk{};
+
+    // make a really big chunk chain
+    const payload = [_]u8{'a'} ** 1_000_000;
+    var writer = ChunkWriter.new(chunk);
+    try writer.write(&pool, &payload);
+
+    // let's say that the transport MTU is much lower than another and the size of frames should
+    // be reduced to compensate.
+    const frame_payload = try allocator.alloc(u8, 1024);
+    defer allocator.free(frame_payload);
+
+    // make believe `send_buffer` (256kb)
+    const send_buffer = try allocator.alloc(u8, 1024 * 256);
+    defer allocator.free(send_buffer);
+
+    var send_buffer_offset: usize = 0;
+    var generated_frames_count: usize = 0;
+
+    var disassembler = FrameDisassembler.new(chunk, .{});
+    while (disassembler.disassemble(frame_payload)) |frame| {
+        generated_frames_count += 1;
+
+        if (send_buffer[send_buffer_offset..].len < frame.packedSize()) {
+            // lets pretend we flushed this send buffer or did something special like caching writing
+            // the maximum number of bytes to the send_buffer and caching the remaining bytes
+            send_buffer_offset = 0;
+        }
+
+        // convert frame to bytes
+        const frame_n = frame.toBytes(send_buffer[send_buffer_offset..]);
+        send_buffer_offset += frame_n;
+    }
+
+    try testing.expectEqual(977, generated_frames_count);
 }
