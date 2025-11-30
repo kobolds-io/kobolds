@@ -19,44 +19,6 @@ const Message = @import("./message.zig").Message;
 const MemoryPool = @import("stdx").MemoryPool;
 const RingBuffer = @import("stdx").RingBuffer;
 
-pub const Deserializer = struct {
-    const Self = @This();
-
-    frames_buffer: []Frame,
-    frames_parser: FrameParser,
-
-    pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !Self {
-        const frames_buffer = try allocator.alloc(Frame, capacity);
-        errdefer allocator.free(frames_buffer);
-
-        return Self{
-            .frames_buffer = frames_buffer,
-            .frames_parser = FrameParser.init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        allocator.free(self.frames_buffer);
-        self.frames_parser.deinit(allocator);
-    }
-
-    pub fn deserialize(
-        self: *Self,
-        allocator: std.mem.Allocator,
-        pool: *MemoryPool(Chunk),
-        in: []const u8,
-    ) !void {
-        const parse_result = try self.frames_parser.parse(self.frames_buffer, in);
-
-        // if there are no bytes left in the `in`
-
-        std.debug.print("parse_result: {any}\n", .{parse_result});
-
-        _ = allocator;
-        _ = pool;
-    }
-};
-
 pub const Serializer = struct {
     const Self = @This();
 
@@ -213,6 +175,57 @@ pub const Serializer = struct {
             .frames_written = frames_written,
             .state = .partial,
         };
+    }
+};
+
+pub const Deserializer = struct {
+    const Self = @This();
+
+    const State = enum {
+        ready,
+        partial,
+        noop,
+    };
+
+    const SerializeResult = struct {
+        total_bytes_written: usize,
+        message_bytes_remaining: usize,
+        frames_written: usize,
+        state: State,
+    };
+
+    frames_buffer: []Frame,
+    frames_parser: FrameParser,
+
+    pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !Self {
+        const frames_buffer = try allocator.alloc(Frame, capacity);
+        errdefer allocator.free(frames_buffer);
+
+        return Self{
+            .frames_buffer = frames_buffer,
+            .frames_parser = FrameParser.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        allocator.free(self.frames_buffer);
+        self.frames_parser.deinit(allocator);
+    }
+
+    pub fn deserialize(
+        self: *Self,
+        allocator: std.mem.Allocator,
+        pool: *MemoryPool(Chunk),
+        in: []const u8,
+    ) !void {
+        const parse_result = try self.frames_parser.parse(self.frames_buffer, in);
+
+        // if there are no bytes left in the `in`
+
+        std.debug.print("parse_result: {any}\n", .{parse_result});
+
+        _ = allocator;
+        _ = pool;
     }
 };
 

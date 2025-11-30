@@ -123,7 +123,7 @@ test "serializer benchmarks" {
     var serializer = try Serializer.initCapacity(allocator, constants.max_frame_payload_size);
     defer serializer.deinit(allocator);
 
-    // run benchmark that takes bytes off read buffer -> Message
+    // std.debug.print("small: {}, medium: {}, large: {}\n", .{ small_body.len, medium_body.len, large_body.len });
 
     try bench.addParam(
         "serialize small messages",
