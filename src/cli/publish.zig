@@ -1,6 +1,11 @@
 const std = @import("std");
 const log = std.log.scoped(.cli_publish);
+const gnoll = @import("gnoll");
 const clap = @import("clap");
+const utils = @import("../lib/utils.zig");
+const Gnoll = gnoll.Gnoll;
+const ConfigInfo = gnoll.ConfigInfo;
+const GnollOptions = gnoll.GnollOptions;
 
 pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
 
@@ -18,6 +23,15 @@ pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
         \\<topic_name>                           Topic name
         \\<body>                                 Body of the message
     );
+
+    const gnoll_options = GnollOptions{
+        .config_infos = &.{
+            ConfigInfo{
+                .filepath = "src/config/publish_config.yaml",
+                .format = .yaml,
+            },
+        },
+    };
 
     const publish_parsers = .{
         .body = clap.parsers.string,
@@ -43,25 +57,39 @@ pub fn PublishCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterat
     };
     defer parsed_args.deinit();
 
+    var publishConfig = try Gnoll(PublishConfig).init(allocator, gnoll_options);
+    defer publishConfig.deinit(allocator);
+
     if (parsed_args.args.help != 0) {
         return clap.helpToFile(.stderr(), clap.Help, &params, .{});
     }
 
     const args = PublishArgs{
         .body = parsed_args.positionals[1].?,
-        .client_id = parsed_args.args.@"client-id" orelse 1,
-        .count = parsed_args.args.count orelse 0,
-        .host = parsed_args.args.host orelse "127.0.0.1",
-        .max_connections = parsed_args.args.@"max-connections" orelse 1,
-        .min_connections = parsed_args.args.@"min-connections" orelse 1,
-        .port = parsed_args.args.port orelse 8000,
-        .rate = parsed_args.args.rate orelse 0,
-        .token = parsed_args.args.token orelse "",
+        .client_id = utils.getConfig(u11, &.{ parsed_args.args.@"client-id", publishConfig.config.client_id }, 1),
+        .count = utils.getConfig(u32, &.{ parsed_args.args.count, publishConfig.config.count }, 0),
+        .host = utils.getConfig([]const u8, &.{ parsed_args.args.host, publishConfig.config.host }, "127.0.0.1"),
+        .max_connections = utils.getConfig(u16, &.{ parsed_args.args.@"max-connections", publishConfig.config.max_connections }, 1),
+        .min_connections = utils.getConfig(u16, &.{ parsed_args.args.@"min-connections", publishConfig.config.min_connections }, 1),
+        .port = utils.getConfig(u16, &.{ parsed_args.args.port, publishConfig.config.port }, 8000),
+        .rate = utils.getConfig(u32, &.{ parsed_args.args.rate, publishConfig.config.rate }, 0),
+        .token = utils.getConfig([]const u8, &.{ parsed_args.args.token, publishConfig.config.token }, ""),
         .topic_name = parsed_args.positionals[0].?,
     };
 
     log.debug("Publishing... Body: {s} Client ID: {} Count: {} Host: {s} Max Connections: {} Min Connections: {} Port: {} Rate: {} Token: {s} Topic Name: {s}", .{ args.body, args.client_id, args.count, args.host, args.max_connections, args.min_connections, args.port, args.rate, args.token, args.topic_name });
 }
+
+const PublishConfig = struct {
+    client_id: ?u11,
+    count: ?u32,
+    host: ?[]const u8,
+    max_connections: ?u16,
+    min_connections: ?u16,
+    port: ?u16,
+    rate: ?u32,
+    token: ?[]const u8,
+};
 
 const PublishArgs = struct {
     body: []const u8,

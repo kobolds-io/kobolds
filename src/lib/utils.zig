@@ -144,6 +144,35 @@ pub fn unexpected_errno(label: []const u8, err: std.posix.system.E) std.posix.Un
     return error.Unexpected;
 }
 
+pub fn getConfig(comptime T: type, items: []const ?T, default: T) T {
+    for (items) |item| {
+        if (item) |val| return val;
+    }
+    return default;
+}
+
+test getConfig {
+    const value1: []const u8 = getConfig([]const u8, &.{ "1.1.1.1", null }, "127.0.0.1");
+    const want1: []const u8 = "1.1.1.1";
+
+    try std.testing.expectEqualStrings(want1, value1);
+
+    const value2: []const u8 = getConfig([]const u8, &.{ null, null }, "127.0.0.1");
+    const want2: []const u8 = "127.0.0.1";
+
+    try std.testing.expectEqualStrings(want2, value2);
+
+    const value3: u16 = getConfig(u16, &.{ 5, null }, 1);
+    const want3: u16 = 5;
+
+    try std.testing.expectEqual(want3, value3);
+
+    const value4: usize = getConfig(u16, &.{ null, 10 }, 20);
+    const want4: usize = 10;
+
+    try std.testing.expectEqual(want4, value4);
+}
+
 test u16ToBytes {
     const value1: u16 = 5;
     const bytes1 = u16ToBytes(value1);

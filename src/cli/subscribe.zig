@@ -1,6 +1,11 @@
 const std = @import("std");
 const log = std.log.scoped(.cli_subscribe);
+const gnoll = @import("gnoll");
 const clap = @import("clap");
+const utils = @import("../lib/utils.zig");
+const Gnoll = gnoll.Gnoll;
+const ConfigInfo = gnoll.ConfigInfo;
+const GnollOptions = gnoll.GnollOptions;
 
 pub fn SubscribeCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIterator) !void {
 
@@ -15,6 +20,15 @@ pub fn SubscribeCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIter
         \\--min-connections <min_connections>    Minimum number of connections to open (default: 1)
         \\<topic_name>                           Topic name
     );
+
+    const gnoll_options = GnollOptions{
+        .config_infos = &.{
+            ConfigInfo{
+                .filepath = "src/config/subscribe_config.yaml",
+                .format = .yaml,
+            },
+        },
+    };
 
     const subscribe_parsers = .{
         .client_id = clap.parsers.int(u11, 10),
@@ -37,22 +51,34 @@ pub fn SubscribeCommand(allocator: std.mem.Allocator, iter: *std.process.ArgIter
     };
     defer parsed_args.deinit();
 
+    var subscribeConfig = try Gnoll(SubscribeConfig).init(allocator, gnoll_options);
+    defer subscribeConfig.deinit(allocator);
+
     if (parsed_args.args.help != 0) {
         return clap.helpToFile(.stderr(), clap.Help, &params, .{});
     }
 
     const args = SubscribeArgs{
-        .client_id = parsed_args.args.@"client-id" orelse 1,
-        .host = parsed_args.args.host orelse "127.0.0.1",
-        .max_connections = parsed_args.args.@"max-connections" orelse 1,
-        .min_connections = parsed_args.args.@"min-connections" orelse 1,
-        .port = parsed_args.args.port orelse 8000,
-        .token = parsed_args.args.token orelse "",
+        .client_id = utils.getConfig(u11, &.{ parsed_args.args.@"client-id", subscribeConfig.config.client_id }, 1),
+        .host = utils.getConfig([]const u8, &.{ parsed_args.args.host, subscribeConfig.config.host }, "127.0.0.1"),
+        .max_connections = utils.getConfig(u16, &.{ parsed_args.args.@"max-connections", subscribeConfig.config.max_connections }, 1),
+        .min_connections = utils.getConfig(u16, &.{ parsed_args.args.@"min-connections", subscribeConfig.config.min_connections }, 1),
+        .port = utils.getConfig(u16, &.{ parsed_args.args.port, subscribeConfig.config.port }, 8000),
+        .token = utils.getConfig([]const u8, &.{ parsed_args.args.token, subscribeConfig.config.token }, ""),
         .topic_name = parsed_args.positionals[0].?,
     };
 
     log.debug("Subscribing... Host: {s} Port: {} Client ID: {} Token: {s} Max Connections: {} Min Connections: {} Topic Name: {s}", .{ args.host, args.port, args.client_id, args.token, args.max_connections, args.min_connections, args.topic_name });
 }
+
+const SubscribeConfig = struct {
+    client_id: ?u11,
+    host: ?[]const u8,
+    max_connections: ?u16,
+    min_connections: ?u16,
+    port: ?u16,
+    token: ?[]const u8,
+};
 
 const SubscribeArgs = struct {
     client_id: u11,
