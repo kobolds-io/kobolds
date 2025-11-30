@@ -1,3 +1,5 @@
+> **WARNING** This repository is now archived. I have made this read only. We are fully migrating off of github to codeberg.org. Please read [migrating.md](./migrating.md) for more detail as to the reasons for this migration. This also includes all repositories that belong to `kobolds-io`. We are sorry for any inconvenience this causes but I believe that this is for the best.
+
 # Overview
 
 Kobolds is a high-performance, multi-paradigm message broker designed for modern applications that need publish/subscribe, request/reply, queueing, streaming, and key/value storage—all in a single, efficient system. Kobolds is built to handle high-throughput, low-latency workloads, with optional persistence, message ordering, and delivery guarantees, making it suitable for systems where speed and reliability are critical.
