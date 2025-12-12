@@ -1,0 +1,12 @@
+const std = @import("std");
+
+/// A magical resync value "KB" (kobold)
+pub const frame_headers_magic: u16 = 0x4B42;
+
+/// size of each chunk.data used for assembling messages
+pub const chunk_data_size: usize = 1024 * 4;
+// pub const chunk_data_size: usize = 1024;
+
+/// Maximum size of a frame's payload
+pub const max_frame_payload_size: u16 = std.math.maxInt(u16);
+// pub const max_frame_payload_size: u16 = 1024 * 8;
