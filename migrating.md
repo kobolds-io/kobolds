@@ -1,6 +1,6 @@
 # Migrating
 
-Hi everyone, small reasoning document here. We are migrating `kobolds` to https://codeberg.org/kobolds-io. Please know that the goal of `kobolds` remains the same with no real alterations other than the hosting of sourcecode and general software development.
+Hi everyone, small reasoning document here. We are migrating `kobolds` to https://gitlab.com/kobolds-io. Please know that the goal of `kobolds` remains the same with no real alterations other than the hosting of sourcecode and general software development.
 
 TLDR; My values do not align with GitHub's.
 
@@ -14,7 +14,7 @@ I encourage others to migrate to other alternatives instead of letting these sha
 
 ## When
 
-**Effective 11/29/2025** I will be migrating all of the `kobolds-io` organization and all of its repositories to `https://codeberg.org/kobolds-io`. All issues and open PRs will also be migrated.
+**Effective 11/29/2025** I will be migrating all of the `kobolds-io` organization and all of its repositories to `https://gitlab.com/kobolds-io`. All issues and open PRs will also be migrated.
 
 ## How
 
